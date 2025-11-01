@@ -1,0 +1,10 @@
+/connect-iq-mcp
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+*.p8
+.connect-iq-mcp.toml
+.env
+.DS_Store
