@@ -1,0 +1,675 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/pelletier/go-toml/v2"
+
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk"
+	"github.com/idoo/connect-iq-mcp/internal/config"
+	"github.com/idoo/connect-iq-mcp/internal/state"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
+	_ "github.com/idoo/connect-iq-mcp/internal/tools/all" // registers every tool for the permissions list.
+)
+
+// clients lists the supported `config snippet|install` targets.
+var clients = []string{"claude-code", "claude-desktop", "codex", "cursor", "vscode", "windsurf"}
+
+// serverName is the MCP server name used in every client config.
+const serverName = "connect-iq-mcp"
+
+// sessionTools are read-only tools the server adds per session (not in the
+// tool registry).
+var sessionTools = []string{"toolsets"}
+
+// configUsage is printed for `connect-iq-mcp config --help` and misuse.
+var configUsage = "usage: connect-iq-mcp config <snippet|install> <client> [--profile NAME] [--key /abs/developer_key.der] [--java-home /abs/jdk]\nclients: " + strings.Join(clients, ", ")
+
+// entryOpts is what a client entry pins besides the binary: the profile,
+// and the env the server needs to build (the developer key and Java).
+type entryOpts struct {
+	Profile  string
+	Key      string
+	JavaHome string
+}
+
+// keyNote tells the human how to give the server the app's developer key
+// when the entry does not carry one.
+const keyNote = "developer key: add --key /absolute/path/developer_key.der to put CIQ_MCP_KEY in this entry (until then each build needs a key file inside the project)"
+
+// credentialsNote reminds that credentials come from `connect-iq-mcp auth`, for
+// the profile the entry pins.
+func credentialsNote(profile string) string {
+	return "credentials: run `" + tool.LoginCommand(profile) + "` once in a terminal; the server reads them from the OS keychain, or a 0600 file when there is none (`connect-iq-mcp auth status` says which)"
+}
+
+func runConfig(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return usageErr(configUsage)
+	}
+	sub, rest := args[0], args[1:]
+	fs := flag.NewFlagSet("config "+sub, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	profile := fs.String("profile", "", "pin the server to this profile via CIQ_MCP_PROFILE")
+	key := fs.String("key", "", "absolute path of the app's developer key; written as CIQ_MCP_KEY in the entry's env")
+	javaHome := fs.String("java-home", "", "absolute path of a JDK 17+; written as JAVA_HOME in the entry's env")
+	if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
+		return usageErr(configUsage)
+	}
+	client := rest[0]
+	if err := fs.Parse(rest[1:]); err != nil {
+		return usageErr(err.Error())
+	}
+	if !slices.Contains(clients, client) {
+		return usageErr(fmt.Sprintf("unknown client %q; one of: %s", client, strings.Join(clients, ", ")))
+	}
+	if *profile != "" {
+		if err := config.ValidateProfileName(*profile); err != nil {
+			return usageErr(err.Error())
+		}
+		// The server resolves the same profile at start; fail here, not there.
+		if _, err := config.Resolve(config.Options{Flags: config.Flags{Profile: *profile}}); err != nil {
+			return err
+		}
+	}
+	o := entryOpts{Profile: *profile, Key: *key, JavaHome: *javaHome}
+	if err := checkAbs("--key", o.Key, false); err != nil {
+		return usageErr(err.Error())
+	}
+	if err := checkAbs("--java-home", o.JavaHome, true); err != nil {
+		return usageErr(err.Error())
+	}
+	bin, err := binaryPath()
+	if err != nil {
+		return err
+	}
+	switch sub {
+	case "snippet":
+		s, err := snippet(client, bin, o, readToolPermissions())
+		if err != nil {
+			return err
+		}
+		if _, err = io.WriteString(stdout, s); err != nil {
+			return err
+		}
+		fmt.Fprintln(stderr, credentialsNote(o.Profile)) // stderr keeps stdout pasteable
+		if o.Key == "" {
+			fmt.Fprintln(stderr, keyNote)
+		}
+		return nil
+	case "install":
+		env, err := currentInstallEnv()
+		if err != nil {
+			return err
+		}
+		if err := install(client, bin, o, env, stdout); err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, credentialsNote(o.Profile))
+		if o.Key == "" {
+			fmt.Fprintln(stdout, keyNote)
+		}
+		return nil
+	default:
+		return usageErr(fmt.Sprintf("unknown config subcommand %q (snippet, install)", sub))
+	}
+}
+
+// checkAbs refuses a non-empty flag value that is not an absolute path to
+// an existing file (dir false) or directory (dir true). The client starts
+// the server elsewhere, so a relative path would name another file.
+func checkAbs(flag, p string, dir bool) error {
+	if p == "" {
+		return nil
+	}
+	if !filepath.IsAbs(p) {
+		return fmt.Errorf("%s %q must be an absolute path (the MCP client starts connect-iq-mcp in another directory)", flag, p)
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		return fmt.Errorf("%s: %w", flag, err)
+	}
+	if dir && !st.IsDir() {
+		return fmt.Errorf("%s %s is not a directory", flag, p)
+	}
+	if !dir && !st.Mode().IsRegular() {
+		return fmt.Errorf("%s %s is not a regular file", flag, p)
+	}
+	return nil
+}
+
+// wantsHelp reports whether args ask for help; such calls never run the command.
+func wantsHelp(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "-h", "-help", "--help":
+			return true
+		case "--":
+			return false
+		}
+	}
+	return false
+}
+
+// binaryPath returns the path clients should launch: a stable PATH location
+// (e.g. /opt/homebrew/bin/connect-iq-mcp), never the versioned Homebrew Cellar path,
+// which `brew upgrade` deletes.
+func binaryPath() (string, error) {
+	p, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("locate connect-iq-mcp binary: %w", err)
+	}
+	return stableBinaryPath(p, exec.LookPath), nil
+}
+
+// stableBinaryPath prefers the PATH entry for exe, then the Homebrew prefix
+// bin for a Cellar path, else exe as invoked.
+func stableBinaryPath(exe string, lookPath func(string) (string, error)) string {
+	exeInfo, err := os.Stat(exe)
+	if err != nil {
+		return exe
+	}
+	if lp, err := lookPath(serverName); err == nil {
+		if abs, err := filepath.Abs(lp); err == nil {
+			if fi, err := os.Stat(abs); err == nil && os.SameFile(fi, exeInfo) {
+				return abs
+			}
+		}
+	}
+	if i := strings.Index(filepath.ToSlash(exe), "/Cellar/"); i >= 0 {
+		cand := filepath.Join(exe[:i], "bin", filepath.Base(exe))
+		if fi, err := os.Stat(cand); err == nil && os.SameFile(fi, exeInfo) {
+			return cand
+		}
+	}
+	return exe
+}
+
+// serverEnv returns the server env: profile selection and the paths of the
+// developer key and Java, never key material.
+func serverEnv(o entryOpts) map[string]string {
+	env := map[string]string{}
+	if o.Profile != "" {
+		env[config.EnvProfile] = o.Profile
+	}
+	if o.Key != "" {
+		env[ciqsdk.EnvKeyVar] = o.Key
+	}
+	if o.JavaHome != "" {
+		env["JAVA_HOME"] = o.JavaHome
+	}
+	return env
+}
+
+// envPairs returns serverEnv as sorted NAME=value strings.
+func envPairs(o entryOpts) []string {
+	var out []string
+	for k, v := range serverEnv(o) {
+		out = append(out, k+"="+v)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// readToolPermissions lists `mcp__connect-iq-mcp__<tool>` for every read-class tool.
+func readToolPermissions() []string {
+	var out []string
+	for _, t := range tool.All() {
+		if t.Meta().Class == tool.Read {
+			out = append(out, "mcp__"+serverName+"__"+t.Name())
+		}
+	}
+	for _, n := range sessionTools {
+		out = append(out, "mcp__"+serverName+"__"+n)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// serverEntry is the JSON server entry for client.
+func serverEntry(client, bin string, o entryOpts) map[string]any {
+	e := map[string]any{"command": bin, "args": []string{}}
+	if client == "vscode" {
+		e["type"] = "stdio"
+	}
+	if env := serverEnv(o); len(env) > 0 {
+		e["env"] = env
+	}
+	return e
+}
+
+// serversKey is the top-level JSON key holding MCP servers for client.
+func serversKey(client string) string {
+	if client == "vscode" {
+		return "servers"
+	}
+	return "mcpServers"
+}
+
+// snippet renders the config for client; perms is the claude-code
+// permissions allow list.
+func snippet(client, bin string, o entryOpts, perms []string) (string, error) {
+	switch client {
+	case "claude-code":
+		var b strings.Builder
+		b.WriteString("# Register connect-iq-mcp for every project:\n")
+		b.WriteString(shellJoin(claudeAddArgs(bin, o)...) + "\n\n")
+		b.WriteString("# Optional: pre-approve read-only tools in ~/.claude/settings.json:\n")
+		perm, err := json.MarshalIndent(map[string]any{"permissions": map[string]any{"allow": perms}}, "", "  ")
+		if err != nil {
+			return "", fmt.Errorf("encode permissions: %w", err)
+		}
+		b.Write(perm)
+		b.WriteString("\n")
+		return b.String(), nil
+	case "codex":
+		return "# ~/.codex/config.toml\n" + codexBlock(bin, o), nil
+	default:
+		doc := map[string]any{serversKey(client): map[string]any{serverName: serverEntry(client, bin, o)}}
+		out, err := json.MarshalIndent(doc, "", "  ")
+		if err != nil {
+			return "", fmt.Errorf("encode snippet: %w", err)
+		}
+		return "// " + snippetHints[client] + "\n" + string(out) + "\n", nil
+	}
+}
+
+func claudeAddArgs(bin string, o entryOpts) []string {
+	args := []string{"claude", "mcp", "add", serverName, "-s", "user"}
+	for _, kv := range envPairs(o) {
+		args = append(args, "-e", kv)
+	}
+	return append(args, "--", bin)
+}
+
+func shellJoin(args ...string) string {
+	q := make([]string, len(args))
+	for i, a := range args {
+		if a != "" && !strings.ContainsAny(a, " \t\n'\"\\$`*?&;|<>()[]{}!#~") {
+			q[i] = a
+			continue
+		}
+		q[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+	}
+	return strings.Join(q, " ")
+}
+
+// Codex timeouts: Codex's defaults (10 s startup, 60 s per tool) cut off
+// builds_wait and report fan-outs before connect-iq-mcp's own limits.
+const (
+	codexStartupTimeout = "startup_timeout_sec = 20"
+	codexToolTimeout    = "tool_timeout_sec = 330"
+)
+
+// codexBlock renders the [mcp_servers.connect-iq-mcp] table.
+func codexBlock(bin string, o entryOpts) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[mcp_servers.%s]\ncommand = %s\nargs = []\n%s\n%s\n", serverName, tomlString(bin), codexStartupTimeout, codexToolTimeout)
+	if pairs := envPairs(o); len(pairs) > 0 {
+		kv := make([]string, len(pairs))
+		for i, p := range pairs {
+			k, v, _ := strings.Cut(p, "=")
+			kv[i] = k + " = " + tomlString(v)
+		}
+		fmt.Fprintf(&b, "env = { %s }\n", strings.Join(kv, ", "))
+	}
+	return b.String()
+}
+
+func tomlString(s string) string {
+	b, _ := json.Marshal(s) // JSON string escapes are valid TOML basic-string escapes.
+	return string(b)
+}
+
+// snippetHints say where each JSON snippet goes (OS-independent wording).
+var snippetHints = map[string]string{
+	"claude-desktop": "Claude Desktop: Settings > Developer > Edit Config (claude_desktop_config.json)",
+	"cursor":         "~/.cursor/mcp.json",
+	"vscode":         "VS Code: run \"MCP: Open User Configuration\" (mcp.json)",
+	"windsurf":       "~/.codeium/windsurf/mcp_config.json",
+}
+
+// installEnv is where `config install` finds client config directories;
+// tests inject it.
+type installEnv struct {
+	goos         string
+	home         string // os.UserHomeDir
+	configDir    string // os.UserConfigDir: %AppData%, ~/Library/Application Support, $XDG_CONFIG_HOME or ~/.config
+	localAppData string // Windows %LOCALAPPDATA%, home of MSIX package data
+	wslDistro    string // $WSL_DISTRO_NAME, set inside WSL
+}
+
+func currentInstallEnv() (installEnv, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return installEnv{}, fmt.Errorf("home dir: %w", err)
+	}
+	cfg, err := os.UserConfigDir()
+	if err != nil {
+		return installEnv{}, fmt.Errorf("config dir: %w (set XDG_CONFIG_HOME or use `connect-iq-mcp config snippet`)", err)
+	}
+	return installEnv{
+		goos:         runtime.GOOS,
+		home:         home,
+		configDir:    cfg,
+		localAppData: os.Getenv("LOCALAPPDATA"),
+		wslDistro:    os.Getenv("WSL_DISTRO_NAME"),
+	}, nil
+}
+
+// clientConfigPaths returns the config files a client reads. Claude Desktop
+// and VS Code may have several (MSIX copy, VS Code forks); each is written.
+func clientConfigPaths(client string, e installEnv) []string {
+	switch client {
+	case "cursor":
+		return []string{filepath.Join(e.home, ".cursor", "mcp.json")}
+	case "windsurf":
+		return []string{filepath.Join(e.home, ".codeium", "windsurf", "mcp_config.json")}
+	case "codex":
+		return []string{filepath.Join(e.home, ".codex", "config.toml")}
+	case "claude-desktop":
+		return append([]string{filepath.Join(e.configDir, "Claude", "claude_desktop_config.json")}, msixClaudeConfigs(e)...)
+	case "vscode":
+		return config.VSCodeUserConfigs(e.goos, e.home, e.configDir)
+	default:
+		return nil
+	}
+}
+
+// msixClaudeConfigs returns the virtualized config of an MSIX-installed
+// Claude Desktop (%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude),
+// which that app reads instead of %AppData% once the folder exists.
+func msixClaudeConfigs(e installEnv) []string {
+	if e.goos != "windows" || e.localAppData == "" {
+		return nil
+	}
+	ents, err := os.ReadDir(filepath.Join(e.localAppData, "Packages"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, ent := range ents {
+		if !ent.IsDir() || !strings.HasPrefix(ent.Name(), "Claude_") {
+			continue
+		}
+		dir := filepath.Join(e.localAppData, "Packages", ent.Name(), "LocalCache", "Roaming", "Claude")
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			out = append(out, filepath.Join(dir, "claude_desktop_config.json"))
+		}
+	}
+	return out
+}
+
+// wslSnippet is the config for a Windows-side client launching the server
+// inside this WSL distro (env vars don't cross into WSL, so the profile is
+// a serve flag and the key and Java paths are set through env).
+func wslSnippet(client, distro, bin string, o entryOpts) (string, error) {
+	args := []string{"-d", distro, "--"}
+	if o.Key != "" || o.JavaHome != "" {
+		args = append(append(args, "env"), envPairs(entryOpts{Key: o.Key, JavaHome: o.JavaHome})...)
+	}
+	args = append(args, bin)
+	if o.Profile != "" {
+		args = append(args, "serve", "--profile", o.Profile)
+	}
+	e := map[string]any{"command": "wsl.exe", "args": args}
+	if client == "vscode" {
+		e["type"] = "stdio"
+	}
+	out, err := json.MarshalIndent(map[string]any{serversKey(client): map[string]any{serverName: e}}, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode snippet: %w", err)
+	}
+	return string(out) + "\n", nil
+}
+
+// claudeTimeout bounds `claude mcp add`, which can hang on a first run.
+var claudeTimeout = 20 * time.Second
+
+// runClaude runs the claude CLI without stdin; tests replace it.
+var runClaude = func(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // fixed program, our own args.
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, stdout, stderr
+	return cmd.Run()
+}
+
+func installClaudeCode(bin string, o entryOpts, stdout io.Writer) error {
+	args := claudeAddArgs(bin, o)
+	ctx, cancel := context.WithTimeout(context.Background(), claudeTimeout)
+	defer cancel()
+	err := runClaude(ctx, args, stdout, os.Stderr)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, exec.ErrNotFound):
+		fmt.Fprintf(stdout, "Claude Code CLI not found. Run this once it's installed (or see `connect-iq-mcp config snippet claude-code`):\n  %s\n", shellJoin(args...))
+		return nil
+	case ctx.Err() != nil:
+		fmt.Fprintf(stdout, "`claude mcp add` didn't finish in %s. Run it yourself:\n  %s\n", claudeTimeout, shellJoin(args...))
+		return fmt.Errorf("claude mcp add timed out after %s", claudeTimeout)
+	default:
+		fmt.Fprintf(stdout, "`claude mcp add` failed. Run it yourself:\n  %s\n", shellJoin(args...))
+		return fmt.Errorf("claude mcp add: %w", err)
+	}
+}
+
+func install(client, bin string, o entryOpts, e installEnv, stdout io.Writer) error {
+	if client == "claude-code" {
+		return installClaudeCode(bin, o, stdout)
+	}
+	if e.wslDistro != "" && (client == "claude-desktop" || client == "vscode") {
+		s, err := wslSnippet(client, e.wslDistro, bin, o)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "not installed: this is WSL (%s), and the Windows %s never reads Linux-side config files.\nAdd this to its config on Windows (%s):\n%s", e.wslDistro, client, snippetHints[client], s)
+		return nil
+	}
+	for _, path := range clientConfigPaths(client, e) {
+		var (
+			res mergeResult
+			err error
+		)
+		if client == "codex" {
+			res, err = mergeFile(path, func(old []byte) ([]byte, error) { return mergeCodexTOML(old, codexBlock(bin, o)) })
+		} else {
+			res, err = mergeFile(path, func(old []byte) ([]byte, error) {
+				return mergeJSONServer(old, serversKey(client), serverName, serverEntry(client, bin, o))
+			})
+		}
+		if err != nil {
+			return err
+		}
+		if res.unchanged {
+			fmt.Fprintf(stdout, "already installed in %s (unchanged)\n", path)
+			continue
+		}
+		if res.backup != "" {
+			fmt.Fprintf(stdout, "backup: %s\n", res.backup)
+		}
+		fmt.Fprintf(stdout, "installed %s into %s\n", serverName, path)
+	}
+	return nil
+}
+
+// mergeResult says what mergeFile did.
+type mergeResult struct {
+	backup    string // backup file name, empty when none was made
+	unchanged bool   // the file already had this content; nothing written
+}
+
+// mergeFile rewrites path with merge(old). A symlinked path (dotfiles) is
+// resolved first, so the link stays and its target is updated. An existing
+// file is first copied to <target>.connect-iq-mcp-backup-<timestamp>. The new
+// content is written atomically, keeping the old file mode (0600 for new
+// files). Identical content is left alone: no backup, no write.
+func mergeFile(path string, merge func(old []byte) ([]byte, error)) (mergeResult, error) {
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		target, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return mergeResult{}, fmt.Errorf("%s is a symlink whose target can't be resolved (fix or remove the link): %w", path, err)
+		}
+		path = target
+	}
+	old, err := os.ReadFile(path) //nolint:gosec // client config path we chose.
+	mode := os.FileMode(0o600)
+	exists := err == nil
+	switch {
+	case exists:
+		if fi, err := os.Stat(path); err == nil {
+			mode = fi.Mode().Perm()
+		}
+	case errors.Is(err, os.ErrNotExist):
+	default:
+		return mergeResult{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	out, err := merge(old)
+	if err != nil {
+		return mergeResult{}, fmt.Errorf("%s: %w", path, err)
+	}
+	if exists && bytes.Equal(out, old) {
+		return mergeResult{unchanged: true}, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return mergeResult{}, fmt.Errorf("create %s: %w", filepath.Dir(path), err)
+	}
+	backup := ""
+	if exists {
+		backup = path + ".connect-iq-mcp-backup-" + time.Now().UTC().Format("20060102T150405Z")
+		if err := os.WriteFile(backup, old, mode); err != nil { //nolint:gosec // backup next to the client config path we chose.
+			return mergeResult{}, fmt.Errorf("backup %s: %w", path, err)
+		}
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return mergeResult{}, fmt.Errorf("write %s: %w", path, err)
+	}
+	name := tmp.Name()
+	if _, err = tmp.Write(out); err == nil {
+		err = tmp.Chmod(mode)
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = state.Rename(name, path) // retries while Windows has the config open
+	}
+	if err != nil {
+		_ = os.Remove(name)
+		return mergeResult{}, fmt.Errorf("write %s: %w", path, err)
+	}
+	return mergeResult{backup: backup}, nil
+}
+
+// mergeJSONServer sets doc[key][name] = entry, keeping every other key and
+// server. Empty input starts a new document.
+func mergeJSONServer(old []byte, key, name string, entry map[string]any) ([]byte, error) {
+	doc := map[string]any{}
+	if len(bytes.TrimSpace(old)) > 0 {
+		// UseNumber keeps numbers exactly as written (no float64 round trip).
+		dec := json.NewDecoder(bytes.NewReader(old))
+		dec.UseNumber()
+		err := dec.Decode(&doc)
+		if err == nil && dec.More() {
+			err = errors.New("unexpected data after the top-level object")
+		}
+		if err != nil {
+			return nil, fmt.Errorf("parse JSON (edit it by hand or fix it first): %w", err)
+		}
+	}
+	servers := map[string]any{}
+	if v, ok := doc[key]; ok && v != nil {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%q is not an object", key)
+		}
+		servers = m
+	}
+	servers[name] = entry
+	doc[key] = servers
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode JSON: %w", err)
+	}
+	return append(out, '\n'), nil
+}
+
+// mergeCodexTOML replaces the [mcp_servers.connect-iq-mcp] table (and its sub-tables)
+// with block, keeping every other line, including comments. Timeouts the user
+// set in the old table are kept. The result must parse as TOML.
+func mergeCodexTOML(old []byte, block string) ([]byte, error) {
+	if len(old) > 0 {
+		var probe map[string]any
+		if err := toml.Unmarshal(old, &probe); err != nil {
+			return nil, fmt.Errorf("parse TOML (fix it first): %w", err)
+		}
+	}
+	own := "mcp_servers." + serverName
+	var kept []string
+	userTimeouts := map[string]string{}
+	skipping, inOwn := false, false
+	for _, line := range strings.SplitAfter(string(old), "\n") {
+		if name, ok := tableHeader(line); ok {
+			skipping = name == own || strings.HasPrefix(name, own+".")
+			inOwn = name == own
+		}
+		if inOwn {
+			if k, _, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+				if k = strings.TrimSpace(k); k == "startup_timeout_sec" || k == "tool_timeout_sec" {
+					userTimeouts[k] = strings.TrimRight(strings.TrimSpace(line), "\r")
+				}
+			}
+		}
+		if !skipping && line != "" {
+			kept = append(kept, line)
+		}
+	}
+	for k, line := range userTimeouts {
+		for _, def := range []string{codexStartupTimeout, codexToolTimeout} {
+			if strings.HasPrefix(def, k+" ") {
+				block = strings.Replace(block, def, line, 1)
+			}
+		}
+	}
+	out := strings.TrimRight(strings.Join(kept, ""), "\n")
+	if out != "" {
+		out += "\n\n"
+	}
+	out += block
+	var probe map[string]any
+	if err := toml.Unmarshal([]byte(out), &probe); err != nil {
+		return nil, fmt.Errorf("merged TOML is invalid: %w", err)
+	}
+	return []byte(out), nil
+}
+
+// tableHeader parses a TOML [table] or [[array]] header line into its
+// dotted name with whitespace and quotes removed.
+func tableHeader(line string) (string, bool) {
+	s := strings.TrimSpace(line)
+	if i := strings.Index(s, "#"); i >= 0 && !strings.HasPrefix(s, "#") {
+		s = strings.TrimSpace(s[:i])
+	}
+	if !strings.HasPrefix(s, "[") || !strings.HasSuffix(s, "]") {
+		return "", false
+	}
+	s = strings.Trim(s, "[]")
+	parts := strings.Split(s, ".")
+	for i, p := range parts {
+		parts[i] = strings.Trim(strings.TrimSpace(p), `"'`)
+	}
+	return strings.Join(parts, "."), true
+}
