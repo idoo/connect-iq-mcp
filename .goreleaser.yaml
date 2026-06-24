@@ -1,0 +1,139 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# Local dry run (add the MACOS_* env from release.yml to sign and notarize):
+#   goreleaser release --snapshot --clean --skip=publish,sign,sbom
+version: 2
+
+project_name: connect-iq-mcp
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: connect-iq-mcp
+    main: ./cmd/connect-iq-mcp
+    binary: connect-iq-mcp
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    # No build date: two builds of the same tag must be byte-identical so the
+    # provenance attestation can be reproduced. darwin binaries are the
+    # exception: their Developer ID signature carries a timestamp.
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# Fat darwin binary for the .mcpb bundle only (mcpb platform overrides are
+# per-OS, not per-arch). Archives below take only the per-arch `connect-iq-mcp` builds.
+universal_binaries:
+  - id: connect-iq-mcp-universal
+    ids: [connect-iq-mcp]
+    name_template: connect-iq-mcp
+    replace: false
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# Developer ID signature + Apple notarization (quill, runs on Linux) for the
+# per-arch darwin binaries and the universal one in the .mcpb. Plain Mach-O
+# can't be stapled: Gatekeeper checks the ticket online on first run.
+# release.yml refuses to tag without these secrets; local snapshots stay unsigned.
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids: [connect-iq-mcp, connect-iq-mcp-universal]
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        wait: true
+        timeout: 20m
+
+archives:
+  - id: connect-iq-mcp
+    ids: [connect-iq-mcp]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+  # install.sh is listed (and so cosign-signed) with the archives.
+  extra_files:
+    - glob: ./install.sh
+
+sboms:
+  - artifacts: archive
+    documents:
+      - "${artifact}.spdx.json"
+
+# Keyless cosign (GitHub OIDC) over checksums.txt; the bundle covers every
+# archive through its sha256. Verify (exact identity: this tag's release run):
+#   cosign verify-blob --bundle checksums.txt.sigstore.json \
+#     --certificate-identity "https://github.com/idoo/connect-iq-mcp/.github/workflows/release.yml@refs/tags/v$version" \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+signs:
+  - id: checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--bundle=${signature}", "${artifact}", "--yes"]
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^chore\\(deps\\)"
+      - "^Merge "
+  groups:
+    - title: Breaking changes
+      regexp: '^.*?(\([^)]+\))?!:.+$'
+      order: 0
+    - title: Features
+      regexp: '^.*?feat(\([^)]+\))?:.+$'
+      order: 1
+    - title: Fixes
+      regexp: '^.*?fix(\([^)]+\))?:.+$'
+      order: 2
+    - title: Security
+      regexp: '^.*?sec(urity)?(\([^)]+\))?:.+$'
+      order: 3
+    - title: Documentation
+      regexp: '^.*?docs(\([^)]+\))?:.+$'
+      order: 4
+    - title: Other
+      order: 999
+
+release:
+  github:
+    owner: idoo
+    name: connect-iq-mcp
+  prerelease: auto
+  # Immutable releases: goreleaser only creates a draft; release.yml adds the
+  # .mcpb, tools.json and attestations, then publishes it as the last step.
+  draft: true
+  replace_existing_draft: false
+  mode: keep-existing
+  # The installer is served from the immutable release, not from main:
+  # https://github.com/idoo/connect-iq-mcp/releases/latest/download/install.sh
+  extra_files:
+    - glob: ./install.sh
+  footer: |
+    **Install:** `brew install idoo/tap/connect-iq-mcp`, `curl -fsSL https://github.com/idoo/connect-iq-mcp/releases/download/{{ .Tag }}/install.sh | sh`,
+    `go install github.com/idoo/connect-iq-mcp/cmd/connect-iq-mcp@{{ .Tag }}`,
+    or `connect-iq-mcp-{{ .Version }}.mcpb` for Claude Desktop.
+
+    **Verify:** `gh attestation verify connect-iq-mcp_{{ .Version }}_<os>_<arch>.tar.gz --repo idoo/connect-iq-mcp --signer-workflow idoo/connect-iq-mcp/.github/workflows/release.yml --source-ref refs/tags/{{ .Tag }}`, or
+    `cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity 'https://github.com/idoo/connect-iq-mcp/.github/workflows/release.yml@refs/tags/{{ .Tag }}' --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt`.
+    The .mcpb and tools.json are listed in `checksums-extra.txt`; verify it the same way with `--bundle checksums-extra.txt.sigstore.json ... checksums-extra.txt`.
