@@ -1,0 +1,51 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.idoo/connect-iq-mcp",
+  "title": "Connect IQ MCP",
+  "description": "MCP server for Garmin Connect IQ developers: store portal, SDK builds, simulator. Read-only default.",
+  "repository": {
+    "url": "https://github.com/idoo/connect-iq-mcp",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/idoo/connect-iq-mcp",
+  "version": "0.0.0",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/idoo/connect-iq-mcp/releases/download/v0.0.0/connect-iq-mcp-0.0.0.mcpb",
+      "version": "0.0.0",
+      "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "CIQ_MCP_ALLOW_WRITES",
+          "description": "Set to 1 to expose write tools; public actions still need your approval",
+          "default": "0"
+        },
+        {
+          "name": "CIQ_MCP_TOOLSETS",
+          "description": "Toolsets to enable: empty for defaults, 'all', or e.g. '+connect'"
+        },
+        {
+          "name": "CIQ_MCP_PROFILE",
+          "description": "Credential profile to use"
+        },
+        {
+          "name": "CIQ_MCP_SDK",
+          "description": "Connect IQ SDK path or installed version (default: SDK Manager's current SDK)"
+        },
+        {
+          "name": "CIQ_MCP_BROWSER",
+          "description": "Browser for sign-in: a path, or 'bundled' for Chrome for Testing"
+        },
+        {
+          "name": "CIQ_MCP_PORTAL_COOKIES",
+          "description": "Developer portal session cookie for CI (no renewal; lasts about 15 days)",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}
