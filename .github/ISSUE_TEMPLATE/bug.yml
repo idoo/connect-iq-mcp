@@ -1,0 +1,45 @@
+name: Bug report
+description: connect-iq-mcp doesn't do what the docs say
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Don't paste cookies, tokens or signed URLs. `connect-iq-mcp doctor` output is redacted and safe.
+        Security holes go through private vulnerability reporting (Security tab), not here.
+  - type: input
+    id: version
+    attributes:
+      label: connect-iq-mcp version
+      description: Output of `connect-iq-mcp version`
+    validations:
+      required: true
+  - type: dropdown
+    id: client
+    attributes:
+      label: MCP client
+      options: [Claude Code, Claude Desktop, Cursor, Codex, VS Code, Windsurf, Other]
+    validations:
+      required: true
+  - type: input
+    id: tool
+    attributes:
+      label: Tool or subcommand
+      placeholder: store_apps_list, connect-iq-mcp auth add, ...
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Tool call arguments and result
+      description: The JSON arguments and the (redacted) result or error, including `_meta.garmin` if present.
+      render: json
+  - type: textarea
+    id: doctor
+    attributes:
+      label: connect-iq-mcp doctor output
+      render: text
