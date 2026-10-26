@@ -2,7 +2,6 @@ package tool
 
 import (
 	"context"
-	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -22,19 +21,16 @@ type ProfileInfo struct {
 	AllowNoElicit bool `json:"allow_no_elicit,omitempty"`
 }
 
-// PlanTTL is how long a proposed plan stays valid. Planner implementations
-// must expire plans at exactly this age (see tooltest.PlannerConformance).
-const PlanTTL = 15 * time.Minute
+// PreviewTTL is how long a preview can be claimed by a confirm:true call.
+// Planner implementations expire previews at exactly this age.
+const PreviewTTL = 15 * time.Minute
 
-// Planner stores two-step plans (in memory, per session).
+// Planner records the previews of [ConfirmByFlag] tools (in memory, per
+// session) so an agent-only confirm can prove a preview came first.
 type Planner interface {
-	// Propose records a plan for tool+args at the given state fingerprint and
+	// Propose records a preview for tool+args at the given fingerprint and
 	// returns its id. args are canonicalized with [CanonicalArgs].
 	Propose(ctx context.Context, toolName string, args any, fingerprint string, preview PlanPreview) (string, error)
-	// Verify checks that planID was proposed for the same tool, args and
-	// fingerprint and has not expired; it consumes the plan on success. Failures
-	// wrap [ErrStalePlan].
-	Verify(ctx context.Context, planID, toolName string, args any, fingerprint string) error
 	// Claim consumes the newest unexpired plan for toolName proposed at
 	// [FlagFingerprint] whose canonical args equal args'. It is how a
 	// [ConfirmByFlag] confirm proves a preview of the same call came first.
@@ -72,23 +68,6 @@ type Toolsets interface {
 	List() []ToolsetInfo
 	Enable(ctx context.Context, names ...Toolset) error
 	Disable(ctx context.Context, names ...Toolset) error
-}
-
-// FetchResponse is the result of an unauthenticated fetch.
-type FetchResponse struct {
-	Status int
-	Header http.Header
-	Body   []byte
-}
-
-// Fetcher performs unauthenticated requests (report downloads, analytics
-// segments, upload parts, feedback screenshots) under the URL policy: https,
-// port 443, no userinfo, no private/loopback/link-local address after
-// resolution, and no Authorization/Cookie/Host/Proxy-* headers.
-type Fetcher interface {
-	// Fetch performs method on rawURL; the response body is capped at maxBytes
-	// (0 means the implementation default) and exceeding it is an error.
-	Fetch(ctx context.Context, method, rawURL string, header http.Header, body io.Reader, maxBytes int64) (*FetchResponse, error)
 }
 
 // Files gives tools confined filesystem access: an explicit --root/GARMIN_MCP_ROOT,
@@ -147,7 +126,6 @@ type Env struct {
 	Plans    Planner
 	State    StateStore
 	Toolsets Toolsets
-	Fetch    Fetcher
 	// Root is the confined project file root (os.Root based).
 	Root    Files
 	Clock   Clock
@@ -197,9 +175,6 @@ func (e *Env) complete() *Env {
 	}
 	if c.Toolsets == nil {
 		c.Toolsets = noToolsets{}
-	}
-	if c.Fetch == nil {
-		c.Fetch = noFetcher{}
 	}
 	if c.Root == nil {
 		c.Root = noFiles{}

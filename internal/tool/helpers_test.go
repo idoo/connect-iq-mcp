@@ -6,99 +6,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/idoo/garmin-mcp/internal/tool"
 	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
 )
-
-func TestParallelBoundsConcurrency(t *testing.T) {
-	var cur, peak atomic.Int32
-	items := make([]int, 40)
-	err := tool.Parallel(context.Background(), 3, items, func(_ context.Context, _ int, _ int) error {
-		n := cur.Add(1)
-		for {
-			p := peak.Load()
-			if n <= p || peak.CompareAndSwap(p, n) {
-				break
-			}
-		}
-		time.Sleep(time.Millisecond)
-		cur.Add(-1)
-		return nil
-	})
-	if err != nil || peak.Load() > 3 || peak.Load() < 2 {
-		t.Fatalf("err=%v peak=%d", err, peak.Load())
-	}
-	if err := tool.Parallel(context.Background(), 0, []int{1}, func(context.Context, int, int) error { return nil }); err != nil {
-		t.Fatalf("n=0: %v", err)
-	}
-	if err := tool.Parallel[int](context.Background(), 2, nil, nil); err != nil {
-		t.Fatalf("empty: %v", err)
-	}
-}
-
-func TestParallelRecoversPanic(t *testing.T) {
-	err := tool.Parallel(context.Background(), 2, []string{"a", "b", "c"}, func(_ context.Context, i int, _ string) error {
-		if i == 1 {
-			panic("boom")
-		}
-		return nil
-	})
-	if !errors.Is(err, tool.ErrInternal) || !strings.Contains(err.Error(), "item 1") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestParallelFirstErrorCancelsRest(t *testing.T) {
-	boom := errors.New("boom")
-	var started atomic.Int32
-	err := tool.Parallel(context.Background(), 1, make([]int, 10), func(_ context.Context, i int, _ int) error {
-		started.Add(1)
-		if i == 2 {
-			return boom
-		}
-		return nil
-	})
-	if !errors.Is(err, boom) {
-		t.Fatalf("err = %v", err)
-	}
-	if n := started.Load(); n != 3 {
-		t.Fatalf("started %d items after the error, want 3", n)
-	}
-}
-
-func TestParallelSlotWaitHonoursContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	release := make(chan struct{})
-	var started atomic.Int32
-	done := make(chan error, 1)
-	go func() {
-		done <- tool.Parallel(ctx, 1, make([]int, 5), func(context.Context, int, int) error {
-			started.Add(1)
-			<-release
-			return nil
-		})
-	}()
-	for started.Load() == 0 {
-		time.Sleep(time.Millisecond)
-	}
-	cancel() // the loop is blocked waiting for the only slot
-	close(release)
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("err = %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Parallel did not return after cancel")
-	}
-	if n := started.Load(); n != 1 {
-		t.Fatalf("started %d items after cancel, want 1", n)
-	}
-}
 
 func TestSharedErrorHelpers(t *testing.T) {
 	api := func(s int) error { return fmt.Errorf("wrapped: %w", &tool.APIError{Status: s}) }
@@ -145,8 +57,8 @@ func TestWritesDisabledHintPointsAtEnableWrites(t *testing.T) {
 }
 
 // gateTool builds a tool whose handler runs gate and then mutates once.
-func gateTool(m tool.Meta, gate func(ctx context.Context, env *tool.Env, in planIn) (context.Context, *tool.Result)) tool.Tool {
-	return tool.New(m, func(ctx context.Context, env *tool.Env, in planIn) (*tool.Result, error) {
+func gateTool(m tool.Meta, gate func(ctx context.Context, env *tool.Env, in textIn) (context.Context, *tool.Result)) tool.Tool {
+	return tool.New(m, func(ctx context.Context, env *tool.Env, in textIn) (*tool.Result, error) {
 		wctx, res := gate(ctx, env, in)
 		if res != nil {
 			return res, nil
@@ -156,19 +68,16 @@ func gateTool(m tool.Meta, gate func(ctx context.Context, env *tool.Env, in plan
 	})
 }
 
-type flagPlanIn struct {
-	tool.ConfirmFlag
-	tool.ConfirmPlan
+type textIn struct {
+	Text string `json:"text"`
 }
 
 func TestGateMisuseFailsClosed(t *testing.T) {
 	base := tool.Meta{Toolset: tool.Store, Description: "Gate test.", Class: tool.Destructive}
-	planMeta := base
-	planMeta.Name, planMeta.Confirm = "gate_plan", tool.ConfirmByPlan
+	ungated := base
+	ungated.Name, ungated.Class = "gate_none", tool.Write
 	humanFlag := base
 	humanFlag.Name, humanFlag.Confirm, humanFlag.RequireHuman = "gate_human_flag", tool.ConfirmByFlag, true
-	humanPlan := planMeta
-	humanPlan.Name, humanPlan.RequireHuman = "gate_human_plan", true
 
 	tests := []struct {
 		name  string
@@ -188,32 +97,14 @@ func TestGateMisuseFailsClosed(t *testing.T) {
 				return nil, err
 			})
 		}, nil, `{"app":"1"}`, "internal_error"},
-		{"flag_gate_in_plan_tool", func() tool.Tool {
-			return gateTool(planMeta, func(ctx context.Context, env *tool.Env, _ planIn) (context.Context, *tool.Result) {
+		{"flag_gate_in_ungated_tool", func() tool.Tool {
+			return gateTool(ungated, func(ctx context.Context, env *tool.Env, _ textIn) (context.Context, *tool.Result) {
 				return tool.RequireConfirm(ctx, env, true, tool.PlanPreview{Summary: "x"})
-			})
-		}, nil, `{"text":"a"}`, "internal_error"},
-		{"plan_gate_in_flag_tool", func() tool.Tool {
-			m := base
-			m.Name, m.Confirm = "gate_flag", tool.ConfirmByFlag
-			return tool.New(m, func(ctx context.Context, env *tool.Env, _ flagPlanIn) (*tool.Result, error) {
-				_, res := tool.Preview(ctx, env, "", map[string]any{}, "fp", tool.PlanPreview{Summary: "x"})
-				return res, nil
-			})
-		}, nil, `{}`, "internal_error"},
-		{"preview_empty_fingerprint", func() tool.Tool {
-			return gateTool(planMeta, func(ctx context.Context, env *tool.Env, in planIn) (context.Context, *tool.Result) {
-				return tool.Preview(ctx, env, in.PlanID, in, "", tool.PlanPreview{Summary: "x"})
 			})
 		}, nil, `{"text":"a"}`, "internal_error"},
 		{"noconfirm_require_human_flag", func() tool.Tool {
 			return tool.New(humanFlag, exampleHandler)
 		}, func(k *tooltest.Kit) { k.Env.NoConfirm = true }, `{"app":"1"}`, "human_approval_required"},
-		{"noconfirm_require_human_plan_verify", func() tool.Tool {
-			return gateTool(humanPlan, func(ctx context.Context, env *tool.Env, in planIn) (context.Context, *tool.Result) {
-				return tool.Preview(ctx, env, in.PlanID, in, "fp", tool.PlanPreview{Summary: "x"})
-			})
-		}, func(k *tooltest.Kit) { k.Env.NoConfirm = true }, `PLAN`, "human_approval_required"},
 		{"elicit_error_is_not_approval", func() tool.Tool {
 			return tool.New(humanFlag, exampleHandler)
 		}, func(k *tooltest.Kit) {
@@ -231,18 +122,7 @@ func TestGateMisuseFailsClosed(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(k)
 			}
-			tl := tc.tool()
-			args := tc.args
-			if args == "PLAN" {
-				// NoConfirm does not skip the plan step for RequireHuman tools.
-				res := tooltest.MustOK(t, tooltest.Call(t, tl, k.Env, `{"text":"a"}`))
-				id, _ := tooltest.Decode[map[string]any](t, res)["plan_id"].(string)
-				if id == "" {
-					t.Fatal("RequireHuman plan tool skipped its plan under NoConfirm")
-				}
-				args = `{"text":"a","plan_id":"` + id + `"}`
-			}
-			tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, args), tc.code)
+			tooltest.MustFail(t, tooltest.Call(t, tc.tool(), k.Env, tc.args), tc.code)
 			if n := len(k.HTTP.Mutations()); n != 0 {
 				t.Fatalf("mutations = %d", n)
 			}
@@ -261,16 +141,12 @@ func TestGateOutsideCallFailsClosed(t *testing.T) {
 	}
 }
 
-func TestPlanExpiresWithKitClock(t *testing.T) {
+func TestPreviewExpiresWithKitClock(t *testing.T) {
 	k := newKit(t)
-	tl := gateTool(tool.Meta{Name: "gate_ttl", Toolset: tool.Store, Description: "TTL test.", Class: tool.Destructive, Confirm: tool.ConfirmByPlan},
-		func(ctx context.Context, env *tool.Env, in planIn) (context.Context, *tool.Result) {
-			return tool.Preview(ctx, env, in.PlanID, in, "fp", tool.PlanPreview{Summary: "x"})
-		})
-	res := tooltest.MustOK(t, tooltest.Call(t, tl, k.Env, `{"text":"a"}`))
-	id, _ := tooltest.Decode[map[string]any](t, res)["plan_id"].(string)
-	k.Clock.Set(k.Clock.Now().Add(tool.PlanTTL))
-	tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, `{"text":"a","plan_id":"`+id+`"}`), "stale_plan")
+	tl := tool.New(exampleMeta, exampleHandler)
+	tooltest.MustOK(t, tooltest.Call(t, tl, k.Env, `{"app":"1"}`))
+	k.Clock.Set(k.Clock.Now().Add(tool.PreviewTTL))
+	tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, `{"app":"1","confirm":true}`), "preview_required")
 	if n := len(k.HTTP.Mutations()); n != 0 {
 		t.Fatalf("mutations = %d", n)
 	}

@@ -139,7 +139,7 @@ func remove(ps []pair, name string) []pair {
 // Past that the portal needs a full Garmin SSO login.
 func SealExpiry(header string) (time.Time, error) {
 	ps := splitCookies(header)
-	var min time.Time
+	var earliest time.Time
 	for _, name := range []string{"session", "refresh_token"} {
 		v, ok := lookup(ps, name)
 		if !ok {
@@ -149,11 +149,11 @@ func SealExpiry(header string) (time.Time, error) {
 		if err != nil {
 			return time.Time{}, errors.New("cookie `" + name + "`: " + err.Error())
 		}
-		if min.IsZero() || t.Before(min) {
-			min = t
+		if earliest.IsZero() || t.Before(earliest) {
+			earliest = t
 		}
 	}
-	return min, nil
+	return earliest, nil
 }
 
 func sealExpiry(v string) (time.Time, error) {

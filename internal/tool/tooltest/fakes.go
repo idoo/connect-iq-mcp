@@ -1,15 +1,11 @@
 package tooltest
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -21,13 +17,12 @@ import (
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
-// PlanCapacity is the number of pending plans kept per session (LRU).
+// PlanCapacity is the number of pending previews kept per session (LRU).
 const PlanCapacity = 32
 
-// FakePlanner is an in-memory [tool.Planner] with the production semantics
-// (checked by [PlannerConformance]): random plan ids bound to tool, canonical
-// args and fingerprint; plans expire after [tool.PlanTTL]; any Verify of a
-// known id consumes it, even a failing one; at most PlanCapacity pending
+// FakePlanner is an in-memory [tool.Planner] with the production semantics:
+// previews bound to tool, canonical args and fingerprint; they expire after
+// [tool.PreviewTTL]; each Claim consumes one; at most PlanCapacity pending
 // (oldest evicted); an empty fingerprint is refused (fail closed).
 type FakePlanner struct {
 	mu    sync.Mutex
@@ -64,7 +59,7 @@ func (p *FakePlanner) Propose(_ context.Context, toolName string, args any, fing
 	id := "plan_" + rand.Text()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.plans[id] = plan{tool: toolName, args: string(canon), fingerprint: fingerprint, expires: p.now().Add(tool.PlanTTL)}
+	p.plans[id] = plan{tool: toolName, args: string(canon), fingerprint: fingerprint, expires: p.now().Add(tool.PreviewTTL)}
 	p.order = append(p.order, id)
 	for len(p.order) > PlanCapacity {
 		delete(p.plans, p.order[0])
@@ -72,33 +67,6 @@ func (p *FakePlanner) Propose(_ context.Context, toolName string, args any, fing
 	}
 	p.Proposed = append(p.Proposed, preview)
 	return id, nil
-}
-
-// Verify implements tool.Planner. Any lookup of a known id consumes it.
-func (p *FakePlanner) Verify(_ context.Context, planID, toolName string, args any, fingerprint string) error {
-	canon, err := tool.CanonicalArgs(args)
-	if err != nil {
-		return err
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	pl, ok := p.plans[planID]
-	if !ok {
-		return fmt.Errorf("%w: unknown plan %q", tool.ErrStalePlan, planID)
-	}
-	delete(p.plans, planID)
-	p.order = slices.DeleteFunc(p.order, func(s string) bool { return s == planID })
-	switch {
-	case !p.now().Before(pl.expires):
-		return fmt.Errorf("%w: plan expired", tool.ErrStalePlan)
-	case pl.tool != toolName:
-		return fmt.Errorf("%w: plan %q belongs to %s", tool.ErrStalePlan, planID, pl.tool)
-	case pl.args != string(canon):
-		return fmt.Errorf("%w: arguments differ from the planned call", tool.ErrStalePlan)
-	case fingerprint == "" || pl.fingerprint != fingerprint:
-		return fmt.Errorf("%w: remote state changed since the plan was made", tool.ErrStalePlan)
-	}
-	return nil
 }
 
 // Claim implements tool.Planner: it consumes the newest unexpired
@@ -279,62 +247,6 @@ func (f *FakeFiles) WalkDir(root string, fn fs.WalkDirFunc) error {
 		return err
 	}
 	return filepath.WalkDir(p, fn)
-}
-
-// FakeFetcher is a [tool.Fetcher] serving canned responses by exact URL. It
-// enforces https and the forbidden-header rule and fails the test on
-// unknown URLs.
-type FakeFetcher struct {
-	t     testing.TB
-	mu    sync.Mutex
-	resps map[string]tool.FetchResponse
-	// Calls records "METHOD URL" for every fetch.
-	Calls []string
-}
-
-// NewFakeFetcher returns an empty FakeFetcher.
-func NewFakeFetcher(t testing.TB) *FakeFetcher {
-	return &FakeFetcher{t: t, resps: map[string]tool.FetchResponse{}}
-}
-
-// Handle registers a response for method+URL.
-func (f *FakeFetcher) Handle(method, rawURL string, status int, body []byte) *FakeFetcher {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.resps[method+" "+rawURL] = tool.FetchResponse{Status: status, Header: http.Header{}, Body: body}
-	return f
-}
-
-// Fetch implements tool.Fetcher.
-func (f *FakeFetcher) Fetch(_ context.Context, method, rawURL string, header http.Header, body io.Reader, maxBytes int64) (*tool.FetchResponse, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme != "https" || u.User != nil {
-		return nil, fmt.Errorf("url policy: %q refused", rawURL)
-	}
-	for k := range header {
-		switch k = strings.ToLower(k); {
-		case k == "authorization", k == "cookie", k == "host", strings.HasPrefix(k, "proxy-"):
-			return nil, fmt.Errorf("url policy: header %q refused", k)
-		}
-	}
-	if body != nil {
-		if _, err := io.Copy(io.Discard, body); err != nil {
-			return nil, fmt.Errorf("read body: %w", err)
-		}
-	}
-	f.mu.Lock()
-	f.Calls = append(f.Calls, method+" "+rawURL)
-	r, ok := f.resps[method+" "+rawURL]
-	f.mu.Unlock()
-	if !ok {
-		f.t.Errorf("FakeFetcher: unexpected %s %s", method, rawURL)
-		return nil, fmt.Errorf("FakeFetcher: no response for %s %s", method, rawURL)
-	}
-	if maxBytes > 0 && int64(len(r.Body)) > maxBytes {
-		return nil, fmt.Errorf("response exceeds %d bytes", maxBytes)
-	}
-	r.Body = bytes.Clone(r.Body)
-	return &r, nil
 }
 
 // FakeToolsets is a [tool.Toolsets] over the global registry.

@@ -203,6 +203,35 @@ func TestApprovalPrompt(t *testing.T) {
 	}
 }
 
+func TestApprovalPromptEscapesHiddenChars(t *testing.T) {
+	p := tool.PlanPreview{Summary: "reply", Untrusted: []string{"ok\u202Eevil\u200B\u00AD\x01\tline\nnext\xff"}}
+	got, err := tool.ApprovalPrompt("reviews_reply", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, "WARNING: contains hidden characters") {
+		t.Errorf("no warning line: %q", got)
+	}
+	for _, want := range []string{`ok\u{202E}evil\u{200B}\u{00AD}\u{0001}` + "\tline\nnext" + `\u{FFFD}`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt %q lacks %q", got, want)
+		}
+	}
+	for _, r := range []rune{'\u202E', '\u200B', '\u00AD', 0x01} {
+		if strings.ContainsRune(got, r) {
+			t.Errorf("prompt still contains raw %U", r)
+		}
+	}
+	if plain, _ := tool.ApprovalPrompt("reviews_reply", tool.PlanPreview{Summary: "reply Привет"}); strings.Contains(plain, "WARNING") {
+		t.Errorf("clean prompt warned: %q", plain)
+	}
+	// The size cap applies to the escaped text: each hidden rune grows to 8 bytes.
+	p = tool.PlanPreview{Summary: strings.Repeat("\u200B", tool.MaxApprovalPrompt/3-100)}
+	if _, err := tool.ApprovalPrompt("reviews_reply", p); !errors.Is(err, tool.ErrInvalidArgs) {
+		t.Errorf("escaped oversized prompt err = %v", err)
+	}
+}
+
 func TestOversizedPromptRefusesApproval(t *testing.T) {
 	k := newKit(t)
 	k.Elicit(true)
@@ -267,97 +296,6 @@ func TestRequireHumanConfirmForcesHuman(t *testing.T) {
 	tooltest.MustOK(t, tooltest.Call(t, tl, k.Env, `{"app":"1","confirm":true}`))
 }
 
-type planIn struct {
-	tool.ConfirmPlan
-	Text string `json:"text"`
-}
-
-func TestPlanRoundTrip(t *testing.T) {
-	k := tooltest.New(t)
-	remote := "old"
-	tl := tool.New(tool.Meta{
-		Name: "example_apply", Toolset: tool.Store, Description: "Applies text.",
-		Class: tool.Write, Confirm: tool.ConfirmByPlan,
-	}, func(ctx context.Context, env *tool.Env, in planIn) (*tool.Result, error) {
-		fp, err := tool.Fingerprint(remote)
-		if err != nil {
-			return nil, err
-		}
-		wctx, res := tool.Preview(ctx, env, in.PlanID, in, fp, tool.PlanPreview{Summary: "set text", Current: remote, Intended: in.Text})
-		if res != nil {
-			return res, nil
-		}
-		err = tooltest.Delete(wctx, env, "/v1/things/1")
-		return tool.OK(map[string]any{"applied": true}), err
-	})
-
-	plan := func() string {
-		res := tooltest.MustOK(t, tooltest.Call(t, tl, k.Env, `{"text":"new"}`))
-		id, _ := tooltest.Decode[map[string]any](t, res)["plan_id"].(string)
-		if id == "" {
-			t.Fatal("no plan_id")
-		}
-		return id
-	}
-	id := plan()
-	if len(k.HTTP.Mutations()) != 0 {
-		t.Fatal("plan call mutated")
-	}
-	// Different args with the same plan id are refused.
-	tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, `{"text":"other","plan_id":"`+id+`"}`), "stale_plan")
-	// Stale state is refused.
-	id = plan()
-	remote = "changed"
-	tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, `{"text":"new","plan_id":"`+id+`"}`), "stale_plan")
-	// Fresh plan applies once.
-	id = plan()
-	tooltest.MustOK(t, tooltest.Call(t, tl, k.Env, `{"text":"new","plan_id":"`+id+`"}`))
-	tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, `{"text":"new","plan_id":"`+id+`"}`), "stale_plan")
-	if n := len(k.HTTP.Mutations()); n != 1 {
-		t.Fatalf("mutations = %d", n)
-	}
-}
-
-func TestPreviewHumanForcesHuman(t *testing.T) {
-	k := tooltest.New(t)
-	tl := tool.New(tool.Meta{
-		Name: "example_apply", Toolset: tool.Store, Description: "Applies text.",
-		Class: tool.Write, Confirm: tool.ConfirmByPlan,
-	}, func(ctx context.Context, env *tool.Env, in planIn) (*tool.Result, error) {
-		wctx, res := tool.PreviewHuman(ctx, env, in.PlanID, in, "fp", tool.PlanPreview{Summary: "set public text"})
-		if res != nil {
-			return res, nil
-		}
-		err := tooltest.Delete(wctx, env, "/v1/things/1")
-		return tool.OK(map[string]any{"applied": true}), err
-	})
-	plan := func() string {
-		id, _ := tooltest.Decode[map[string]any](t, tooltest.MustOK(t, tooltest.Call(t, tl, k.Env, `{"text":"new"}`)))["plan_id"].(string)
-		if id == "" {
-			t.Fatal("no plan_id")
-		}
-		return id
-	}
-	// Meta.RequireHuman is false, yet a valid plan_id alone is refused.
-	tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, `{"text":"new","plan_id":"`+plan()+`"}`), "human_approval_required")
-	// NoConfirm (CI) does not skip the forced human gate.
-	k.Env.NoConfirm = true
-	tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, `{"text":"new","plan_id":"`+plan()+`"}`), "human_approval_required")
-	if n := len(k.HTTP.Mutations()); n != 0 {
-		t.Fatalf("mutations = %d", n)
-	}
-	k.Env.NoConfirm = false
-	k.Elicit(false)
-	tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, `{"text":"new","plan_id":"`+plan()+`"}`), "declined")
-	k.Elicit(true)
-	if res := tooltest.MustOK(t, tooltest.Call(t, tl, k.Env, `{"text":"new","plan_id":"`+plan()+`"}`)); res.Meta.ApprovedBy != tool.ApprovedHuman {
-		t.Errorf("approved_by = %q, want human", res.Meta.ApprovedBy)
-	}
-	if n := len(k.HTTP.Mutations()); n != 1 {
-		t.Fatalf("mutations = %d", n)
-	}
-}
-
 func TestAnnotations(t *testing.T) {
 	cases := []struct {
 		class                 tool.Class
@@ -395,7 +333,7 @@ func TestGuards(t *testing.T) {
 	// Nil Env members are replaced with stand-ins returning ErrUnavailable.
 	var gotErr error
 	probe := tool.New(tool.Meta{Name: "probe", Toolset: tool.Core, Description: "Probes.", Class: tool.Read},
-		func(ctx context.Context, env *tool.Env, _ noIn) (*tool.Result, error) {
+		func(_ context.Context, env *tool.Env, _ noIn) (*tool.Result, error) {
 			_, gotErr = env.Root.ReadFile("x")
 			return nil, nil
 		})

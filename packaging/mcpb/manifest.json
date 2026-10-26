@@ -2,10 +2,10 @@
   "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-latest.schema.json",
   "manifest_version": "0.3",
   "name": "garmin-mcp",
-  "display_name": "Connect IQ MCP",
+  "display_name": "Garmin MCP",
   "version": "0.0.0",
   "description": "MCP server for Garmin Connect IQ developers. Ask Claude about your store apps, SDK builds and the simulator. Read-only by default.",
-  "long_description": "MCP server for Garmin Connect IQ developers. Ask Claude about your store apps, SDK builds and the simulator. Read-only by default; anything public waits for your yes. Run `garmin-mcp auth login` once to store credentials.",
+  "long_description": "MCP server for Garmin Connect IQ developers. Ask Claude about your store apps, SDK builds and the simulator. Read-only by default; anything public waits for your yes. Run `garmin-mcp auth login` once: a browser opens, you sign in with Remember me, and sessions renew silently after that. Unofficial; not affiliated with Garmin.",
   "author": {
     "name": "Ivan Verevkin",
     "url": "https://github.com/idoo"
@@ -62,7 +62,7 @@
     "allow_writes": {
       "type": "boolean",
       "title": "Allow writes",
-      "description": "Expose write and destructive tools. Destructive actions still require plan/confirm.",
+      "description": "Expose write tools. Public actions (publishing, listing edits, review replies) still wait for your approval.",
       "required": false,
       "default": false
     },

@@ -11,7 +11,7 @@ const (
 
 // withWrite marks ctx as carrying the write capability. Only this package
 // mints it: [Tool.Call] for unconfirmed Write tools, and the confirm gates
-// ([RequireConfirm], [Preview], [Unconfirmed]) after they pass.
+// ([RequireConfirm], [Unconfirmed]) after they pass.
 func withWrite(ctx context.Context) context.Context {
 	return context.WithValue(ctx, writeKey, true)
 }

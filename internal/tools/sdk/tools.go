@@ -3,13 +3,13 @@ package sdk
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/idoo/garmin-mcp/internal/ciqsdk"
+	"github.com/idoo/garmin-mcp/internal/sim"
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
@@ -39,24 +39,20 @@ func init() {
 		Description: "Parse a project's manifest.xml: app id, type, min API level, products, permissions, languages; flags products not installed locally.",
 	}, sdkManifestGet))
 	tool.Register(tool.New(tool.Meta{
-		Name: "sdk_manifest_set_products", Toolset: Toolset, Class: tool.Write, Local: true, Confirm: tool.ConfirmByFlag,
+		// Local project edits: usable in the default read-only mode.
+		Name: "sdk_manifest_set_products", Toolset: Toolset, Class: tool.Write, Local: true, AvailableReadOnly: true,
 		Title:       "Edit manifest products",
-		Description: "Add/remove <iq:product> entries in manifest.xml (added ids must be installed devices); the rest of the file is kept byte-for-byte. Without confirm:true previews.",
+		Description: "Add/remove <iq:product> entries in manifest.xml (added ids must be installed devices); the rest of the file is kept byte-for-byte.",
 	}, sdkManifestSetProducts))
 	tool.Register(tool.New(tool.Meta{
-		Name: "sdk_build", Toolset: Toolset, Class: tool.Write, Local: true,
-		Title:       "Build PRG (monkeyc)",
-		Description: "Compile the project for one device (debug, release or unit-test) with monkeyc; returns the PRG path and structured diagnostics.",
+		Name: "sdk_build", Toolset: Toolset, Class: tool.Write, Local: true, AvailableReadOnly: true,
+		Title:       "Build with monkeyc",
+		Description: "Compile the project with monkeyc: one device (debug, release or unit-test PRG) or device \"all\" for the store .iq of every manifest product (slow; never replaces an existing .iq without overwrite). Returns structured diagnostics, grouped by device for \"all\".",
 	}, sdkBuild))
 	tool.Register(tool.New(tool.Meta{
-		Name: "sdk_export", Toolset: Toolset, Class: tool.Write, Local: true,
-		Title:       "Export store package (.iq)",
-		Description: "Build the store .iq for all manifest products (monkeyc -e -r). Slow (minutes); returns diagnostics grouped by device.",
-	}, sdkExport))
-	tool.Register(tool.New(tool.Meta{
-		Name: "sdk_key_generate", Toolset: Toolset, Class: tool.Write, Local: true, Confirm: tool.ConfirmByFlag,
+		Name: "sdk_key_generate", Toolset: Toolset, Class: tool.Write, Local: true, AvailableReadOnly: true,
 		Title:       "Generate developer key",
-		Description: "Create an RSA-4096 PKCS#8 DER developer key (0600). Refuses to overwrite. Store updates need the same key forever: back it up. Without confirm:true previews.",
+		Description: "Create an RSA-4096 PKCS#8 DER developer key (0600). Refuses to overwrite. Store updates need the same key forever: back it up.",
 	}, sdkKeyGenerate))
 	tool.Register(tool.New(tool.Meta{
 		Name: "sdk_key_check", Toolset: Toolset, Class: tool.Read, Idempotent: true, Local: true,
@@ -88,7 +84,7 @@ func resolveSDK(arg string) (sdkEnv, error) {
 // --- sdk_info ---
 
 type infoIn struct {
-	SDK string `json:"sdk,omitempty" jsonschema:"SDK path or installed version, e.g. 9.2.0"`
+	SDK string `json:"sdk,omitempty" jsonschema:"installed SDK version or dir name, e.g. 9.2.0; a custom SDK only via GARMIN_MCP_SDK"`
 }
 
 type infoOut struct {
@@ -118,7 +114,7 @@ func sdkInfo(ctx context.Context, _ *tool.Env, in infoIn) (*tool.Result, error) 
 	} else {
 		out.Newest = out.Installed[0].Version
 	}
-	if b, err := os.ReadFile(filepath.Join(dr, "current-sdk.cfg")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(dr, "current-sdk.cfg")); err == nil { //nolint:gosec // G304: fixed file name under the Connect IQ data root
 		out.CurrentCfg, _ = ciqsdk.ParseCurrentCfg(b, dr)
 	}
 	if r, err := ciqsdk.Resolve(ciqsdk.ResolveOpts{Arg: in.SDK, DataRoot: dr, Getenv: os.Getenv}); err != nil {
@@ -341,13 +337,12 @@ func sdkManifestGet(_ context.Context, env *tool.Env, in manifestIn) (*tool.Resu
 }
 
 type setProductsIn struct {
-	tool.ConfirmFlag
 	Path   string   `json:"path,omitempty" jsonschema:"manifest.xml or project dir inside the root (default: root)"`
 	Add    []string `json:"add,omitempty" jsonschema:"device ids to add (must be installed)"`
 	Remove []string `json:"remove,omitempty" jsonschema:"device ids to remove"`
 }
 
-func sdkManifestSetProducts(ctx context.Context, env *tool.Env, in setProductsIn) (*tool.Result, error) {
+func sdkManifestSetProducts(_ context.Context, env *tool.Env, in setProductsIn) (*tool.Result, error) {
 	if len(in.Add) == 0 && len(in.Remove) == 0 {
 		return nil, tool.InvalidArgs("give add and/or remove")
 	}
@@ -386,13 +381,11 @@ func sdkManifestSetProducts(ctx context.Context, env *tool.Env, in setProductsIn
 	if len(added) == 0 && len(removed) == 0 {
 		return tool.Already(map[string]any{"path": abs, "added": []string{}, "removed": []string{}}), nil
 	}
-	_, gate := tool.RequireConfirm(ctx, env, in.Confirm, tool.PlanPreview{
-		Summary:  fmt.Sprintf("edit %s: add %d product(s), remove %d", abs, len(added), len(removed)),
-		Affected: []string{abs},
-		Intended: map[string]any{"add": added, "remove": removed},
-	})
-	if gate != nil {
-		return gate, nil
+	if filepath.Base(abs) != "manifest.xml" {
+		return nil, tool.InvalidArgs("%s is not a manifest.xml", abs)
+	}
+	if err := sim.CheckDest(abs, true, ".xml"); err != nil {
+		return nil, tool.InvalidArgs("%v", err)
 	}
 	st, err := env.Root.Stat(abs)
 	if err != nil {

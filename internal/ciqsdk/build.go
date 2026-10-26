@@ -5,7 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -140,14 +143,30 @@ func Export(ctx context.Context, o BuildOpts) (BuildResult, error) {
 }
 
 func run(ctx context.Context, o BuildOpts, export bool) (BuildResult, error) {
-	args, err := BuildArgs(o, export)
+	if _, err := BuildArgs(o, export); err != nil {
+		return BuildResult{}, err
+	}
+	if err := checkOutputDest(o.Output); err != nil {
+		return BuildResult{}, err
+	}
+	// monkeyc writes the artefact plus gen/, mir/ and debug files next to
+	// -o; build into a private temp dir so none of it can follow a repo
+	// symlink, then move only the top-level artefacts.
+	tmp, err := os.MkdirTemp("", "garmin-mcp-build-")
+	if err != nil {
+		return BuildResult{}, err
+	}
+	defer os.RemoveAll(tmp)
+	to := o
+	to.Output = filepath.Join(tmp, filepath.Base(o.Output))
+	args, err := BuildArgs(to, export)
 	if err != nil {
 		return BuildResult{}, err
 	}
 	argv := o.SDK.MonkeycArgv(o.Java, args)
 	cctx, cancel := context.WithTimeout(ctx, o.Timeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, argv[0], argv[1:]...)
+	cmd := exec.CommandContext(cctx, argv[0], argv[1:]...) //nolint:gosec // G204: argv is the resolved SDK's monkeyc/java with BuildArgs-validated paths; no shell
 	cmd.Dir = o.ProjectDir
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
@@ -177,6 +196,11 @@ func run(ctx context.Context, o BuildOpts, export bool) (BuildResult, error) {
 		}
 	}
 	r.OK = r.ExitCode == 0
+	if r.OK {
+		if err := moveArtefacts(tmp, filepath.Dir(o.Output)); err != nil {
+			return r, fmt.Errorf("install build output: %w", err)
+		}
+	}
 	if !r.OK {
 		r.Tail = tail(out)
 		if r.Errors == 0 {
@@ -188,6 +212,77 @@ func run(ctx context.Context, o BuildOpts, export bool) (BuildResult, error) {
 		r.Diagnostics = []Diagnostic{}
 	}
 	return r, nil
+}
+
+// checkOutputDest refuses an output path whose file or parent directory is
+// a symlink, and creates the parent directory if missing.
+func checkOutputDest(out string) error {
+	if !filepath.IsAbs(out) {
+		return fmt.Errorf("output %q must be absolute", out)
+	}
+	dir := filepath.Dir(out)
+	for _, p := range []string{out, dir} {
+		if st, err := os.Lstat(p); err == nil && st.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to write build output through symlink %s", p)
+		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // G301: build output dir in the user's project; normal project-dir permissions
+		return err
+	}
+	if st, err := os.Lstat(dir); err != nil {
+		return err
+	} else if !st.IsDir() {
+		return fmt.Errorf("output directory %s is not a directory", dir)
+	}
+	return nil
+}
+
+// moveArtefacts moves the regular files at the top of src (the .prg/.iq,
+// .debug.xml, settings json) into dst. Subdirectories (gen/, mir/) are
+// dropped. Each file is staged in dst and renamed over its target, so an
+// existing symlink at the target is replaced, never followed.
+func moveArtefacts(src, dst string) error {
+	if st, err := os.Lstat(dst); err != nil {
+		return err
+	} else if st.Mode()&os.ModeSymlink != 0 || !st.IsDir() {
+		return fmt.Errorf("refusing to write build output into %s: not a real directory", dst)
+	}
+	ents, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range ents {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		if err := moveFile(filepath.Join(src, e.Name()), dst, e.Name()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func moveFile(from, dir, name string) error {
+	in, err := os.Open(from) //nolint:gosec // G304: from is a regular file in our own temp build dir
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	f, err := os.CreateTemp(dir, "."+name+".tmp-*")
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(f, in)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(f.Name(), filepath.Join(dir, name))
+	}
+	if err != nil {
+		os.Remove(f.Name())
+	}
+	return err
 }
 
 func tail(s string) string {

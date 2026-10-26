@@ -38,7 +38,7 @@ func generateKey(path string, bits int) (KeyInfo, error) {
 	if err != nil {
 		return KeyInfo{}, err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // G304: callers pass a key path already confined to the project root; O_EXCL never overwrites
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return KeyInfo{}, fmt.Errorf("%s already exists; refusing to overwrite a developer key", path)
@@ -65,7 +65,7 @@ func CheckKey(path string) (KeyInfo, error) {
 	if err != nil {
 		return KeyInfo{}, err
 	}
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // G304: callers pass a key path already confined to the project root
 	if err != nil {
 		return KeyInfo{}, err
 	}

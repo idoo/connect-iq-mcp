@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/connectapi"
+	"github.com/idoo/garmin-mcp/internal/sim"
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
@@ -42,6 +44,9 @@ func client(env *tool.Env) *connectapi.Client {
 func wrap(err error) error {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, browser.ErrRateLimited) {
+		return fmt.Errorf("%w: %s", tool.ErrRateLimited, err.Error())
 	}
 	if errors.Is(err, auth.ErrAuthRequired) {
 		return fmt.Errorf("%w: %s", tool.ErrAuthRequired, err.Error())
@@ -165,9 +170,10 @@ type activityIn struct {
 }
 
 type downloadIn struct {
-	ID     int64  `json:"id" jsonschema:"activity id"`
-	Format string `json:"format,omitempty" jsonschema:"file format, default fit"`
-	Path   string `json:"path,omitempty" jsonschema:"output file inside the project root; default garmin/activity-<id>.<format>"`
+	ID        int64  `json:"id" jsonschema:"activity id"`
+	Format    string `json:"format,omitempty" jsonschema:"file format, default fit"`
+	Path      string `json:"path,omitempty" jsonschema:"output file inside the project root, extension must match format; default garmin/activity-<id>.<format>"`
+	Overwrite bool   `json:"overwrite,omitempty" jsonschema:"replace an existing file of the same format"`
 }
 
 func init() {
@@ -198,7 +204,8 @@ func init() {
 		"List your personal records (fastest times, longest distances)."), connectPersonalRecords))
 	tool.Register(tool.New(read("connect_devices", "Devices",
 		"List your registered Garmin devices: model, part number, firmware, nickname (untrusted)."), connectDevices))
-	tool.Register(tool.New(tool.Meta{Name: "connect_activity_download", Toolset: Toolset, Title: "Download activity",
+	tool.Register(tool.New(tool.Meta{
+		Name: "connect_activity_download", Toolset: Toolset, Title: "Download activity",
 		Description: "Save an activity file (fit, tcx, gpx, csv, kml) into the project root. Returns the path and size, not the file.",
 		Class:       tool.Write, Local: true,
 		Enums: map[string][]any{"format": {"fit", "tcx", "gpx", "csv", "kml"}},
@@ -504,6 +511,9 @@ func connectActivityDownload(ctx context.Context, env *tool.Env, in downloadIn) 
 	abs, err := env.Root.Resolve(dst)
 	if err != nil {
 		return nil, tool.InvalidArgs("path %q: %v", dst, err)
+	}
+	if err := sim.CheckDest(abs, in.Overwrite, "."+in.Format); err != nil {
+		return nil, tool.InvalidArgs("%v", err)
 	}
 	data, err := client(env).Download(ctx, src)
 	if err != nil {

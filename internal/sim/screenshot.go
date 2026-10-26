@@ -60,7 +60,7 @@ func SimulatorWindow(ctx context.Context) (Window, error) {
 	if runtime.GOOS != "darwin" {
 		return Window{}, ErrUnsupported()
 	}
-	out, err := exec.CommandContext(ctx, "osascript", "-l", "JavaScript", "-e", fmt.Sprintf(windowsJXA, WindowOwner)).Output()
+	out, err := exec.CommandContext(ctx, "osascript", "-l", "JavaScript", "-e", fmt.Sprintf(windowsJXA, WindowOwner)).Output() //nolint:gosec // G204: fixed program; script is a constant template with a constant owner name
 	if err != nil {
 		return Window{}, fmt.Errorf("list windows: %w", err)
 	}
@@ -75,7 +75,7 @@ func SimulatorWindow(ctx context.Context) (Window, error) {
 		}
 	}
 	if best.ID == 0 {
-		return Window{}, errors.New("no simulator window found (is the simulator running? sim_start)")
+		return Window{}, errors.New("no simulator window found (is the simulator running? sim_run starts it)")
 	}
 	return best, nil
 }
@@ -88,7 +88,7 @@ func CaptureWindow(ctx context.Context, id int, path string) error {
 	if ScreenLocked(ctx) {
 		return ErrScreenLocked
 	}
-	out, err := exec.CommandContext(ctx, "screencapture", "-x", "-o", "-l", fmt.Sprint(id), path).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "screencapture", "-x", "-o", "-l", fmt.Sprint(id), path).CombinedOutput() //nolint:gosec // G204: fixed program; integer window id and a server-chosen output path, no shell
 	if err != nil || len(out) > 0 && strings.Contains(string(out), "could not create image") {
 		return fmt.Errorf("screencapture failed (grant Screen Recording to the app running garmin-mcp): %v %s", err, strings.TrimSpace(string(out)))
 	}
@@ -116,7 +116,7 @@ type simulatorJSON struct {
 // LoadDeviceArt reads Devices/<id>/simulator.json and its image.
 func LoadDeviceArt(devicesDir, id string) (DeviceArt, error) {
 	dir := filepath.Join(devicesDir, id)
-	b, err := os.ReadFile(filepath.Join(dir, "simulator.json"))
+	b, err := os.ReadFile(filepath.Join(dir, "simulator.json")) //nolint:gosec // G304: reads inside the resolved SDK data root's Devices dir
 	if err != nil {
 		return DeviceArt{}, err
 	}
@@ -127,7 +127,7 @@ func LoadDeviceArt(devicesDir, id string) (DeviceArt, error) {
 	if sj.Image == "" {
 		sj.Image = "device.png"
 	}
-	f, err := os.Open(filepath.Join(dir, filepath.Base(sj.Image)))
+	f, err := os.Open(filepath.Join(dir, filepath.Base(sj.Image))) //nolint:gosec // G304: Base() keeps the image inside the device dir
 	if err != nil {
 		return DeviceArt{}, err
 	}
@@ -150,7 +150,7 @@ func BoxDownscale(img image.Image, f int) *image.RGBA {
 	}
 	w, h := b.Dx()/f, b.Dy()/f
 	out := image.NewRGBA(image.Rect(0, 0, w, h))
-	n := uint32(f * f)
+	n := uint32(f * f) //nolint:gosec // G115: f > 1 is an integer screen scale factor; f*f is tiny
 	for y := range h {
 		for x := range w {
 			var r, g, bl, a uint32
@@ -160,7 +160,8 @@ func BoxDownscale(img image.Image, f int) *image.RGBA {
 					r, g, bl, a = r+cr, g+cg, bl+cb, a+ca
 				}
 			}
-			out.SetRGBA(x, y, color.RGBA{uint8(r / n >> 8), uint8(g / n >> 8), uint8(bl / n >> 8), uint8(a / n >> 8)})
+			// Each sum/n is a 16-bit channel average (≤ 0xffff), so >>8 fits uint8.
+			out.SetRGBA(x, y, color.RGBA{uint8(r / n >> 8), uint8(g / n >> 8), uint8(bl / n >> 8), uint8(a / n >> 8)}) //nolint:gosec // G115: see above
 		}
 	}
 	return out
@@ -242,8 +243,8 @@ func CropDisplay(win image.Image, scale int, art DeviceArt) (*image.RGBA, error)
 		for x := h.Min.X; x < h.Max.X; x++ {
 			c := color.RGBA{0, 0, 0, 255}
 			if inHole(x, y) && inHole(x-1, y) && inHole(x+1, y) && inHole(x, y-1) && inHole(x, y+1) {
-				r, g, b, _ := pts.At(off.X+x-ab.Min.X, off.Y+y-ab.Min.Y).RGBA()
-				c = color.RGBA{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8), 255}
+				c = pts.RGBAAt(off.X+x-ab.Min.X, off.Y+y-ab.Min.Y)
+				c.A = 255
 			}
 			out.SetRGBA(x-h.Min.X, y-h.Min.Y, c)
 		}
@@ -254,8 +255,9 @@ func CropDisplay(win image.Image, scale int, art DeviceArt) (*image.RGBA, error)
 		for y := h.Min.Y; y < h.Max.Y; y++ {
 			for x := h.Min.X; x < h.Max.X; x++ {
 				if !opaque(art.Image.At(x, y)) && (x == h.Min.X || y == h.Min.Y || x == h.Max.X-1 || y == h.Max.Y-1) {
-					r, g, b, _ := pts.At(off.X+x-ab.Min.X, off.Y+y-ab.Min.Y).RGBA()
-					out.SetRGBA(x-h.Min.X, y-h.Min.Y, color.RGBA{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8), 255})
+					c := pts.RGBAAt(off.X+x-ab.Min.X, off.Y+y-ab.Min.Y)
+					c.A = 255
+					out.SetRGBA(x-h.Min.X, y-h.Min.Y, c)
 				}
 			}
 		}
@@ -265,7 +267,7 @@ func CropDisplay(win image.Image, scale int, art DeviceArt) (*image.RGBA, error)
 
 // LastUsedDevice reads LastUsedDevice from <dataRoot>/simulator.ini.
 func LastUsedDevice(dataRoot string) string {
-	b, err := os.ReadFile(filepath.Join(dataRoot, "simulator.ini"))
+	b, err := os.ReadFile(filepath.Join(dataRoot, "simulator.ini")) //nolint:gosec // G304: fixed file name under the Connect IQ data root
 	if err != nil {
 		return ""
 	}

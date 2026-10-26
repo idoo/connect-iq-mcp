@@ -37,7 +37,9 @@ func TestCompareVersionAndSort(t *testing.T) {
 	mkSDK(t, root, "connectiq-sdk-mac-9.2.0-2026-06-09-92a1605b2")
 	mkSDK(t, root, "connectiq-sdk-mac-10.0.0-2027-01-01-aaaa")
 	mkSDK(t, root, "connectiq-sdk-mac-8.4.0-2025-12-03-5122605dc")
-	os.MkdirAll(filepath.Join(root, "Sdks", "junk"), 0o755)
+	if err := os.MkdirAll(filepath.Join(root, "Sdks", "junk"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	s, err := ListSDKs(root)
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +82,9 @@ func TestResolvePrecedence(t *testing.T) {
 			os.Remove(filepath.Join(root, "current-sdk.cfg"))
 			return
 		}
-		os.WriteFile(filepath.Join(root, "current-sdk.cfg"), []byte(s), 0o644)
+		if err := os.WriteFile(filepath.Join(root, "current-sdk.cfg"), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 	cases := []struct {
@@ -250,14 +254,18 @@ func TestKeyGenerateCheck(t *testing.T) {
 		t.Fatal(err, again)
 	}
 	if runtime.GOOS != "windows" {
-		os.Chmod(p, 0o644)
+		if err := os.Chmod(p, 0o644); err != nil {
+			t.Fatal(err)
+		}
 		w, _ := CheckKey(p)
 		if len(w.Warnings) != 2 {
 			t.Fatalf("warnings %v", w.Warnings)
 		}
 	}
 	bad := filepath.Join(t.TempDir(), "bad.der")
-	os.WriteFile(bad, []byte("nope"), 0o600)
+	if err := os.WriteFile(bad, []byte("nope"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := CheckKey(bad); err == nil {
 		t.Fatal("garbage key accepted")
 	}
@@ -266,9 +274,15 @@ func TestKeyGenerateCheck(t *testing.T) {
 func TestLoadDevice(t *testing.T) {
 	root := t.TempDir()
 	d := filepath.Join(root, "Devices", "fenix7")
-	os.MkdirAll(d, 0o755)
-	os.WriteFile(filepath.Join(d, "compiler.json"), []byte(`{"deviceId":"fenix7","displayName":"fēnix 7","deviceFamily":"round-260x260","displayType":"mip","bitsPerPixel":8,"resolution":{"width":260,"height":260},"appTypes":[{"type":"watchApp","memoryLimit":131072}],"partNumbers":[{"connectIQVersion":"5.1.0","languages":[{"code":"eng"}]},{"connectIQVersion":"5.2.0","languages":[{"code":"swe"},{"code":"eng"}]}]}`), 0o644)
-	os.WriteFile(filepath.Join(d, "simulator.json"), []byte(`{"display":{"shape":"round","isTouch":true},"keys":[{"id":"enter"},{"id":"esc"}]}`), 0o644)
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "compiler.json"), []byte(`{"deviceId":"fenix7","displayName":"fēnix 7","deviceFamily":"round-260x260","displayType":"mip","bitsPerPixel":8,"resolution":{"width":260,"height":260},"appTypes":[{"type":"watchApp","memoryLimit":131072}],"partNumbers":[{"connectIQVersion":"5.1.0","languages":[{"code":"eng"}]},{"connectIQVersion":"5.2.0","languages":[{"code":"swe"},{"code":"eng"}]}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "simulator.json"), []byte(`{"display":{"shape":"round","isTouch":true},"keys":[{"id":"enter"},{"id":"esc"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	devs, warn, err := ListDevices(root)
 	if err != nil || len(warn) != 0 || len(devs) != 1 {
 		t.Fatal(err, warn, devs)

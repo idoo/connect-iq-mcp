@@ -129,7 +129,7 @@ func (s *session) enableWritesAction(ctx context.Context, env *tool.Env) (*tool.
 	if s.deps.WritesLocked {
 		return nil, errWritesLocked
 	}
-	ok, err := env.Elicit(ctx, fmt.Sprintf("Allow Connect IQ writes for profile %q for this session?", env.Profile.Name))
+	ok, err := env.Elicit(ctx, tool.EscapeHidden(fmt.Sprintf("Allow Connect IQ writes for profile \"%s\" for this session?", env.Profile.Name)))
 	if isElicitUnavailable(err) {
 		return tool.OK(map[string]any{
 			"writes":       false,

@@ -24,8 +24,8 @@ linux_arm64=$(sha linux_arm64)
 linux_amd64=$(sha linux_amd64)
 
 cat <<EOF
-class AppStoreConnectMcp < Formula
-  desc "Connect IQ MCP server: ship iOS and macOS apps from your agent"
+class GarminMcp < Formula
+  desc "MCP server for Garmin Connect IQ developers"
   homepage "https://github.com/idoo/garmin-mcp"
   version "$version"
   license "MIT"
@@ -63,10 +63,8 @@ class AppStoreConnectMcp < Formula
 
   def caveats
     <<~TEXT
-      garmin-mcp needs an Connect IQ API key:
-        Connect IQ > Users and Access > Integrations > Connect IQ API
-      Then register it and connect your client:
-        garmin-mcp auth import
+      Sign in to the Connect IQ developer portal once, then connect your client:
+        garmin-mcp auth login
         garmin-mcp config install <client>   # claude-code, claude-desktop, codex, cursor, vscode, windsurf
     TEXT
   end

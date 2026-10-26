@@ -38,10 +38,10 @@ func (r *Ring) Append(stream, text string) {
 	r.buf = append(r.buf, Line{Cursor: r.last, Stream: stream, Text: text})
 }
 
-// Since returns up to max lines (0 = all) with Cursor > cursor. next is the
+// Since returns up to limit lines (0 = all) with Cursor > cursor. next is the
 // cursor to pass to the following call, latest the newest cursor written and
 // dropped the number of lines after cursor already evicted from the ring.
-func (r *Ring) Since(cursor int64, max int) (lines []Line, next, latest, dropped int64) {
+func (r *Ring) Since(cursor int64, limit int) (lines []Line, next, latest, dropped int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	latest = r.last
@@ -59,7 +59,7 @@ func (r *Ring) Since(cursor int64, max int) (lines []Line, next, latest, dropped
 		if l.Cursor <= cursor {
 			continue
 		}
-		if max > 0 && len(lines) == max {
+		if limit > 0 && len(lines) == limit {
 			break
 		}
 		lines = append(lines, l)

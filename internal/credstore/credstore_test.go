@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -138,7 +139,7 @@ func diauth(t *testing.T, delay time.Duration) (*httptest.Server, *atomic.Int32)
 
 func seedConnect(t *testing.T, s *Store, rt string) {
 	t.Helper()
-	_, err := s.writeStored(blob{Connect: &connectCred{
+	err := s.writeStored(blob{Connect: &connectCred{
 		ClientID: diClientIDs[0], AccessToken: "old", AccessExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
 		RefreshToken: rt, RefreshExpiresAt: time.Now().Add(24 * time.Hour).Unix(),
 	}})
@@ -221,7 +222,7 @@ func TestExchangeTicketTriesClientIDs(t *testing.T) {
 func TestExpiredPortalNoProfile(t *testing.T) {
 	keyring.MockInit()
 	s := testStore(t, nil)
-	if _, err := s.writeStored(blob{Portal: &portalCred{Cookies: cookies(time.Now().Add(-time.Hour))}}); err != nil {
+	if err := s.writeStored(blob{Portal: &portalCred{Cookies: cookies(time.Now().Add(-time.Hour))}}); err != nil {
 		t.Fatal(err)
 	}
 	_, err := s.PortalCookies(context.Background())
@@ -236,7 +237,7 @@ func TestExpiredPortalNoProfile(t *testing.T) {
 func TestExpiringPortalSilentRenewal(t *testing.T) {
 	keyring.MockInit()
 	s := testStore(t, nil)
-	_, _ = s.writeStored(blob{Portal: &portalCred{Cookies: cookies(time.Now().Add(24 * time.Hour))}})
+	_ = s.writeStored(blob{Portal: &portalCred{Cookies: cookies(time.Now().Add(24 * time.Hour))}})
 	freshExp := time.Now().Add(60 * 24 * time.Hour)
 	fresh := cookies(freshExp)
 	s.hasProfile = func(string) bool { return true }
@@ -256,9 +257,51 @@ func TestExpiringPortalSilentRenewal(t *testing.T) {
 		t.Fatalf("got %q, %v, logins %d", got, err, logins)
 	}
 	// Rate limit: an immediate second attempt does not launch the browser.
-	_, _ = s.writeStored(blob{Portal: &portalCred{Cookies: cookies(time.Now().Add(time.Hour))}})
+	_ = s.writeStored(blob{Portal: &portalCred{Cookies: cookies(time.Now().Add(time.Hour))}})
 	if _, err := s.PortalCookies(context.Background()); err != nil || logins != 1 {
 		t.Fatalf("second: %v, logins %d", err, logins)
+	}
+}
+
+// A Cloudflare 1015 during renewal or login is reported as a rate limit to
+// wait out, never as "sign in again" (which would hit the same limit).
+func TestRenewalRateLimited(t *testing.T) {
+	keyring.MockInit()
+	srv, _ := diauth(t, 0)
+	s := testStore(t, nil)
+	s.diauthURL = srv.URL
+	s.verify = okVerify
+	s.hasProfile = func(string) bool { return true }
+	var logins int
+	s.login = func(context.Context, browser.Options, browser.Request) (browser.Result, error) {
+		logins++
+		return browser.Result{}, browser.ErrRateLimited
+	}
+	if err := s.writeStored(blob{
+		Portal: &portalCred{Cookies: cookies(time.Now().Add(-time.Hour))},
+		Connect: &connectCred{
+			ClientID: diClientIDs[0], AccessToken: "old", AccessExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+			RefreshToken: "revoked", RefreshExpiresAt: time.Now().Add(24 * time.Hour).Unix(),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	check := func(what string, err error) {
+		t.Helper()
+		if !errors.Is(err, browser.ErrRateLimited) || errors.Is(err, auth.ErrAuthRequired) || strings.Contains(err.Error(), "auth_login") {
+			t.Errorf("%s: err = %v", what, err)
+		}
+	}
+	_, err := s.PortalCookies(context.Background())
+	check("PortalCookies", err)
+	_ = os.Remove(s.stampFile()) // let ConnectToken try again inside the 10-minute window
+	_, err = s.ConnectToken(context.Background())
+	check("ConnectToken", err)
+	check("auth renew", s.cliRenew(context.Background(), io.Discard))
+	_, err = s.Login(context.Background(), auth.LoginOptions{})
+	check("Login", err)
+	if logins != 4 {
+		t.Fatalf("logins = %d, want 4", logins)
 	}
 }
 
@@ -271,7 +314,7 @@ func TestEnvOverridePrecedence(t *testing.T) {
 		"GARMIN_MCP_CONNECT_REFRESH_TOKEN": "rt-0",
 	})
 	s.diauthURL = srv.URL
-	_, _ = s.writeStored(blob{Portal: &portalCred{Cookies: cookies(time.Now().Add(40 * 24 * time.Hour))}})
+	_ = s.writeStored(blob{Portal: &portalCred{Cookies: cookies(time.Now().Add(40 * 24 * time.Hour))}})
 	got, err := s.PortalCookies(context.Background())
 	if err != nil || got != envCookies {
 		t.Fatalf("PortalCookies = %q, %v", got, err)

@@ -41,8 +41,8 @@ func TestRedact(t *testing.T) {
 			if got := Redact(tt.in); got != tt.want {
 				t.Errorf("Redact = %q, want %q", got, tt.want)
 			}
-			if got := string(RedactBytes([]byte(tt.in))); got != tt.want {
-				t.Errorf("RedactBytes = %q, want %q", got, tt.want)
+			if got := string(Bytes([]byte(tt.in))); got != tt.want {
+				t.Errorf("Bytes = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -64,15 +64,15 @@ func TestRedactNoFalsePositives(t *testing.T) {
 			t.Errorf("Redact(%q) = %q, want unchanged", s, got)
 		}
 		b := []byte(s)
-		if got := RedactBytes(b); string(got) != s {
-			t.Errorf("RedactBytes(%q) = %q", s, got)
+		if got := Bytes(b); string(got) != s {
+			t.Errorf("Bytes(%q) = %q", s, got)
 		}
 	}
 }
 
 func TestRedactBytesNoCopyWhenClean(t *testing.T) {
 	b := []byte(strings.Repeat("plain text ", 10))
-	if got := RedactBytes(b); &got[0] != &b[0] {
+	if got := Bytes(b); &got[0] != &b[0] {
 		t.Fatal("clean input was copied")
 	}
 }

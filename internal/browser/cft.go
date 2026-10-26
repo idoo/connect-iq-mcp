@@ -158,6 +158,8 @@ func verifyAndExtract(zipPath, gotSum, wantSum, dest string) error {
 
 var errUnsafeZip = errors.New("unsafe path in archive")
 
+const maxZipEntry = 2 << 30
+
 // extractZip extracts into dest, keeping permission bits and symlinks. It
 // refuses entries or symlink targets that would land outside dest.
 func extractZip(zipPath, dest string) error {
@@ -182,7 +184,7 @@ func extractZip(zipPath, dest string) error {
 		mode := f.Mode()
 		switch {
 		case mode.IsDir():
-			if err := os.MkdirAll(p, 0o755); err != nil {
+			if err := os.MkdirAll(p, 0o755); err != nil { //nolint:gosec // G301: Chrome for Testing app bundle dirs; standard 0755 like the archive
 				return err
 			}
 		case mode&os.ModeSymlink != 0:
@@ -194,14 +196,14 @@ func extractZip(zipPath, dest string) error {
 			if t == "" || filepath.IsAbs(t) || filepath.VolumeName(t) != "" || !within(root, filepath.Join(filepath.Dir(p), t)) {
 				return fmt.Errorf("%w: symlink %q -> %q", errUnsafeZip, f.Name, target)
 			}
-			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil { //nolint:gosec // G301: see above
 				return err
 			}
 			if err := os.Symlink(t, p); err != nil {
 				return err
 			}
 		case mode.IsRegular():
-			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil { //nolint:gosec // G301: see above
 				return err
 			}
 			if err := writeEntry(f, p, mode.Perm()|0o600); err != nil {
@@ -220,11 +222,17 @@ func writeEntry(f *zip.File, p string, perm os.FileMode) error {
 		return err
 	}
 	defer rc.Close()
-	out, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
+	out, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm) //nolint:gosec // G304: p was checked to stay inside dest by extractZip
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, rc); err != nil {
+	// Cap each entry against decompression bombs; the largest real Chrome for
+	// Testing entry is a few hundred MB.
+	n, err := io.Copy(out, io.LimitReader(rc, maxZipEntry+1))
+	if err == nil && n > maxZipEntry {
+		err = fmt.Errorf("%w: %q exceeds %d bytes", errUnsafeZip, f.Name, maxZipEntry)
+	}
+	if err != nil {
 		out.Close()
 		return err
 	}

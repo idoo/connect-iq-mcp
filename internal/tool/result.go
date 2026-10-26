@@ -18,7 +18,7 @@ type Truncation struct {
 const (
 	// ApprovedHuman means the human accepted an elicitation for this call.
 	ApprovedHuman = "human"
-	// ApprovedAgent means the agent confirmed (confirm:true or plan_id)
+	// ApprovedAgent means the agent confirmed (confirm:true)
 	// without a human answer.
 	ApprovedAgent = "agent"
 	// ApprovedNone means no approval was given (reads, previews, ungated writes).

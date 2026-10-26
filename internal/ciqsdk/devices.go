@@ -87,7 +87,7 @@ func LoadDevice(dataRoot, id string) (Device, error) {
 		return Device{}, fmt.Errorf("invalid device id %q", id)
 	}
 	dir := filepath.Join(DevicesDir(dataRoot), id)
-	b, err := os.ReadFile(filepath.Join(dir, "compiler.json"))
+	b, err := os.ReadFile(filepath.Join(dir, "compiler.json")) //nolint:gosec // G304: id passed ValidDeviceID; path stays under the Devices dir
 	if err != nil {
 		return Device{}, err
 	}
@@ -95,8 +95,10 @@ func LoadDevice(dataRoot, id string) (Device, error) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return Device{}, fmt.Errorf("device %s compiler.json: %w", id, err)
 	}
-	d := Device{ID: id, DisplayName: c.DisplayName, Family: c.DeviceFamily, Group: c.DeviceGroup,
-		Resolution: c.Resolution, BitsPerPixel: c.BitsPerPixel, DisplayType: c.DisplayType, MaxPrgSpace: c.MaxPrg}
+	d := Device{
+		ID: id, DisplayName: c.DisplayName, Family: c.DeviceFamily, Group: c.DeviceGroup,
+		Resolution: c.Resolution, BitsPerPixel: c.BitsPerPixel, DisplayType: c.DisplayType, MaxPrgSpace: c.MaxPrg,
+	}
 	if c.DeviceID != "" {
 		d.ID = c.DeviceID
 	}
@@ -119,7 +121,7 @@ func LoadDevice(dataRoot, id string) (Device, error) {
 	if i := strings.IndexByte(c.DeviceFamily, '-'); i > 0 {
 		d.Shape = c.DeviceFamily[:i]
 	}
-	if sb, err := os.ReadFile(filepath.Join(dir, "simulator.json")); err == nil {
+	if sb, err := os.ReadFile(filepath.Join(dir, "simulator.json")); err == nil { //nolint:gosec // G304: id passed ValidDeviceID; path stays under the Devices dir
 		var s simulatorJSON
 		if json.Unmarshal(sb, &s) == nil {
 			d.HasSimulator = true

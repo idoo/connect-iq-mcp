@@ -225,7 +225,7 @@ func (c *Client) Profile(ctx context.Context) (Profile, error) {
 		return Profile{}, err
 	}
 	if p.DisplayName == "" {
-		return Profile{}, errors.New("Garmin Connect socialProfile has no displayName")
+		return Profile{}, errors.New("garmin Connect socialProfile has no displayName")
 	}
 	c.profile = &p
 	return p, nil

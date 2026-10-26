@@ -3,9 +3,7 @@ package tool
 import (
 	"context"
 	"fmt"
-	"io"
 	"io/fs"
-	"net/http"
 	"os"
 )
 
@@ -16,16 +14,11 @@ type (
 	noPlanner  struct{}
 	noStore    struct{}
 	noToolsets struct{}
-	noFetcher  struct{}
 	noFiles    struct{}
 )
 
 func (noPlanner) Propose(context.Context, string, any, string, PlanPreview) (string, error) {
 	return "", unavail("plan store")
-}
-
-func (noPlanner) Verify(context.Context, string, string, any, string) error {
-	return unavail("plan store")
 }
 
 func (noPlanner) Claim(context.Context, string, any) error { return ErrPreviewRequired }
@@ -39,10 +32,6 @@ func (noStore) Delete(string, string) error                    { return unavail(
 func (noToolsets) List() []ToolsetInfo                       { return nil }
 func (noToolsets) Enable(context.Context, ...Toolset) error  { return unavail("toolsets") }
 func (noToolsets) Disable(context.Context, ...Toolset) error { return unavail("toolsets") }
-
-func (noFetcher) Fetch(context.Context, string, string, http.Header, io.Reader, int64) (*FetchResponse, error) {
-	return nil, unavail("fetcher")
-}
 
 func (noFiles) Resolve(string) (string, error)              { return "", unavail("file access") }
 func (noFiles) ReadFile(string) ([]byte, error)             { return nil, unavail("file access") }

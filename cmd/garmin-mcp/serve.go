@@ -65,7 +65,7 @@ func parseServeArgs(args []string, out io.Writer) (*serveArgs, error) {
 	var writes, discovery optionalBool
 	var toolsets optionalString
 	fs.Var(&writes, "allow-writes", "enable write tools for this session")
-	fs.Var(&toolsets, "toolsets", `toolsets expression, e.g. "all" or "+signing,-reports"`)
+	fs.Var(&toolsets, "toolsets", `toolsets expression, e.g. "all" or "+connect,-simulator"`)
 	fs.Var(&discovery, "discovery", "list only core tools; enable others at runtime")
 	noConfirm := fs.Bool("no-confirm", false, "skip previews (honored only with GARMIN_MCP_CI=1)")
 	root := fs.String("root", "", "directory file tools may read and write (default: GARMIN_MCP_ROOT, the client's MCP roots, or the git root)")

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/portal"
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
@@ -32,7 +34,12 @@ var versionRE = regexp.MustCompile(`^[vV]?\d+(\.\d+)*([-+][0-9A-Za-z.-]+)?$`)
 // listingKeys are the listing text keys of app metadata.
 var listingKeys = []string{"appTitle", "appDescription", "appWhatsNew", "localizedAppName"}
 
-func client(env *tool.Env) *portal.Client { return portal.New(env.HTTP, env.Credentials) }
+// client returns a portal client whose writes drop the app cache.
+func client(env *tool.Env) *portal.Client {
+	c := portal.New(env.HTTP, env.Credentials)
+	c.OnWrite = invalidateCache
+	return c
+}
 
 // wrap maps portal errors to tool errors (auth_required, api_error with the
 // portal code). Messages never carry cookies.
@@ -40,8 +47,22 @@ func wrap(err error) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, browser.ErrRateLimited) {
+		return fmt.Errorf("%w: %w", tool.ErrRateLimited, &tool.APIError{Code: "rate_limited", Detail: err.Error(), Hint: browser.ErrRateLimited.Error()})
+	}
 	if errors.Is(err, auth.ErrAuthRequired) {
 		return fmt.Errorf("%w: %s", tool.ErrAuthRequired, err.Error())
+	}
+	if errors.Is(err, portal.ErrInvalidID) {
+		return tool.InvalidArgs("%s", err.Error())
+	}
+	var rl *portal.RateLimitError
+	if errors.As(err, &rl) {
+		hint := "wait before retrying; garmin-mcp does not retry by itself"
+		if s := int(rl.RetryAfter.Seconds()); s > 0 {
+			hint = fmt.Sprintf("the portal asked to wait %d seconds (Retry-After) before retrying", s)
+		}
+		return fmt.Errorf("%w: %w", tool.ErrRateLimited, &tool.APIError{Status: rl.Status, Code: "rate_limited", Detail: rl.Error(), Hint: hint})
 	}
 	var ae *portal.APIError
 	if errors.As(err, &ae) {
@@ -65,7 +86,7 @@ func hintFor(code string) string {
 }
 
 func resolve(ctx context.Context, c *portal.Client, ref string) (portal.App, error) {
-	a, err := c.ResolveApp(ctx, ref)
+	a, err := resolveApp(ctx, c, ref)
 	return a, wrap(err)
 }
 
@@ -87,8 +108,64 @@ func checkVersion(v string) error {
 	return nil
 }
 
+// checkNewerVersion rejects v unless its dotted numbers are greater than
+// current's (the live version). The portal never lets a version string be
+// reused, and lower ones are older releases, so this runs before any upload.
+// Suffixes such as -beta are ignored: 1.2.0-rc and 1.2.0 compare equal.
+func checkNewerVersion(v, current string) error {
+	if err := checkVersion(v); err != nil {
+		return err
+	}
+	if strings.TrimSpace(current) == "" || !versionRE.MatchString(current) {
+		return nil
+	}
+	if compareVersions(v, current) <= 0 {
+		return tool.InvalidArgs("version %s must be greater than the live version %s; a published version string can never be reused", v, current)
+	}
+	return nil
+}
+
+// compareVersions compares the dotted numeric cores of two versions matched
+// by versionRE (missing parts count as 0) and returns -1, 0 or 1.
+func compareVersions(a, b string) int {
+	pa, pb := versionCore(a), versionCore(b)
+	for i := range max(len(pa), len(pb)) {
+		x, y := "0", "0"
+		if i < len(pa) {
+			x = pa[i]
+		}
+		if i < len(pb) {
+			y = pb[i]
+		}
+		if c := cmp.Compare(len(x), len(y)); c != 0 {
+			return c
+		}
+		if c := strings.Compare(x, y); c != 0 {
+			return c
+		}
+	}
+	return 0
+}
+
+// versionCore returns the numeric parts without leading zeros (so they
+// compare by length, then lexically, without overflow).
+func versionCore(v string) []string {
+	v = strings.TrimLeft(v, "vV")
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	parts := strings.Split(v, ".")
+	for i, p := range parts {
+		if p = strings.TrimLeft(p, "0"); p == "" {
+			p = "0"
+		}
+		parts[i] = p
+	}
+	return parts
+}
+
 // readFile reads a project file through the confined root.
-func readFile(env *tool.Env, path string, max int64, exts ...string) (portal.File, error) {
+func readFile(env *tool.Env, path string, limit int64, exts ...string) (portal.File, error) {
 	if strings.TrimSpace(path) == "" {
 		return portal.File{}, tool.InvalidArgs("file path is empty")
 	}
@@ -100,8 +177,8 @@ func readFile(env *tool.Env, path string, max int64, exts ...string) (portal.Fil
 	if err != nil {
 		return portal.File{}, err
 	}
-	if st.Size() > max {
-		return portal.File{}, tool.InvalidArgs("%s is %d bytes; the limit is %d", filepath.Base(path), st.Size(), max)
+	if st.Size() > limit {
+		return portal.File{}, tool.InvalidArgs("%s is %d bytes; the limit is %d", filepath.Base(path), st.Size(), limit)
 	}
 	data, err := env.Root.ReadFile(path)
 	if err != nil {

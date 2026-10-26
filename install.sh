@@ -38,8 +38,17 @@ fi
 case $(uname -s) in
 Darwin) os=darwin ;;
 Linux) os=linux ;;
-*) die "unsupported OS $(uname -s); download a release manually from https://github.com/$repo/releases" ;;
+MINGW* | MSYS* | CYGWIN*) os=windows ;;
+*) die "unsupported OS $(uname -s); download a release from https://github.com/$repo/releases or run: go install github.com/$repo/cmd/garmin-mcp@latest" ;;
 esac
+ext=tar.gz
+exe=garmin-mcp
+if [ "$os" = windows ]; then
+	# Git Bash / MSYS2: release ships a zip with garmin-mcp.exe.
+	command -v unzip >/dev/null 2>&1 || die "unzip is required on Windows; or download the zip from https://github.com/$repo/releases, or run: go install github.com/$repo/cmd/garmin-mcp@latest"
+	ext=zip
+	exe=garmin-mcp.exe
+fi
 case $(uname -m) in
 x86_64 | amd64) arch=amd64 ;;
 arm64 | aarch64) arch=arm64 ;;
@@ -62,7 +71,7 @@ if [ -z "$version" ]; then
 fi
 version=${version#v}
 
-archive="garmin-mcp_${version}_${os}_${arch}.tar.gz"
+archive="garmin-mcp_${version}_${os}_${arch}.${ext}"
 base="https://github.com/$repo/releases/download/v$version"
 
 tmp=$(mktemp -d)
@@ -109,11 +118,15 @@ else
 	die "gh attestation verify failed for $archive; refusing to install"
 fi
 
-tar -xzf "$tmp/$archive" -C "$tmp" garmin-mcp
+if [ "$os" = windows ]; then
+	unzip -q -o "$tmp/$archive" "$exe" -d "$tmp"
+else
+	tar -xzf "$tmp/$archive" -C "$tmp" "$exe"
+fi
 mkdir -p "$install_dir"
-dest="$install_dir/garmin-mcp"
+dest="$install_dir/$exe"
 # Install via a temp name + rename so a running garmin-mcp is not truncated.
-cp "$tmp/garmin-mcp" "$dest.new"
+cp "$tmp/$exe" "$dest.new"
 chmod 0755 "$dest.new"
 if [ "$os" = darwin ]; then
 	xattr -d com.apple.quarantine "$dest.new" 2>/dev/null || true
@@ -130,5 +143,8 @@ case ":$PATH:" in
 	;;
 esac
 
-say "next: create an API key (Connect IQ > Users and Access > Integrations), then add garmin-mcp to Claude Code:"
+say "next: sign in once (opens a browser, tick Remember me), then add garmin-mcp to your client:"
+say "  $dest auth login"
+say "  $dest config install claude-code   # or claude-desktop, codex, cursor, vscode, windsurf"
+say "snippet for Claude Code:"
 "$dest" config snippet claude-code || true

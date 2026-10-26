@@ -11,10 +11,12 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
 )
@@ -65,10 +67,72 @@ func HasCode(err error, code string) bool {
 	return false
 }
 
+// idRE is the shape of every portal path segment: UUIDs, numeric ids,
+// developer ids, reference names and the fixed route words.
+var idRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+// ErrInvalidID marks an id that cannot be a single portal path segment.
+var ErrInvalidID = errors.New("invalid portal id")
+
+// CheckID rejects id unless it is one safe path segment (so "", ".", "..",
+// "a/b" and "a?b" never reach a URL). name is the argument name for the error.
+func CheckID(name, id string) error {
+	if !idRE.MatchString(id) {
+		return fmt.Errorf("%w: %s %.64q must match %s", ErrInvalidID, name, id, idRE)
+	}
+	return nil
+}
+
+// checkPath validates every segment of a request path before it is sent.
+func checkPath(path string) error {
+	for seg := range strings.SplitSeq(strings.TrimPrefix(path, "/"), "/") {
+		if !idRE.MatchString(seg) {
+			if u, err := url.PathUnescape(seg); err == nil {
+				seg = u
+			}
+			return fmt.Errorf("%w: path segment %.64q must match %s", ErrInvalidID, seg, idRE)
+		}
+	}
+	return nil
+}
+
+// RateLimitError is a portal 429, or a 503 carrying Retry-After.
+type RateLimitError struct {
+	Status int
+	// RetryAfter is the server's Retry-After (0 when absent or unparsable).
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	s := fmt.Sprintf("portal HTTP %d: rate limited", e.Status)
+	if e.RetryAfter > 0 {
+		s += fmt.Sprintf(" (Retry-After %ds)", int(e.RetryAfter/time.Second))
+	}
+	return s
+}
+
+// retryAfter parses Retry-After as delay-seconds or an HTTP date.
+func retryAfter(v string, now time.Time) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+		return time.Duration(n) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil && t.After(now) {
+		return t.Sub(now).Round(time.Second)
+	}
+	return 0
+}
+
 func statusError(res *http.Response, body []byte) error {
 	c := res.StatusCode
 	if (c >= 300 && c < 400) || c == http.StatusUnauthorized || c == http.StatusForbidden {
 		return fmt.Errorf("%w: the developer portal answered HTTP %d (not signed in or session expired)", auth.ErrAuthRequired, c)
+	}
+	if ra := res.Header.Get("Retry-After"); c == http.StatusTooManyRequests || (c == http.StatusServiceUnavailable && ra != "") {
+		return &RateLimitError{Status: c, RetryAfter: retryAfter(ra, time.Now())}
 	}
 	if c < 400 {
 		return nil
@@ -118,6 +182,10 @@ type Client struct {
 	hc    *http.Client
 	creds auth.Store
 
+	// OnWrite, when set, runs after every non-GET request is attempted
+	// (success or not), so callers can drop cached portal state.
+	OnWrite func()
+
 	mu    sync.Mutex
 	devID string
 }
@@ -142,6 +210,9 @@ type request struct {
 }
 
 func (c *Client) do(ctx context.Context, r request, out any) error {
+	if err := checkPath(r.path); err != nil {
+		return err
+	}
 	if c.creds == nil {
 		return fmt.Errorf("%w: no credentials configured", auth.ErrAuthRequired)
 	}
@@ -167,6 +238,9 @@ func (c *Client) do(ctx context.Context, r request, out any) error {
 	setHeaders(req, cookie)
 	if r.ctype != "" {
 		req.Header.Set("Content-Type", r.ctype)
+	}
+	if r.method != http.MethodGet && c.OnWrite != nil {
+		defer c.OnWrite()
 	}
 	res, err := c.hc.Do(req)
 	if err != nil {
@@ -297,49 +371,6 @@ func NormalizeID(s string) string {
 func ManifestID(md map[string]any) string {
 	info, _ := md["appIqFileInfoResult"].(map[string]any)
 	return str(info["manifestAppId"])
-}
-
-// ResolveApp finds an app by store UUID, manifest id or exact title
-// (case-insensitive) and returns it.
-func (c *Client) ResolveApp(ctx context.Context, ref string) (App, error) {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return App{}, errors.New("app is required (store UUID, manifest id or title)")
-	}
-	apps, err := c.Apps(ctx)
-	if err != nil {
-		return App{}, err
-	}
-	norm := NormalizeID(ref)
-	for _, a := range apps {
-		if NormalizeID(a.ID) == norm {
-			return a, nil
-		}
-	}
-	var byName []App
-	for _, a := range apps {
-		if strings.EqualFold(strings.TrimSpace(a.Name), ref) {
-			byName = append(byName, a)
-		}
-	}
-	if len(byName) == 1 {
-		return byName[0], nil
-	}
-	if len(byName) > 1 {
-		return App{}, fmt.Errorf("%d apps are titled %q; pass the store UUID", len(byName), ref)
-	}
-	if len(norm) == 32 {
-		for _, a := range apps {
-			md, err := c.AppMetadata(ctx, a.ID)
-			if err != nil {
-				return App{}, err
-			}
-			if NormalizeID(ManifestID(md)) == norm {
-				return a, nil
-			}
-		}
-	}
-	return App{}, &APIError{Status: http.StatusNotFound, Code: "APP_NOT_FOUND", Message: fmt.Sprintf("no app matches %q (store UUID, manifest id or exact title)", ref)}
 }
 
 // Validation is the result of POST /iqFiles/validate.
@@ -508,27 +539,13 @@ func (c *Client) DeleteReply(ctx context.Context, appID, replyID string) error {
 	return c.do(ctx, request{method: http.MethodDelete, path: asw + "/apps/" + p(appID) + "/reviewreplies/" + p(replyID), query: url.Values{"locale": {"en"}}, accept: "*/*"}, &s)
 }
 
-// FullInstalls returns install statistics.
-func (c *Client) FullInstalls(ctx context.Context, appID, start, end, temporalLevel string) (any, error) {
-	q := url.Values{"locale": {"en"}}
-	for k, v := range map[string]string{"start": start, "end": end, "temporalLevel": temporalLevel} {
-		if v != "" {
-			q.Set(k, v)
-		}
-	}
+// FullInstalls returns install statistics between start and end
+// (YYYY-MM-DD, both required). The response always carries daily, weekly
+// and monthly buckets.
+func (c *Client) FullInstalls(ctx context.Context, appID, start, end string) (any, error) {
+	q := url.Values{"locale": {"en"}, "start": {start}, "end": {end}}
 	var out any
 	err := c.do(ctx, request{method: http.MethodGet, path: asw + "/" + p(appID) + "/fullInstalls", query: q}, &out)
-	return out, err
-}
-
-// CompatibleDevices lists the devices of an app version ("" = current).
-func (c *Client) CompatibleDevices(ctx context.Context, appID, internalVersion string) (any, error) {
-	var q url.Values
-	if internalVersion != "" {
-		q = url.Values{"internalAppVersion": {internalVersion}}
-	}
-	var out any
-	err := c.do(ctx, request{method: http.MethodGet, path: asw + "/apps/" + p(appID) + "/compatibleDevices", query: q}, &out)
 	return out, err
 }
 

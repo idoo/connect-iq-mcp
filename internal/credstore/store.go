@@ -33,6 +33,29 @@ const (
 	srcEnv      = "env"
 )
 
+// keyringMu serializes keychain access within the process: the backends are
+// not documented as goroutine-safe (go-keyring's mock provider is a bare map),
+// and readers such as view run outside the profile file lock.
+var keyringMu sync.Mutex
+
+func keyringGet(user string) (string, error) {
+	keyringMu.Lock()
+	defer keyringMu.Unlock()
+	return keyring.Get(keyringService, user)
+}
+
+func keyringSet(user, data string) error {
+	keyringMu.Lock()
+	defer keyringMu.Unlock()
+	return keyring.Set(keyringService, user, data)
+}
+
+func keyringDelete(user string) error {
+	keyringMu.Lock()
+	defer keyringMu.Unlock()
+	return keyring.Delete(keyringService, user)
+}
+
 // blob is the stored JSON credential document.
 type blob struct {
 	Portal  *portalCred  `json:"portal,omitempty"`
@@ -123,7 +146,7 @@ func (s *Store) browserDir() string {
 // readStored returns the persisted blob and where it came from ("" if none).
 func (s *Store) readStored() (blob, string, error) {
 	var b blob
-	data, kerr := keyring.Get(keyringService, s.profile)
+	data, kerr := keyringGet(s.profile)
 	if kerr == nil {
 		if err := json.Unmarshal([]byte(data), &b); err != nil {
 			return blob{}, "", fmt.Errorf("credentials in keychain are unreadable: %w", err)
@@ -144,25 +167,25 @@ func (s *Store) readStored() (blob, string, error) {
 }
 
 // writeStored persists b in the keychain, falling back to a 0600 file when the
-// keychain fails or the blob is too large. It returns the backend used.
-func (s *Store) writeStored(b blob) (string, error) {
+// keychain fails or the blob is too large.
+func (s *Store) writeStored(b blob) error {
 	data, err := json.Marshal(b)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if runtime.GOOS != "windows" || len(data) <= windowsKeyringMax {
-		if err := keyring.Set(keyringService, s.profile, string(data)); err == nil {
+		if err := keyringSet(s.profile, string(data)); err == nil {
 			if err := os.Remove(s.credFile()); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return srcKeychain, fmt.Errorf("remove stale credentials file: %w", err)
+				return fmt.Errorf("remove stale credentials file: %w", err)
 			}
-			return srcKeychain, nil
+			return nil
 		}
 	}
 	if err := writeFile0600(s.credFile(), data); err != nil {
-		return "", fmt.Errorf("save credentials: %w", err)
+		return fmt.Errorf("save credentials: %w", err)
 	}
-	_ = keyring.Delete(keyringService, s.profile) // drop a stale keychain copy
-	return srcFile, nil
+	_ = keyringDelete(s.profile) // drop a stale keychain copy
+	return nil
 }
 
 // view merges stored credentials with env overrides and reports each source.
@@ -207,8 +230,7 @@ func (s *Store) savePortal(p *portalCred) error {
 		return err
 	}
 	stored.Portal = p
-	_, err = s.writeStored(stored)
-	return err
+	return s.writeStored(stored)
 }
 
 // saveConnect stores c; env-sourced tokens are updated in memory only.
@@ -227,15 +249,25 @@ func (s *Store) saveConnect(c *connectCred) error {
 		return err
 	}
 	stored.Connect = c
-	_, err = s.writeStored(stored)
-	return err
+	return s.writeStored(stored)
+}
+
+// logout deletes everything under the profile lock, so a concurrent login or
+// renewal cannot write the session back afterwards.
+func (s *Store) logout(ctx context.Context) error {
+	unlock, err := lockPath(ctx, s.lockFile())
+	if err != nil {
+		return fmt.Errorf("lock credentials: %w", err)
+	}
+	defer unlock()
+	return s.deleteAll()
 }
 
 // deleteAll removes the keychain item, the credentials file, the renewal
 // stamp and the browser profile.
 func (s *Store) deleteAll() error {
 	var errs []error
-	if err := keyring.Delete(keyringService, s.profile); err != nil && !errors.Is(err, keyring.ErrNotFound) {
+	if err := keyringDelete(s.profile); err != nil && !errors.Is(err, keyring.ErrNotFound) {
 		errs = append(errs, fmt.Errorf("keychain: %w", err))
 	}
 	for _, p := range []string{s.credFile(), s.stampFile()} {

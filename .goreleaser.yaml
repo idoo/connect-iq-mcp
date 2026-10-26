@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 # Local dry run:
-#   goreleaser release --snapshot --clean --skip=publish,sign,docker
+#   goreleaser release --snapshot --clean --skip=publish,sign
 version: 2
 
 project_name: garmin-mcp
@@ -67,28 +67,6 @@ signs:
     signature: "${artifact}.sigstore.json"
     args: ["sign-blob", "--bundle=${signature}", "${artifact}", "--yes"]
 
-# Docker image, distroless static, multi-arch: stdio by default; HTTP needs --allow-remote and TLS.
-dockers_v2:
-  - id: garmin-mcp
-    ids: [garmin-mcp]
-    images:
-      - ghcr.io/idoo/garmin-mcp
-    tags:
-      - "{{ .Version }}"
-      - "{{ if not .Prerelease }}latest{{ end }}"
-    dockerfile: packaging/docker/Dockerfile
-    platforms:
-      - linux/amd64
-      - linux/arm64
-    labels:
-      org.opencontainers.image.title: garmin-mcp
-      org.opencontainers.image.description: MCP server for Connect IQ, read-only by default
-      org.opencontainers.image.source: https://github.com/idoo/garmin-mcp
-      org.opencontainers.image.version: "{{ .Version }}"
-      org.opencontainers.image.revision: "{{ .FullCommit }}"
-      org.opencontainers.image.licenses: MIT
-      io.modelcontextprotocol.server.name: io.github.idoo/garmin-mcp
-
 changelog:
   use: git
   sort: asc
@@ -127,7 +105,7 @@ release:
   mode: keep-existing
   footer: |
     **Install:** `brew install idoo/tap/garmin-mcp`, `curl -fsSL https://raw.githubusercontent.com/idoo/garmin-mcp/main/install.sh | sh`,
-    `go install github.com/idoo/garmin-mcp/cmd/garmin-mcp@{{ .Tag }}`, `docker pull ghcr.io/idoo/garmin-mcp:{{ .Version }}`,
+    `go install github.com/idoo/garmin-mcp/cmd/garmin-mcp@{{ .Tag }}`,
     or `garmin-mcp-{{ .Version }}.mcpb` for Claude Desktop.
 
     **Verify:** `gh attestation verify garmin-mcp_{{ .Version }}_<os>_<arch>.tar.gz --repo idoo/garmin-mcp`, or

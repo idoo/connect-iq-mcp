@@ -36,11 +36,6 @@ var (
 		Message: "confirmation required",
 		Hint:    "review the preview, then call again with confirm",
 	}
-	ErrStalePlan = &Error{
-		Code:    "stale_plan",
-		Message: "plan is unknown, expired, or the remote state changed since it was made",
-		Hint:    "re-run the planning call (release_status / *_plan, or this tool without plan_id/confirm) for a fresh plan",
-	}
 	ErrPreviewRequired = &Error{
 		Code:    "preview_required",
 		Message: "confirm:true needs a preview of the same arguments in this session first",
@@ -90,7 +85,7 @@ var (
 	ErrHumanRequired = &Error{
 		Code:    "human_approval_required",
 		Message: "this action needs explicit human approval, but the client cannot ask",
-		Hint:    "use a client with elicitation support, or set allow_no_elicit=true in the profile",
+		Hint:    "use a client with elicitation support, or set allow_no_elicit = true under the profile in garmin-mcp's config.toml (~/.config/garmin-mcp/config.toml, $XDG_CONFIG_HOME/garmin-mcp/config.toml if set, %AppData%\\garmin-mcp\\config.toml on Windows)",
 	}
 )
 

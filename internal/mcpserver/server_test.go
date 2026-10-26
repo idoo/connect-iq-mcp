@@ -35,20 +35,18 @@ func stub(name string, ts tool.Toolset, c tool.Class, mod func(*tool.Meta)) tool
 	return tool.New(m, okHandler)
 }
 
-type planIn struct {
-	tool.ConfirmPlan
+type noteIn struct {
+	tool.ConfirmFlag
 	Value string `json:"value" jsonschema:"new value"`
 }
 
 // fixture is a small registry: reads and writes across toolsets, an opt-in
-// toolset, a read-only-available tool, a plan tool and a panic.
+// toolset, a read-only-available tool, a confirm:true tool and a panic.
 type fixture struct {
-	remote atomic.Value // string state of the plan tool
 	writes atomic.Int32
 }
 
 func (f *fixture) tools() []tool.Tool {
-	f.remote.Store("v1")
 	return []tool.Tool{
 		stub("apps_list", tool.Core, tool.Read, nil),
 		stub("api_request", tool.Core, tool.Destructive, func(m *tool.Meta) { m.AvailableReadOnly = true; m.Confirm = tool.ConfirmNone }),
@@ -58,13 +56,9 @@ func (f *fixture) tools() []tool.Tool {
 		stub("signing_bundle_ids_list", tool.Connect, tool.Read, nil),
 		tool.New(tool.Meta{Name: "boom", Toolset: tool.Core, Description: "panics", Class: tool.Read},
 			func(context.Context, *tool.Env, stubIn) (*tool.Result, error) { panic("kaboom") }),
-		tool.New(tool.Meta{Name: "value_set", Toolset: tool.Store, Description: "set value", Class: tool.Write, Confirm: tool.ConfirmByPlan},
-			func(ctx context.Context, env *tool.Env, in planIn) (*tool.Result, error) {
-				fp, err := tool.Fingerprint(f.remote.Load())
-				if err != nil {
-					return nil, err
-				}
-				wctx, res := tool.Preview(ctx, env, in.PlanID, in, fp, tool.PlanPreview{Summary: "set value to " + in.Value})
+		tool.New(tool.Meta{Name: "note_set", Toolset: tool.Store, Description: "set note", Class: tool.Write, Confirm: tool.ConfirmByFlag},
+			func(ctx context.Context, env *tool.Env, in noteIn) (*tool.Result, error) {
+				wctx, res := tool.RequireConfirm(ctx, env, in.Confirm, tool.PlanPreview{Summary: "set note", Intended: in.Value})
 				if res != nil {
 					return res, nil
 				}
@@ -169,7 +163,7 @@ func TestListingPolicy(t *testing.T) {
 		},
 		{
 			"writes", func(f *fixture) Deps { return Deps{Tools: f.tools(), Profile: team(true)} },
-			[]string{"api_request", "apps_list", "boom", "builds_list", "release_submit", "toolsets", "value_set"},
+			[]string{"api_request", "apps_list", "boom", "builds_list", "note_set", "release_submit", "toolsets"},
 		},
 		{
 			"discovery", func(f *fixture) Deps { return Deps{Tools: f.tools(), Profile: team(true), Discovery: true} },
@@ -341,40 +335,50 @@ func TestEnableWrites(t *testing.T) {
 	})
 }
 
-func TestPlanConfirmRoundTrip(t *testing.T) {
-	f := &fixture{}
-	h := connect(t, Deps{Tools: f.tools(), Profile: team(true)}, "test", nil)
-	plan := func() string {
-		res, body := h.call(t, "value_set", map[string]any{"value": "x"})
-		id, _ := dataOf(body)["plan_id"].(string)
-		if res.IsError || id == "" {
+// The human must approve exactly what is sent: a secret-shaped payload is
+// refused (never shown as <redacted>) and hidden characters arrive escaped.
+func TestApprovalPromptIntegrity(t *testing.T) {
+	run := func(t *testing.T, value string) (*fixture, []string, map[string]any, bool) {
+		f := &fixture{}
+		var prompts []string
+		elicit := func(_ context.Context, req *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+			prompts = append(prompts, req.Params.Message)
+			return &mcp.ElicitResult{Action: "accept"}, nil
+		}
+		h := connect(t, Deps{Tools: f.tools(), Profile: team(true)}, "test", elicit)
+		if res, body := h.call(t, "note_set", map[string]any{"value": value}); res.IsError || dataOf(body)["status"] != "needs_confirm" {
 			t.Fatalf("preview = %v", body)
 		}
-		return id
+		res, body := h.call(t, "note_set", map[string]any{"value": value, "confirm": true})
+		return f, prompts, body, res.IsError
 	}
 
-	id := plan()
-	if f.writes.Load() != 0 {
-		t.Fatal("preview wrote")
-	}
-	if res, _ := h.call(t, "value_set", map[string]any{"value": "y", "plan_id": id}); !res.IsError {
-		t.Fatal("confirm with different args succeeded")
-	}
-	id = plan()
-	f.remote.Store("v2")
-	if res, body := h.call(t, "value_set", map[string]any{"value": "x", "plan_id": id}); !res.IsError || dataOf(body)["error"] != "stale_plan" {
-		t.Fatalf("stale state accepted: %v", body)
-	}
-	id = plan()
-	if res, body := h.call(t, "value_set", map[string]any{"value": "x", "plan_id": id}); res.IsError {
-		t.Fatalf("confirm failed: %v", body)
-	}
-	if res, _ := h.call(t, "value_set", map[string]any{"value": "x", "plan_id": id}); !res.IsError {
-		t.Fatal("plan reused")
-	}
-	if f.writes.Load() != 1 {
-		t.Fatalf("writes = %d, want 1", f.writes.Load())
-	}
+	t.Run("secret refused", func(t *testing.T) {
+		pem := "-----BEGIN NOTE-----\nhidden instructions\n-----END NOTE-----"
+		f, prompts, body, isErr := run(t, "hi "+pem)
+		if !isErr || dataOf(body)["error"] != "invalid_arguments" {
+			t.Fatalf("secret-shaped payload approved: %v", body)
+		}
+		if len(prompts) != 0 {
+			t.Fatalf("human was shown %q", prompts)
+		}
+		if f.writes.Load() != 0 {
+			t.Fatalf("writes = %d, want 0", f.writes.Load())
+		}
+	})
+	t.Run("bidi escaped", func(t *testing.T) {
+		f, prompts, body, isErr := run(t, "pay \u202Eevil")
+		if isErr || len(prompts) != 1 {
+			t.Fatalf("confirm = %v, prompts = %q", body, prompts)
+		}
+		p := prompts[0]
+		if !strings.HasPrefix(p, "WARNING: contains hidden characters") || !strings.Contains(p, `\u{202E}`) || strings.ContainsRune(p, '\u202E') {
+			t.Fatalf("prompt = %q", p)
+		}
+		if f.writes.Load() != 1 {
+			t.Fatalf("writes = %d, want 1", f.writes.Load())
+		}
+	})
 }
 
 func TestPanicBecomesErrorResult(t *testing.T) {

@@ -9,13 +9,10 @@ import (
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
-func TestPlanner(t *testing.T) {
+func TestPlannerClaim(t *testing.T) {
 	ctx := context.Background()
-	now := time.Unix(1000, 0)
-	p := NewPlanner(func() time.Time { return now })
-	args := map[string]any{"a": 1, "confirm": "ignored"}
-
-	if _, err := p.Propose(ctx, "t", args, "", tool.PlanPreview{}); err == nil {
+	args := map[string]any{"a": 1, "confirm": true}
+	if _, err := NewPlanner(nil).Propose(ctx, "t", args, "", tool.PlanPreview{}); err == nil {
 		t.Fatal("empty fingerprint accepted")
 	}
 	tests := []struct {
@@ -26,28 +23,32 @@ func TestPlanner(t *testing.T) {
 		advance time.Duration
 		ok      bool
 	}{
-		{"match", "t", map[string]any{"a": 1}, "fp", 0, true},
-		{"other tool", "u", args, "fp", 0, false},
-		{"other args", "t", map[string]any{"a": 2}, "fp", 0, false},
-		{"state changed", "t", args, "fp2", 0, false},
-		{"expired", "t", args, "fp", PlanTTL, false},
+		{"match", "t", map[string]any{"a": 1}, tool.FlagFingerprint, 0, true},
+		{"just before ttl", "t", args, tool.FlagFingerprint, tool.PreviewTTL - time.Nanosecond, true},
+		{"other tool", "u", args, tool.FlagFingerprint, 0, false},
+		{"other args", "t", map[string]any{"a": 2}, tool.FlagFingerprint, 0, false},
+		{"not a flag preview", "t", args, "fp", 0, false},
+		{"expired", "t", args, tool.FlagFingerprint, tool.PreviewTTL, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			id, err := p.Propose(ctx, "t", args, "fp", tool.PlanPreview{})
-			if err != nil || len(id) != 32 {
-				t.Fatalf("propose = %q, %v", id, err)
+			now := time.Unix(1000, 0)
+			p := NewPlanner(func() time.Time { return now })
+			if _, err := p.Propose(ctx, "t", args, tt.fp, tool.PlanPreview{}); err != nil {
+				t.Fatal(err)
 			}
 			now = now.Add(tt.advance)
-			err = p.Verify(ctx, id, tt.tool, tt.args, tt.fp)
+			err := p.Claim(ctx, tt.tool, tt.args)
 			if tt.ok != (err == nil) {
-				t.Fatalf("verify err = %v, want ok=%v", err, tt.ok)
+				t.Fatalf("claim err = %v, want ok=%v", err, tt.ok)
 			}
-			if err != nil && !errors.Is(err, tool.ErrStalePlan) {
-				t.Fatalf("error %v does not wrap ErrStalePlan", err)
+			if err != nil && !errors.Is(err, tool.ErrPreviewRequired) {
+				t.Fatalf("error %v does not wrap ErrPreviewRequired", err)
 			}
-			if err := p.Verify(ctx, id, "t", args, "fp"); !errors.Is(err, tool.ErrStalePlan) {
-				t.Fatalf("plan reusable: %v", err)
+			if tt.ok {
+				if err := p.Claim(ctx, tt.tool, tt.args); !errors.Is(err, tool.ErrPreviewRequired) {
+					t.Fatalf("preview claimed twice: %v", err)
+				}
 			}
 		})
 	}
@@ -56,20 +57,15 @@ func TestPlanner(t *testing.T) {
 func TestPlannerEvictsOldest(t *testing.T) {
 	ctx := context.Background()
 	p := NewPlanner(nil)
-	first, err := p.Propose(ctx, "t", 0, "fp", tool.PlanPreview{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var last string
-	for i := 1; i <= PlanCapacity; i++ {
-		if last, err = p.Propose(ctx, "t", i, "fp", tool.PlanPreview{}); err != nil {
+	for i := 0; i <= PlanCapacity; i++ {
+		if _, err := p.Propose(ctx, "t", i, tool.FlagFingerprint, tool.PlanPreview{}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := p.Verify(ctx, first, "t", 0, "fp"); err == nil {
-		t.Fatal("oldest plan survived eviction")
+	if err := p.Claim(ctx, "t", 0); err == nil {
+		t.Fatal("oldest preview survived eviction")
 	}
-	if err := p.Verify(ctx, last, "t", PlanCapacity, "fp"); err != nil {
-		t.Fatalf("newest plan lost: %v", err)
+	if err := p.Claim(ctx, "t", PlanCapacity); err != nil {
+		t.Fatalf("newest preview lost: %v", err)
 	}
 }

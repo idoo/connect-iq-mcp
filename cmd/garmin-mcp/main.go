@@ -23,7 +23,7 @@ const usage = `garmin-mcp — Garmin Connect IQ MCP server
 Usage:
   garmin-mcp [serve] [flags]          serve MCP over stdio (or --http ADDR); garmin-mcp serve --help lists flags
   garmin-mcp auth <subcommand>        manage Connect IQ portal and Garmin Connect credentials
-  garmin-mcp doctor [--profile NAME]  check config and credentials
+  garmin-mcp doctor [--profile NAME] [--probe]  check config, credentials, SDK, Java and browser
   garmin-mcp config snippet <client>  print client config (claude-code, claude-desktop, codex, cursor, vscode, windsurf)
   garmin-mcp config install <client>  write it into the client's config (with backup)
   garmin-mcp version
@@ -34,7 +34,7 @@ Any subcommand with --help prints its usage and does nothing else.
 // subUsage is the usage text printed for `garmin-mcp <cmd> --help`.
 var subUsage = map[string]string{
 	"config":  configUsage,
-	"doctor":  "usage: garmin-mcp doctor [--profile NAME]\n  checks the config and credentials",
+	"doctor":  "usage: garmin-mcp doctor [--profile NAME] [--probe]\n  checks the config, credentials, Connect IQ SDK, Java and sign-in browser\n  --probe also asks the developer portal who is signed in (one network call)",
 	"version": "usage: garmin-mcp version",
 }
 
@@ -53,7 +53,7 @@ func (e exitError) Error() string { return fmt.Sprintf("exit status %d", int(e))
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	err := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr) //nolint:forbidigo // CLI output.
+	err := run(ctx, os.Args[1:], os.Stdout, os.Stderr) //nolint:forbidigo // CLI output.
 	stop()
 	var ue *usageError
 	var ee exitError
@@ -71,7 +71,7 @@ func main() {
 }
 
 // run dispatches a subcommand. Only serve writes the MCP protocol to stdout.
-func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "-help" || args[0] == "--help") {
 		if _, err := io.WriteString(stdout, usage+"\nserve flags:\n"); err != nil {
 			return err

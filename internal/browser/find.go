@@ -24,7 +24,7 @@ var ErrNoBrowser = errors.New("no Chromium-based browser found")
 // pinned Chrome for Testing build.
 const EnvBrowser = "GARMIN_MCP_BROWSER"
 
-// Bundled, as a browser path or $GARMIN_MCP_BROWSER, selects Chrome for Testing.
+// Bundled is the browser path or $GARMIN_MCP_BROWSER value that selects Chrome for Testing.
 const Bundled = "bundled"
 
 // Find resolves the browser executable: an explicit path first, then
@@ -150,7 +150,7 @@ func resolve(p string) (string, bool) {
 		r, err := exec.LookPath(p)
 		return r, err == nil
 	}
-	fi, err := os.Stat(p)
+	fi, err := os.Stat(p) //nolint:gosec // G703: stat only; p is the user's own browser path setting
 	if err != nil || fi.IsDir() {
 		return "", false
 	}

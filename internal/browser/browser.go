@@ -23,6 +23,10 @@ import (
 // Cloudflare challenge while running headless.
 var ErrInteractionRequired = errors.New("garmin needs you to sign in")
 
+// ErrRateLimited means Cloudflare in front of Garmin's sign-in server
+// answered with error 1015. Retrying right away makes it worse.
+var ErrRateLimited = errors.New("garmin's sign-in server is rate limiting this IP (Cloudflare 1015); wait 15–30 minutes before retrying")
+
 var errClosed = errors.New("browser closed before sign-in finished")
 
 // signInHint is printed when the interactive window opens; %s is the browser.
@@ -68,6 +72,7 @@ type pageState struct {
 	Form      bool   `json:"form"`
 	MFA       bool   `json:"mfa"`
 	Challenge bool   `json:"challenge"`
+	Text      string `json:"text"` // start of the visible text, for block pages
 }
 
 const stateJS = `(() => {
@@ -85,7 +90,8 @@ const stateJS = `(() => {
     title: document.title || "",
     form: q('input[type=password]') || q('input[type=email]') || q('input[name=username]') || q('iframe[src*="sso.garmin.com"]'),
     mfa: q('input[name=verificationCode]') || q('input[autocomplete="one-time-code"]') || /verification code|two-step verification|security code/i.test(text),
-    challenge: typeof window._cf_chl_opt !== 'undefined' || q('#challenge-form') || q('#challenge-running') || q('#challenge-stage') || location.href.indexOf('__cf_chl') >= 0
+    challenge: typeof window._cf_chl_opt !== 'undefined' || q('#challenge-form') || q('#challenge-running') || q('#challenge-stage') || location.href.indexOf('__cf_chl') >= 0,
+    text: text.slice(0, 1000)
   };
 })()`
 
@@ -132,7 +138,7 @@ func Login(ctx context.Context, o Options, r Request) (Result, error) {
 	if err := os.MkdirAll(o.ProfileDir, 0o700); err != nil {
 		return Result{}, fmt.Errorf("browser: create profile dir: %w", err)
 	}
-	_ = os.Chmod(o.ProfileDir, 0o700)
+	_ = os.Chmod(o.ProfileDir, 0o700) //nolint:gosec // G302: a directory needs the x bit; 0700 is owner-only
 
 	bctx, cleanup, err := start(ctx, o, exe)
 	defer cleanup()
@@ -285,8 +291,19 @@ func (s *session) wrap(err error) error {
 	return err
 }
 
-// interaction decides whether a headless run must give up on this page.
+// interaction decides whether the run must give up on this page: always on a
+// Cloudflare block page (no sign-in can happen there), and headless whenever
+// a person would have to act.
 func (s *session) interaction(st pageState) error {
+	switch cloudflareBlock(st.Title, st.Text) {
+	case cfRateLimited:
+		return ErrRateLimited
+	case cfDenied:
+		if s.headless {
+			return fmt.Errorf("%w (Cloudflare blocked the headless browser: access denied)", ErrInteractionRequired)
+		}
+		return fmt.Errorf("%w (Cloudflare blocked this browser: access denied)", ErrInteractionRequired)
+	}
 	if !s.headless {
 		return nil
 	}

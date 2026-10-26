@@ -29,7 +29,8 @@ func launchApp(ctx context.Context, bundle, profile string, url string) (string,
 	if err := os.Remove(portFile); err != nil && !os.IsNotExist(err) {
 		return "", fmt.Errorf("browser: remove stale DevToolsActivePort: %w", err)
 	}
-	args := []string{"-n", "-a", bundle, "--args",
+	args := []string{
+		"-n", "-a", bundle, "--args",
 		"--user-data-dir=" + profile,
 		"--remote-debugging-port=0",
 		"--no-first-run",
@@ -43,12 +44,12 @@ func launchApp(ctx context.Context, bundle, profile string, url string) (string,
 		"--window-size=" + windowSize,
 		url,
 	}
-	if out, err := exec.CommandContext(ctx, "open", args...).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, "open", args...).CombinedOutput(); err != nil { //nolint:gosec // fixed program, argv array (no shell); bundle is the browser resolved by Find
 		return "", fmt.Errorf("browser: open %s: %v: %s", bundle, err, strings.TrimSpace(string(out)))
 	}
 	deadline := time.Now().Add(portFileWait)
 	for {
-		if b, err := os.ReadFile(portFile); err == nil {
+		if b, err := os.ReadFile(portFile); err == nil { //nolint:gosec // fixed file name inside our own 0700 profile dir
 			if ws, ok := parseDevToolsActivePort(b); ok {
 				return ws, nil
 			}
@@ -69,7 +70,7 @@ func launchApp(ctx context.Context, bundle, profile string, url string) (string,
 // profilePIDs lists processes started with exactly this --user-data-dir.
 func profilePIDs(profile string) []int {
 	pat := "--user-data-dir=" + regexp.QuoteMeta(profile) + "( |$)"
-	out, err := exec.Command("pgrep", "-f", "--", pat).Output()
+	out, err := exec.Command("pgrep", "-f", "--", pat).Output() //nolint:gosec // fixed program; pat is a regexp-quoted path after "--"
 	if err != nil {
 		return nil
 	}

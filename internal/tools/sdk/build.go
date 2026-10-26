@@ -6,32 +6,28 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/idoo/garmin-mcp/internal/ciqsdk"
+	"github.com/idoo/garmin-mcp/internal/sim"
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
+// allDevices is the sdk_build device value that exports the store package.
+const allDevices = "all"
+
 type buildIn struct {
-	SDK       string `json:"sdk,omitempty" jsonschema:"SDK path or installed version, e.g. 9.2.0; default GARMIN_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest"`
+	SDK       string `json:"sdk,omitempty" jsonschema:"installed SDK version or dir name, e.g. 9.2.0 (default: GARMIN_MCP_SDK env, current-sdk.cfg, newest installed); a custom SDK outside the SDK Manager dir only via GARMIN_MCP_SDK"`
 	Project   string `json:"project,omitempty" jsonschema:"project dir inside the root (default: root)"`
 	Jungle    string `json:"jungle,omitempty" jsonschema:"jungle file relative to the project (default monkey.jungle)"`
-	Device    string `json:"device" jsonschema:"device id, e.g. fenix7"`
+	Device    string `json:"device" jsonschema:"device id, e.g. fenix7 (writes <project>/bin/<device>.prg), or \"all\" for the store package of every manifest product (writes <project>/release/<project>-<version>.iq; slow)"`
 	Key       string `json:"key" jsonschema:"developer key (.der) inside the root"`
-	Output    string `json:"output,omitempty" jsonschema:"PRG path inside the root (default <project>/bin/<device>.prg)"`
-	Release   bool   `json:"release,omitempty" jsonschema:"release build (-r)"`
-	Test      bool   `json:"test,omitempty" jsonschema:"unit-test build (-t); not with release"`
-	TypeCheck *int   `json:"type_check,omitempty" jsonschema:"type check level 0-3 (-l)"`
-}
-
-type exportIn struct {
-	SDK     string `json:"sdk,omitempty" jsonschema:"SDK path or installed version, e.g. 9.2.0; default GARMIN_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest"`
-	Project string `json:"project,omitempty" jsonschema:"project dir inside the root (default: root)"`
-	Jungle  string `json:"jungle,omitempty" jsonschema:"jungle file relative to the project (default monkey.jungle)"`
-	Key     string `json:"key" jsonschema:"developer key (.der) inside the root"`
-	Output  string `json:"output,omitempty" jsonschema:"package path inside the root (default <project>/release/<dir>.iq)"`
+	Release   bool   `json:"release,omitempty" jsonschema:"release build (-r); always on for device \"all\""`
+	Test      bool   `json:"test,omitempty" jsonschema:"unit-test build (-t) of one device; not with release"`
+	Overwrite bool   `json:"overwrite,omitempty" jsonschema:"device \"all\": replace an existing .iq of the same version"`
 }
 
 type buildOut struct {
@@ -51,21 +47,27 @@ type buildOut struct {
 // maxDiagnostics caps diagnostics returned in a result.
 const maxDiagnostics = 200
 
-// prepared holds resolved, confined build inputs.
+// Build time limits: one device, the store package of every product.
+const (
+	deviceTimeout = 2 * time.Minute
+	exportTimeout = 30 * time.Minute
+)
+
+// versionRE bounds the manifest version used in the .iq file name.
+var versionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$`)
+
+// prepared holds resolved, confined build inputs; opts.Output is set by the caller.
 type prepared struct {
 	se   sdkEnv
 	opts ciqsdk.BuildOpts
 }
 
-func prepare(ctx context.Context, env *tool.Env, sdkArg, project, jungle, key, output, defOut string) (prepared, error) {
+func prepare(ctx context.Context, env *tool.Env, sdkArg, project, jungle, key string) (prepared, error) {
 	se, err := resolveSDK(sdkArg)
 	if err != nil {
 		return prepared{}, err
 	}
-	if project == "" {
-		project = "."
-	}
-	pdir, err := env.Root.Resolve(project)
+	pdir, err := env.Root.Resolve(orDot(project))
 	if err != nil {
 		return prepared{}, err
 	}
@@ -92,26 +94,18 @@ func prepare(ctx context.Context, env *tool.Env, sdkArg, project, jungle, key, o
 	if _, err := ciqsdk.CheckKey(kabs); err != nil {
 		return prepared{}, tool.InvalidArgs("key: %v", err)
 	}
-	if output == "" {
-		output = filepath.Join(pdir, defOut)
-	}
-	oabs, err := env.Root.Resolve(output)
-	if err != nil {
-		return prepared{}, err
-	}
-	if err := os.MkdirAll(filepath.Dir(oabs), 0o755); err != nil {
-		return prepared{}, err
-	}
 	var java string
 	if j, err := ciqsdk.FindJava(ctx, os.Getenv); err == nil {
 		java = j.Path
 	}
-	return prepared{se: se, opts: ciqsdk.BuildOpts{SDK: se.Res.SDK, Java: java, ProjectDir: pdir, Jungle: jabs, Key: kabs, Output: oabs, Warnings: true}}, nil
+	return prepared{se: se, opts: ciqsdk.BuildOpts{SDK: se.Res.SDK, Java: java, ProjectDir: pdir, Jungle: jabs, Key: kabs, Warnings: true}}, nil
 }
 
 func outFor(p prepared, r ciqsdk.BuildResult) buildOut {
-	o := buildOut{OK: r.OK, Output: r.Output, SDK: p.se.Res.SDK.Version, SDKSource: p.se.Res.Source, ExitCode: r.ExitCode,
-		Errors: r.Errors, Warnings: r.Warnings, Diagnostics: r.Diagnostics, Tail: r.Tail, DurationMS: r.DurationMS}
+	o := buildOut{
+		OK: r.OK, Output: r.Output, SDK: p.se.Res.SDK.Version, SDKSource: p.se.Res.Source, ExitCode: r.ExitCode,
+		Errors: r.Errors, Warnings: r.Warnings, Diagnostics: r.Diagnostics, Tail: r.Tail, DurationMS: r.DurationMS,
+	}
 	// Errors first, then cap.
 	sort.SliceStable(o.Diagnostics, func(i, j int) bool {
 		return o.Diagnostics[i].Severity == "error" && o.Diagnostics[j].Severity != "error"
@@ -126,44 +120,102 @@ func outFor(p prepared, r ciqsdk.BuildResult) buildOut {
 }
 
 func sdkBuild(ctx context.Context, env *tool.Env, in buildIn) (*tool.Result, error) {
-	if !ciqsdk.ValidDeviceID(in.Device) {
-		return nil, tool.InvalidArgs("invalid device id %q", in.Device)
+	all := in.Device == allDevices
+	if !all && !ciqsdk.ValidDeviceID(in.Device) {
+		return nil, tool.InvalidArgs("invalid device id %q (or \"all\" for the store package)", in.Device)
 	}
-	if in.Release && in.Test {
-		return nil, tool.InvalidArgs("release and test are mutually exclusive")
+	if in.Test && (in.Release || all) {
+		return nil, tool.InvalidArgs("test builds one device in debug mode; not with release or device \"all\"")
 	}
-	suffix := ""
-	if in.Test {
-		suffix = "-test"
-	}
-	p, err := prepare(ctx, env, in.SDK, in.Project, in.Jungle, in.Key, in.Output, filepath.Join("bin", in.Device+suffix+".prg"))
+	p, err := prepare(ctx, env, in.SDK, in.Project, in.Jungle, in.Key)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := ciqsdk.LoadDevice(p.se.DataRoot, in.Device); errors.Is(err, os.ErrNotExist) {
-		return nil, tool.InvalidArgs("device %q is not installed; download it with SdkManager", in.Device)
+	if all {
+		p.opts.Output, err = packagePath(env, p.opts.ProjectDir, in.Overwrite)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if _, err := ciqsdk.LoadDevice(p.se.DataRoot, in.Device); errors.Is(err, os.ErrNotExist) {
+			return nil, tool.InvalidArgs("device %q is not installed; download it with SdkManager", in.Device)
+		}
+		suffix := ""
+		if in.Test {
+			suffix = "-test"
+		}
+		if p.opts.Output, err = env.Root.Resolve(filepath.Join(p.opts.ProjectDir, "bin", in.Device+suffix+".prg")); err != nil {
+			return nil, err
+		}
+		p.opts.Device, p.opts.Release, p.opts.Test = in.Device, in.Release, in.Test
 	}
-	p.opts.Device, p.opts.Release, p.opts.Test, p.opts.TypeCheck = in.Device, in.Release, in.Test, in.TypeCheck
-	r, err := ciqsdk.Build(ctx, p.opts)
+	p.opts.Timeout = deviceTimeout
+	what := "monkeyc -d " + in.Device
+	if all {
+		p.opts.Timeout, what = exportTimeout, "monkeyc -e -r (all manifest products)"
+	}
+	// Clients without a progress token cancel after about a minute; stop
+	// monkeyc before that so the call ends with an answer, not a hang.
+	capped := !env.HasProgress()
+	if capped && p.opts.Timeout > tool.NoProgressWaitCap {
+		p.opts.Timeout = tool.NoProgressWaitCap
+	}
+	start := time.Now()
+	stop := reportProgress(env, what, start)
+	var r ciqsdk.BuildResult
+	if all {
+		r, err = ciqsdk.Export(ctx, p.opts)
+	} else {
+		r, err = ciqsdk.Build(ctx, p.opts)
+	}
+	stop()
 	if err != nil {
+		if capped && time.Since(start) >= p.opts.Timeout {
+			return nil, fmt.Errorf("%w (this client sent no progress token, so the build is capped at %s; use a client that sends progress notifications for long exports)", err, tool.NoProgressWaitCap)
+		}
 		return nil, err
 	}
-	return tool.OK(outFor(p, r)), nil
+	o := outFor(p, r)
+	if all {
+		o.ByDevice = map[string]int{}
+		for _, d := range r.Diagnostics {
+			if d.Severity == "error" && d.Device != "" {
+				o.ByDevice[d.Device]++
+			}
+		}
+	}
+	return tool.OK(o), nil
 }
 
-func sdkExport(ctx context.Context, env *tool.Env, in exportIn) (*tool.Result, error) {
-	pdir, err := env.Root.Resolve(orDot(in.Project))
+// packagePath returns <pdir>/release/<project>-<version>.iq, vetted by
+// sim.CheckDest so a previous package is replaced only with overwrite.
+func packagePath(env *tool.Env, pdir string, overwrite bool) (string, error) {
+	m, _, err := readManifest(env, pdir)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	p, err := prepare(ctx, env, in.SDK, in.Project, in.Jungle, in.Key, in.Output, filepath.Join("release", filepath.Base(pdir)+".iq"))
+	name := filepath.Base(pdir)
+	if m.Version != "" {
+		if !versionRE.MatchString(m.Version) {
+			return "", tool.InvalidArgs("manifest version %q is not usable in a file name", m.Version)
+		}
+		name += "-" + m.Version
+	}
+	abs, err := env.Root.Resolve(filepath.Join(pdir, "release", name+".iq"))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	p.opts.Timeout = 30 * time.Minute
+	if err := sim.CheckDest(abs, overwrite, ".iq"); err != nil {
+		return "", tool.InvalidArgs("%v", err)
+	}
+	return abs, nil
+}
+
+// reportProgress sends a progress note now and every 10 s until stop is called.
+func reportProgress(env *tool.Env, what string, start time.Time) (stop func()) {
+	env.Progress(0, 0, what)
 	done := make(chan struct{})
 	go func() {
-		start := time.Now()
 		t := time.NewTicker(10 * time.Second)
 		defer t.Stop()
 		for {
@@ -171,24 +223,11 @@ func sdkExport(ctx context.Context, env *tool.Env, in exportIn) (*tool.Result, e
 			case <-done:
 				return
 			case <-t.C:
-				env.Progress(0, 0, fmt.Sprintf("monkeyc -e running for %s", time.Since(start).Round(time.Second)))
+				env.Progress(0, 0, fmt.Sprintf("%s running for %s", what, time.Since(start).Round(time.Second)))
 			}
 		}
 	}()
-	env.Progress(0, 0, "exporting all manifest products (monkeyc -e -r)")
-	r, err := ciqsdk.Export(ctx, p.opts)
-	close(done)
-	if err != nil {
-		return nil, err
-	}
-	o := outFor(p, r)
-	o.ByDevice = map[string]int{}
-	for _, d := range r.Diagnostics {
-		if d.Severity == "error" && d.Device != "" {
-			o.ByDevice[d.Device]++
-		}
-	}
-	return tool.OK(o), nil
+	return func() { close(done) }
 }
 
 func orDot(s string) string {
@@ -201,7 +240,6 @@ func orDot(s string) string {
 // --- keys ---
 
 type keyGenIn struct {
-	tool.ConfirmFlag
 	Path string `json:"path" jsonschema:"new key file inside the root, e.g. keys/developer_key.der"`
 }
 
@@ -209,20 +247,13 @@ type keyCheckIn struct {
 	Path string `json:"path" jsonschema:"developer key (.der) inside the root"`
 }
 
-func sdkKeyGenerate(ctx context.Context, env *tool.Env, in keyGenIn) (*tool.Result, error) {
+func sdkKeyGenerate(_ context.Context, env *tool.Env, in keyGenIn) (*tool.Result, error) {
 	abs, err := env.Root.Resolve(in.Path)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := os.Lstat(abs); err == nil {
 		return nil, tool.InvalidArgs("%s already exists; refusing to overwrite a developer key", abs)
-	}
-	_, gate := tool.RequireConfirm(ctx, env, in.Confirm, tool.PlanPreview{
-		Summary:  fmt.Sprintf("create RSA-%d developer key %s (mode 0600)", ciqsdk.KeyBits, abs),
-		Affected: []string{abs},
-	})
-	if gate != nil {
-		return gate, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
 		return nil, err
@@ -231,8 +262,10 @@ func sdkKeyGenerate(ctx context.Context, env *tool.Env, in keyGenIn) (*tool.Resu
 	if err != nil {
 		return nil, err
 	}
-	return tool.OK(map[string]any{"key": ki,
-		"note": "Back this key up somewhere safe. The store binds your app to the key of its first upload; a lost key means no more updates. Keep it out of git."}), nil
+	return tool.OK(map[string]any{
+		"key":  ki,
+		"note": "Back this key up somewhere safe. The store binds your app to the key of its first upload; a lost key means no more updates. Keep it out of git.",
+	}), nil
 }
 
 func sdkKeyCheck(_ context.Context, env *tool.Env, in keyCheckIn) (*tool.Result, error) {

@@ -110,7 +110,7 @@ func CLI(args []string, stdout, stderr io.Writer) int {
 	case "renew":
 		err = s.cliRenew(ctx, stdout)
 	case "logout":
-		err = s.cliLogout(stdout, stderr)
+		err = s.cliLogout(ctx, stdout, stderr)
 	case "export":
 		err = s.cliExport(stdout, exportPortal)
 	}
@@ -273,6 +273,9 @@ func (s *Store) cliRenew(ctx context.Context, stdout io.Writer) error {
 	}
 	defer unlock()
 	if err := s.renewLocked(ctx, wantPortal, wantConnect, true); err != nil {
+		if errors.Is(err, browser.ErrRateLimited) {
+			return fmt.Errorf("silent renewal failed: %w", err)
+		}
 		if errors.Is(err, errNoRenewal) || errors.Is(err, browser.ErrInteractionRequired) {
 			return authRequired("silent renewal failed", err)
 		}
@@ -282,7 +285,7 @@ func (s *Store) cliRenew(ctx context.Context, stdout io.Writer) error {
 	return s.cliStatus(ctx, stdout, false)
 }
 
-func (s *Store) cliLogout(stdout, stderr io.Writer) error {
+func (s *Store) cliLogout(ctx context.Context, stdout, stderr io.Writer) error {
 	if isTerminal(os.Stdin) && isTerminalWriter(stderr) {
 		_, _ = fmt.Fprintf(stderr, "Delete stored credentials and the browser profile for %q? [y/N] ", s.profile)
 		line, _ := bufio.NewReader(stdin).ReadString('\n')
@@ -290,7 +293,7 @@ func (s *Store) cliLogout(stdout, stderr io.Writer) error {
 			return errors.New("cancelled")
 		}
 	}
-	if err := s.deleteAll(); err != nil {
+	if err := s.logout(ctx); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(stdout, "Signed out of profile %s.\n", s.profile)

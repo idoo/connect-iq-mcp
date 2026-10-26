@@ -71,7 +71,11 @@ func TestAuthLoginSuccessAndFailure(t *testing.T) {
 		return auth.LoginResult{DeveloperID: "42"}, nil
 	}}
 	k.Env.Credentials = lc
+	asked := k.Elicit(true)
 	res := tooltest.MustOK(t, tooltest.Call(t, authLoginTool(t), k.Env, `{"connect":true,"timeout_minutes":3}`))
+	if len(*asked) != 1 || !strings.Contains((*asked)[0], "health") {
+		t.Fatalf("asked = %q", *asked)
+	}
 	out := res.Data.(authStatusOut)
 	if !out.Portal.Present || !out.Connect.Present || out.Hint != "" {
 		t.Fatalf("out = %+v", out)
@@ -111,4 +115,33 @@ func TestAuthLoginRefusals(t *testing.T) {
 		t.Fatalf("body = %+v", body)
 	}
 	tooltest.MustFail(t, tooltest.Call(t, authLoginTool(t), k.Env, `{"timeout_minutes":16}`), "invalid_arguments")
+}
+
+func TestAuthLoginConnectNeedsHuman(t *testing.T) {
+	setEnv(t, nil)
+	k := tooltest.New(t)
+	k.Creds.Token = "" // portal only: Connect never enabled
+	k.Env.Profile.AllowNoElicit = true
+	lc := &loginCreds{FakeCredentials: k.Creds, login: func(auth.LoginOptions) (auth.LoginResult, error) {
+		return auth.LoginResult{}, nil
+	}}
+	k.Env.Credentials = lc
+	k.Env.Elicit = func(context.Context, string) (bool, error) { return false, tool.ErrElicitationUnavailable }
+	body := tooltest.MustFail(t, tooltest.Call(t, authLoginTool(t), k.Env, `{"connect":true}`), tool.ErrHumanRequired.Code)
+	if !strings.Contains(body.Hint, "garmin-mcp auth login --connect") {
+		t.Fatalf("body = %+v", body)
+	}
+	k.Elicit(false)
+	tooltest.MustFail(t, tooltest.Call(t, authLoginTool(t), k.Env, `{"connect":true}`), tool.ErrDeclined.Code)
+	if lc.calls != 0 {
+		t.Fatalf("Login called %d times without consent", lc.calls)
+	}
+
+	// Already consented: re-login does not ask again.
+	k.Creds.Token = "tok"
+	k.Env.Elicit = nil
+	tooltest.MustOK(t, tooltest.Call(t, authLoginTool(t), k.Env, `{"connect":true}`))
+	if lc.calls != 1 {
+		t.Fatalf("calls = %d", lc.calls)
+	}
 }

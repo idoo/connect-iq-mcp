@@ -58,14 +58,10 @@
 //     Without confirm:true the call returns a preview and changes nothing;
 //     with it the human is asked via elicitation; without a human answer it
 //     is accepted only after a preview of the same args ([Planner.Claim]).
-//   - ConfirmByPlan tools embed [ConfirmPlan] and call [Preview] with a
-//     [Fingerprint] of the remote state they depend on. The first call records
-//     a plan and returns its plan_id; the second (plan_id:"<plan_id>", same
-//     args) is refused if the state changed.
-//   - Meta.RequireHuman (with either gate) makes the elicitation accept
+//   - Meta.RequireHuman makes the elicitation accept
 //     mandatory; without elicitation the call is refused unless the profile
 //     sets AllowNoElicit. Results report _meta.garmin.approved_by.
-//   - [Unconfirmed] lets a Flag/Plan tool write on a branch it has determined
+//   - [Unconfirmed] lets a ConfirmByFlag tool write on a branch it has determined
 //     is purely additive.
 //
 // A gated handler looks like:

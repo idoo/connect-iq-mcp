@@ -58,6 +58,33 @@ func challengeTitle(title string) bool {
 	return strings.HasPrefix(t, "just a moment") || strings.HasPrefix(t, "attention required") || t == "один момент…"
 }
 
+type cfBlock int
+
+const (
+	cfNone        cfBlock = iota
+	cfRateLimited         // Cloudflare error 1015
+	cfDenied              // Cloudflare error 1020 or another access-denied page
+)
+
+// cloudflareBlock recognises a Cloudflare block page from its title and
+// visible text. Unlike a challenge, nobody can get past it by waiting or
+// clicking.
+func cloudflareBlock(title, text string) cfBlock {
+	t := strings.ToLower(strings.TrimSpace(title))
+	b := strings.ToLower(text)
+	denied := strings.HasPrefix(t, "access denied")
+	if !denied && !strings.Contains(t, "cloudflare") && !strings.Contains(b, "cloudflare") {
+		return cfNone
+	}
+	switch {
+	case strings.Contains(b, "error 1015") || strings.Contains(b, "you are being rate limited"):
+		return cfRateLimited
+	case denied || strings.Contains(b, "error 1020"):
+		return cfDenied
+	}
+	return cfNone
+}
+
 // ticketFromURL extracts the "ST-..." service ticket from a URL's ticket param.
 func ticketFromURL(raw string) string {
 	u, err := url.Parse(raw)

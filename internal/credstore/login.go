@@ -116,6 +116,8 @@ func loginError(ctx context.Context, err error, timeout time.Duration) error {
 	switch {
 	case errors.Is(err, browser.ErrNoBrowser):
 		return fmt.Errorf("%w: set %s to a Chrome, Edge, Brave or Chromium executable; when none is installed garmin-mcp downloads a pinned Chrome for Testing on first use", err, browser.EnvBrowser)
+	case errors.Is(err, browser.ErrRateLimited):
+		return fmt.Errorf("%w; nothing was saved", err)
 	case ctx.Err() != nil:
 		return fmt.Errorf("sign-in cancelled; nothing was saved: %w", ctx.Err())
 	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "timed out"):

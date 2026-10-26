@@ -1,3 +1,5 @@
+// Package sim drives the Connect IQ simulator: its process, monkeydo
+// sessions, input, screenshots and crash logs.
 package sim
 
 import (
@@ -55,9 +57,11 @@ type SessionInfo struct {
 // Info returns the session state.
 func (s *Session) Info() SessionInfo {
 	_, _, latest, _ := s.ring.Since(0, 1)
-	i := SessionInfo{ID: s.ID, PRG: s.PRG, Device: s.Device, Tests: s.Tests,
+	i := SessionInfo{
+		ID: s.ID, PRG: s.PRG, Device: s.Device, Tests: s.Tests,
 		Started: s.Started.UTC().Format(time.RFC3339), Running: !s.Exited(),
-		HasOutput: s.HasOutput(), Crashed: s.crashed.Load(), LatestToken: latest}
+		HasOutput: s.HasOutput(), Crashed: s.crashed.Load(), LatestToken: latest,
+	}
 	if !i.Running {
 		c := int(s.exitCode.Load())
 		i.ExitCode = &c
@@ -149,7 +153,7 @@ func (m *Manager) Start(argv []string, prg, device string, tests bool) (*Session
 	if len(argv) == 0 {
 		return nil, errors.New("empty command")
 	}
-	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // G204: argv is built by callers from the resolved SDK's monkeydo and validated project paths; no shell
 	ownGroup(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -163,8 +167,10 @@ func (m *Manager) Start(argv []string, prg, device string, tests bool) (*Session
 	m.seq++
 	id := fmt.Sprintf("s%d-%d", m.seq, time.Now().Unix()%100000)
 	m.mu.Unlock()
-	s := &Session{ID: id, PRG: prg, Device: device, Tests: tests, Started: time.Now(),
-		ring: NewRing(RingLines), cmd: cmd, first: make(chan struct{}), done: make(chan struct{})}
+	s := &Session{
+		ID: id, PRG: prg, Device: device, Tests: tests, Started: time.Now(),
+		ring: NewRing(RingLines), cmd: cmd, first: make(chan struct{}), done: make(chan struct{}),
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}

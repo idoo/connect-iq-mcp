@@ -68,12 +68,17 @@ var approveSchema = map[string]any{"type": "object", "properties": map[string]an
 
 // elicitFunc returns a yes/no elicitation for ss, or nil when the client did
 // not declare elicitation (tool.Call then reports ErrElicitationUnavailable).
+// The human must see exactly what will be sent, so a prompt that redaction
+// would alter (it holds secret-shaped text) is refused, never shown redacted.
 func elicitFunc(ss *mcp.ServerSession) func(context.Context, string) (bool, error) {
 	if !canElicit(ss) {
 		return nil
 	}
 	return func(ctx context.Context, msg string) (bool, error) {
-		r, err := ss.Elicit(ctx, &mcp.ElicitParams{Message: redact.Redact(msg), RequestedSchema: approveSchema})
+		if redact.Redact(msg) != msg {
+			return false, fmt.Errorf("%w: payload contains text that looks like a secret; it can't be shown for approval", tool.ErrInvalidArgs)
+		}
+		r, err := ss.Elicit(ctx, &mcp.ElicitParams{Message: msg, RequestedSchema: approveSchema})
 		if err != nil {
 			return false, fmt.Errorf("elicit approval: %w", err)
 		}
@@ -150,7 +155,7 @@ func (s *session) render(r *tool.Result) *mcp.CallToolResult {
 		b, _ = json.Marshal(map[string]any{"data": tool.BodyFor(fmt.Errorf("%w: encode result: %v", tool.ErrInternal, err))})
 		r.IsError = true
 	}
-	b = redact.RedactBytes(b)
+	b = redact.Bytes(b)
 	text := string(b)
 	if r.Text != "" {
 		text = redact.Redact(r.Text)

@@ -30,7 +30,6 @@ type Kit struct {
 	Plans    *FakePlanner
 	State    *FakeStore
 	Files    *FakeFiles
-	Fetch    *FakeFetcher
 	Toolsets *FakeToolsets
 	Clock    *FakeClock
 }
@@ -47,7 +46,6 @@ func New(t testing.TB) *Kit {
 		Plans:    NewFakePlanner(clock.Now),
 		State:    NewFakeStore(),
 		Files:    NewFakeFiles(t),
-		Fetch:    NewFakeFetcher(t),
 		Toolsets: NewFakeToolsets(),
 		Clock:    clock,
 	}
@@ -57,7 +55,6 @@ func New(t testing.TB) *Kit {
 		Plans:       k.Plans,
 		State:       k.State,
 		Toolsets:    k.Toolsets,
-		Fetch:       k.Fetch,
 		Root:        k.Files,
 		Clock:       k.Clock,
 		Version:     "test",

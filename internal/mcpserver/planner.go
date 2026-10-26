@@ -12,12 +12,8 @@ import (
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
-const (
-	// PlanCapacity is the number of pending plans kept per session.
-	PlanCapacity = 32
-	// PlanTTL is how long a plan stays valid.
-	PlanTTL = 15 * time.Minute
-)
+// PlanCapacity is the number of pending previews kept per session.
+const PlanCapacity = 32
 
 type plan struct {
 	tool     string
@@ -27,10 +23,10 @@ type plan struct {
 	sequence uint64
 }
 
-// Planner is the in-memory, per-session [tool.Planner]. Plan ids are random
-// 128-bit values bound to the tool name, canonical args and state
-// fingerprint; plans expire after [PlanTTL], at most [PlanCapacity] are kept
-// (oldest evicted first), and each id can be verified only once.
+// Planner is the in-memory, per-session [tool.Planner]. It records previews
+// bound to the tool name, canonical args and fingerprint; they expire after
+// [tool.PreviewTTL], at most [PlanCapacity] are kept (oldest evicted first),
+// and each can be claimed only once.
 type Planner struct {
 	mu    sync.Mutex
 	now   func() time.Time
@@ -71,35 +67,8 @@ func (p *Planner) Propose(_ context.Context, toolName string, args any, fingerpr
 		p.evictOldest()
 	}
 	p.seq++
-	p.plans[id] = plan{tool: toolName, args: h, fp: fingerprint, expires: now.Add(PlanTTL), sequence: p.seq}
+	p.plans[id] = plan{tool: toolName, args: h, fp: fingerprint, expires: now.Add(tool.PreviewTTL), sequence: p.seq}
 	return id, nil
-}
-
-// Verify checks and consumes planID. Any lookup of a known id consumes it, so
-// a mismatching confirm cannot be retried against the same plan.
-func (p *Planner) Verify(_ context.Context, planID, toolName string, args any, fingerprint string) error {
-	h, err := argsHash(args)
-	if err != nil {
-		return err
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	pl, ok := p.plans[planID]
-	if !ok {
-		return fmt.Errorf("%w: unknown plan id", tool.ErrStalePlan)
-	}
-	delete(p.plans, planID)
-	switch {
-	case !p.now().Before(pl.expires):
-		return fmt.Errorf("%w: plan expired", tool.ErrStalePlan)
-	case pl.tool != toolName:
-		return fmt.Errorf("%w: plan was made for %s", tool.ErrStalePlan, pl.tool)
-	case pl.args != h:
-		return fmt.Errorf("%w: arguments differ from the plan", tool.ErrStalePlan)
-	case fingerprint == "" || pl.fp != fingerprint:
-		return fmt.Errorf("%w: remote state changed since the plan", tool.ErrStalePlan)
-	}
-	return nil
 }
 
 // Claim consumes the newest unexpired [tool.FlagFingerprint] plan for

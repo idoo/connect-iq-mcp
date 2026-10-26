@@ -131,9 +131,11 @@ func ParseCrashLog(s string) []CrashEntry {
 // ErrNoCrashLog means CIQ_LOG.YML does not exist (yet).
 var ErrNoCrashLog = errors.New("no CIQ_LOG.YML")
 
-// ReadCrashLogTail reads at most max bytes from the end of path.
-func ReadCrashLogTail(path string, max int64) (string, int64, error) {
-	f, err := os.Open(path)
+// ReadCrashLogTail reads at most limit bytes from the end of path. Outside
+// macOS the log lives under a shared temp dir, so a symlink, a non-regular
+// file or a file owned by another user is refused.
+func ReadCrashLogTail(path string, limit int64) (string, int64, error) {
+	lfi, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		hint := ""
 		if runtime.GOOS != "darwin" {
@@ -144,12 +146,22 @@ func ReadCrashLogTail(path string, max int64) (string, int64, error) {
 	if err != nil {
 		return "", 0, err
 	}
+	if !lfi.Mode().IsRegular() || !ownedByMe(lfi) {
+		return "", 0, fmt.Errorf("refusing %s: not a regular file owned by the current user", path)
+	}
+	f, err := os.Open(path) //nolint:gosec // G304: path was Lstat-checked as a regular file owned by us; SameFile below rejects a swap
+	if err != nil {
+		return "", 0, err
+	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
 		return "", 0, err
 	}
-	off := fi.Size() - max
+	if !os.SameFile(lfi, fi) {
+		return "", 0, fmt.Errorf("refusing %s: file changed while opening", path)
+	}
+	off := fi.Size() - limit
 	if off < 0 {
 		off = 0
 	}

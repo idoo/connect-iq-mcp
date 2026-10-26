@@ -1,8 +1,8 @@
 name: Release
 
 # Tag v* → goreleaser builds a DRAFT release (archives, checksums.txt + cosign
-# bundle, SBOMs, ghcr image) → .mcpb + its .sha256 + tools.json are uploaded
-# to the draft → provenance attestations (files + image) → the draft is
+# bundle, SBOMs) → .mcpb + its .sha256 + tools.json are uploaded to the
+# draft → provenance attestations → the draft is
 # published as the last release step → Homebrew tap and MCP Registry follow.
 # Tags are immutable (ruleset), so dry-run with `goreleaser release --snapshot`.
 on:
@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Exact toolchain so a tag rebuild is byte-identical; bump with Dockerfile.
+  # Exact toolchain so a tag rebuild is byte-identical.
   GO_VERSION: "1.26.10"
   GORELEASER_VERSION: "v2.19.0"
   GOVULNCHECK_VERSION: "v1.9.0"
@@ -31,7 +31,6 @@ jobs:
       contents: write # draft release + assets
       id-token: write # cosign keyless, attestations
       attestations: write
-      packages: write # ghcr.io/idoo/garmin-mcp + image attestation
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,14 +52,6 @@ jobs:
         with:
           cosign-release: ${{ env.COSIGN_VERSION }}
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
@@ -79,14 +70,6 @@ jobs:
             echo "sha256=$(awk '{print $1}' "$mcpb.sha256")"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Resolve image digest
-        id: image
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          digest=$(docker buildx imagetools inspect "ghcr.io/idoo/garmin-mcp:${version}" --format '{{json .Manifest}}' | jq -r .digest)
-          case $digest in sha256:*) ;; *) echo "no digest for ghcr.io/idoo/garmin-mcp:${version}" >&2; exit 1 ;; esac
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
@@ -95,12 +78,6 @@ jobs:
             dist/*.mcpb
             dist/checksums.txt
             docs/tools.json
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ghcr.io/idoo/garmin-mcp
-          subject-digest: ${{ steps.image.outputs.digest }}
-          push-to-registry: true
-
       - name: Upload .mcpb, its sha256 and tools.json to the draft
         env:
           GH_TOKEN: ${{ github.token }}

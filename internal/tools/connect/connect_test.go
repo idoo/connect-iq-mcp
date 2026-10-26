@@ -90,6 +90,43 @@ func TestActivityDownloadWritesInsideRoot(t *testing.T) {
 	}
 }
 
+func TestActivityDownloadNeverClobbers(t *testing.T) {
+	hits := 0
+	k := kit(t, func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		_, _ = w.Write([]byte("<gpx/>"))
+	})
+	tl := lookup(t, "connect_activity_download")
+	key := filepath.Join(k.Files.Root, "keys", "developer_key.der")
+	if err := os.MkdirAll(filepath.Dir(key), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(key, []byte("KEY"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Wrong extension, even with overwrite, never downloads or writes.
+	tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, `{"id":1,"format":"gpx","path":"keys/developer_key.der","overwrite":true}`), "invalid_arguments")
+	tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, `{"id":1,"format":"gpx","path":"out.fit"}`), "invalid_arguments")
+	if hits != 0 {
+		t.Fatalf("refused path still downloaded (%d)", hits)
+	}
+	if b, _ := os.ReadFile(key); string(b) != "KEY" {
+		t.Fatalf("key clobbered: %q", b)
+	}
+	// Existing file of the right type needs overwrite:true.
+	tooltest.MustOK(t, tooltest.Call(t, tl, k.Env, `{"id":1,"format":"gpx","path":"a.gpx"}`))
+	tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, `{"id":1,"format":"gpx","path":"a.gpx"}`), "invalid_arguments")
+	tooltest.MustOK(t, tooltest.Call(t, tl, k.Env, `{"id":1,"format":"gpx","path":"a.gpx","overwrite":true}`))
+	// A symlink is refused even with overwrite.
+	if err := os.Symlink(key, filepath.Join(k.Files.Root, "link.gpx")); err != nil {
+		t.Skip(err)
+	}
+	tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, `{"id":1,"format":"gpx","path":"link.gpx","overwrite":true}`), "invalid_arguments")
+	if b, _ := os.ReadFile(key); string(b) != "KEY" {
+		t.Fatalf("key clobbered via symlink: %q", b)
+	}
+}
+
 func TestHeartRateSummarizes(t *testing.T) {
 	k := kit(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

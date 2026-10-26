@@ -28,7 +28,7 @@ func TestLoginSkipsBrowserWhenValid(t *testing.T) {
 	seedConnect(t, s, "rt-0") // access token near expiry, refresh token alive
 	stored, _, _ := s.readStored()
 	stored.Portal = &portalCred{Cookies: cookies(time.Now().Add(20 * 24 * time.Hour))}
-	if _, err := s.writeStored(stored); err != nil {
+	if err := s.writeStored(stored); err != nil {
 		t.Fatal(err)
 	}
 	r, err := s.Login(context.Background(), auth.LoginOptions{Connect: true, SkipIfValid: true})

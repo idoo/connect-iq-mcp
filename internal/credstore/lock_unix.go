@@ -18,7 +18,7 @@ func lockPath(ctx context.Context, path string) (unlock func(), err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: lock file path is derived from our own state dir and profile name
 	if err != nil {
 		return nil, err
 	}

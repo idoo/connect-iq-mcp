@@ -57,10 +57,20 @@ func statusOut(ctx context.Context, env *tool.Env) authStatusOut {
 	st := env.Credentials.Status(ctx)
 	out.Configured = true
 	out.Portal, out.Connect = state(st.Portal), state(st.Connect)
-	if !st.Portal.Present || !st.Connect.Present {
+	if needsSignIn(st.Portal, false) || needsSignIn(st.Connect, true) {
 		out.Hint = loginHint
 	}
 	return out
+}
+
+// needsSignIn reports whether c needs the user to sign in. Garmin Connect is
+// opt-in (optional): its absence means the user never enabled it and is not
+// a problem; only a consented but expired Connect credential needs sign-in.
+func needsSignIn(c auth.CredStatus, optional bool) bool {
+	if !c.Present {
+		return !optional
+	}
+	return !c.ExpiresAt.IsZero() && !c.ExpiresAt.After(time.Now())
 }
 
 func state(c auth.CredStatus) credState {

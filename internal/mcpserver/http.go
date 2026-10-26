@@ -33,8 +33,8 @@ const EnvHTTPToken = "GARMIN_MCP_HTTP_TOKEN" //nolint:gosec // variable name, no
 const (
 	EnvHTTPSessionTimeout = "GARMIN_MCP_HTTP_SESSION_TIMEOUT"
 	EnvHTTPMaxSessions    = "GARMIN_MCP_HTTP_MAX_SESSIONS"
-	// DefaultSessionTimeout closes idle sessions; it outlives PlanTTL so a
-	// pending plan never loses its session first.
+	// DefaultSessionTimeout closes idle sessions; it outlives tool.PreviewTTL
+	// so a pending preview never loses its session first.
 	DefaultSessionTimeout = 30 * time.Minute
 	// DefaultMaxSessions caps concurrently open sessions.
 	DefaultMaxSessions = 64

@@ -21,6 +21,13 @@ Use [private vulnerability reporting](https://github.com/idoo/garmin-mcp/securit
 - Processes running as you reading your keychain.
 - Garmin's own portal and API behaviour.
 
+## Threat model, short
+
+- **Prompt injection.** Review text, store listings and repo files can carry instructions. Tool results mark them as untrusted data; the real guard is that nothing public happens without a preview you approve.
+- **Approval integrity.** A preview is bound to the exact action it shows. Changing the arguments after approval, or approving a different preview, must fail.
+- **SDK paths.** The model can only pick an SDK the SDK Manager installed, never an arbitrary path; Java is only taken from absolute locations, so a repo cannot plant its own.
+- **Local files.** Builds and screenshots are written inside the project root (`GARMIN_MCP_ROOT`, default the git root); paths that escape it are rejected.
+
 ## Credentials
 
 garmin-mcp keeps developer-portal cookies and the Garmin Connect token in the OS keychain (service `garmin-mcp`). The config file never holds secrets. Only `garmin-mcp auth` can change credentials. Cookies and tokens are sent only to Garmin hosts and redacted from everything garmin-mcp prints.

@@ -22,7 +22,7 @@ const (
 	SourceNewest = "newest"
 )
 
-// Env vars naming an SDK (path or version); GARMIN_MCP_SDK wins over CIQ_SDK.
+// EnvVars name an SDK (path or version); GARMIN_MCP_SDK wins over CIQ_SDK.
 var EnvVars = []string{"GARMIN_MCP_SDK", "CIQ_SDK"}
 
 // SDK is one installed SDK.
@@ -161,7 +161,7 @@ func ParseCurrentCfg(b []byte, cfgDir string) (string, error) {
 // the monkeyc wrapper) and returns it with its version.
 func ValidateSDK(path string) (SDK, error) {
 	path = filepath.Clean(path)
-	st, err := os.Stat(path)
+	st, err := os.Stat(path) //nolint:gosec // G703: SDK paths come from env (trusted) or pass insideSdks before reaching here
 	if err != nil {
 		return SDK{}, fmt.Errorf("sdk %s: %w", path, err)
 	}
@@ -169,13 +169,18 @@ func ValidateSDK(path string) (SDK, error) {
 		return SDK{}, fmt.Errorf("sdk %s is not a directory", path)
 	}
 	s := SDK{Path: path, Dir: filepath.Base(path), Version: VersionFromDir(filepath.Base(path))}
-	if b, err := os.ReadFile(filepath.Join(path, "bin", "version.txt")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(path, "bin", "version.txt")); err == nil { //nolint:gosec // G703: see Stat above
 		if v := strings.TrimSpace(string(b)); v != "" {
 			s.Version = v
 		}
 	}
-	if !exists(filepath.Join(s.Bin(), "monkeybrains.jar")) && !exists(filepath.Join(s.Bin(), wrapperName("monkeyc"))) {
-		return SDK{}, fmt.Errorf("sdk %s has neither bin/monkeybrains.jar nor bin/%s", path, wrapperName("monkeyc"))
+	if runtime.GOOS == "windows" {
+		// The bin/*.bat wrappers run through cmd.exe; only the jar is used.
+		if !exists(filepath.Join(s.Bin(), "monkeybrains.jar")) {
+			return SDK{}, fmt.Errorf("sdk %s has no bin/monkeybrains.jar", path)
+		}
+	} else if !exists(filepath.Join(s.Bin(), "monkeybrains.jar")) && !exists(filepath.Join(s.Bin(), "monkeyc")) {
+		return SDK{}, fmt.Errorf("sdk %s has neither bin/monkeybrains.jar nor bin/monkeyc", path)
 	}
 	return s, nil
 }
@@ -201,7 +206,9 @@ func Resolve(o ResolveOpts) (Resolved, error) {
 		return Resolved{}, err
 	}
 	if a := strings.TrimSpace(o.Arg); a != "" {
-		s, err := pick(a, installed)
+		// The argument comes from the tool caller (the model), so it may only
+		// select an SDK the SDK Manager installed; never an arbitrary path.
+		s, err := pick(a, installed, o.DataRoot, false)
 		if err != nil {
 			return Resolved{}, fmt.Errorf("sdk argument: %w", err)
 		}
@@ -209,7 +216,7 @@ func Resolve(o ResolveOpts) (Resolved, error) {
 	}
 	for _, k := range EnvVars {
 		if v := strings.TrimSpace(getenv(k)); v != "" {
-			s, err := pick(v, installed)
+			s, err := pick(v, installed, o.DataRoot, true)
 			if err != nil {
 				return Resolved{}, fmt.Errorf("%s: %w", k, err)
 			}
@@ -217,7 +224,7 @@ func Resolve(o ResolveOpts) (Resolved, error) {
 		}
 	}
 	cfg := filepath.Join(o.DataRoot, "current-sdk.cfg")
-	if b, err := os.ReadFile(cfg); err == nil {
+	if b, err := os.ReadFile(cfg); err == nil { //nolint:gosec // G304: fixed file name under the Connect IQ data root
 		p, err := ParseCurrentCfg(b, o.DataRoot)
 		if err != nil {
 			return Resolved{}, fmt.Errorf("%s: %w", cfg, err)
@@ -230,8 +237,8 @@ func Resolve(o ResolveOpts) (Resolved, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Resolved{}, fmt.Errorf("%s: %w", cfg, err)
 	}
-	for _, s := range installed {
-		v, err := ValidateSDK(s.Path)
+	if len(installed) > 0 {
+		v, err := ValidateSDK(installed[0].Path)
 		if err != nil {
 			return Resolved{}, fmt.Errorf("newest installed: %w", err)
 		}
@@ -240,9 +247,15 @@ func Resolve(o ResolveOpts) (Resolved, error) {
 	return Resolved{}, fmt.Errorf("no Connect IQ SDK found under %s; install one with SdkManager or set GARMIN_MCP_SDK", filepath.Join(o.DataRoot, "Sdks"))
 }
 
-// pick resolves a path or an installed version string.
-func pick(ref string, installed []SDK) (SDK, error) {
-	if strings.ContainsAny(ref, `/\`) || filepath.IsAbs(ref) {
+// pick resolves a path or an installed version string. Unless trusted (set
+// by the human: env var), a path must resolve inside <dataRoot>/Sdks.
+func pick(ref string, installed []SDK, dataRoot string, trusted bool) (SDK, error) {
+	if strings.ContainsAny(ref, `/\`) || filepath.IsAbs(ref) || ref == "." || ref == ".." {
+		if !trusted {
+			if err := insideSdks(ref, dataRoot); err != nil {
+				return SDK{}, err
+			}
+		}
 		return ValidateSDK(ref)
 	}
 	for _, s := range installed {
@@ -263,11 +276,30 @@ func pick(ref string, installed []SDK) (SDK, error) {
 	return SDK{}, fmt.Errorf("SDK %q is not installed (installed: %s)", ref, strings.Join(vs, ", "))
 }
 
-func exists(p string) bool { _, err := os.Stat(p); return err == nil }
+// ErrUntrustedSDK marks an SDK path the tool caller may not select.
+var ErrUntrustedSDK = errors.New("SDK path is not an installed SDK")
 
-func wrapperName(n string) string {
-	if runtime.GOOS == "windows" {
-		return n + ".bat"
+// insideSdks checks that ref, with symlinks resolved, is an SDK directory
+// under <dataRoot>/Sdks (the SDK Manager install dir).
+func insideSdks(ref, dataRoot string) error {
+	sdks := filepath.Join(dataRoot, "Sdks")
+	hint := fmt.Sprintf("only SDKs installed under %s can be selected (by version, dir name or path); to use another SDK, set GARMIN_MCP_SDK in the MCP server's environment", sdks)
+	if !filepath.IsAbs(ref) {
+		return fmt.Errorf("%w: %q is not absolute; %s", ErrUntrustedSDK, ref, hint)
 	}
-	return n
+	resolved, err := filepath.EvalSymlinks(ref)
+	if err != nil {
+		return fmt.Errorf("sdk %s: %w", ref, err)
+	}
+	rootReal, err := filepath.EvalSymlinks(sdks)
+	if err != nil {
+		return fmt.Errorf("%w: %s; %s", ErrUntrustedSDK, ref, hint)
+	}
+	rel, err := filepath.Rel(rootReal, resolved)
+	if err != nil || rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%w: %s resolves outside %s; %s", ErrUntrustedSDK, ref, sdks, hint)
+	}
+	return nil
 }
+
+func exists(p string) bool { _, err := os.Stat(p); return err == nil }

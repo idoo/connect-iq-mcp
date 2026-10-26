@@ -76,12 +76,8 @@ func capObject(m map[string]any, maxBytes int) (any, *tool.Truncation, error) {
 		return nil, nil, err
 	}
 	m[key] = arr[:keep]
-	if keep < len(arr) {
-		// A sibling cursor resumes after the dropped items, so it would skip them.
-		delete(m, "next_cursor")
-		if _, ok := m["returned"]; ok {
-			m["returned"] = keep
-		}
+	if _, ok := m["returned"]; ok && keep < len(arr) {
+		m["returned"] = keep
 	}
 	return m, truncation(incl, len(arr)-keep, maxBytes), nil
 }
@@ -131,10 +127,7 @@ func fitPrefix(total, maxBytes int, candidate func(n int) any) (int, error) {
 }
 
 func truncation(included, items, maxBytes int) *tool.Truncation {
-	hint := fmt.Sprintf("response exceeded %d bytes: dropped %d included and %d trailing items; narrow with filters, fields or a smaller limit",
+	hint := fmt.Sprintf("response exceeded %d bytes: dropped %d included and %d trailing items; narrow the query, lower page_size or request the next page",
 		maxBytes, included, items)
-	if items > 0 {
-		hint += "; next_cursor was removed because it would skip the dropped items, so re-run the same call with a smaller limit to page through everything"
-	}
 	return &tool.Truncation{Dropped: included + items, Hint: hint}
 }

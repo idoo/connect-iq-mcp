@@ -1,3 +1,5 @@
+// Package redact strips credentials (JWTs, PEM keys, auth headers, cookies,
+// signed URL queries) from text before it reaches logs or tool output.
 package redact
 
 import (
@@ -42,16 +44,16 @@ var (
 // Signature, Expires, Key-Pair-Id, Policy, token, sig), keeping their scheme,
 // host and path. Text without secrets is returned unchanged.
 func Redact(s string) string {
-	b := RedactBytes([]byte(s))
+	b := Bytes([]byte(s))
 	if bytes.Equal(b, []byte(s)) {
 		return s
 	}
 	return string(b)
 }
 
-// RedactBytes is [Redact] for byte slices. It returns b itself when nothing
+// Bytes is [Redact] for byte slices. It returns b itself when nothing
 // needs redacting.
-func RedactBytes(b []byte) []byte {
+func Bytes(b []byte) []byte {
 	if pemBlock.Match(b) {
 		b = pemBlock.ReplaceAllLiteral(b, []byte(redactedPEM))
 	}

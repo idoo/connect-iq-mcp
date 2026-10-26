@@ -65,6 +65,11 @@ func authLogin(ctx context.Context, env *tool.Env, in authLoginIn) (*tool.Result
 			Hint:    "ask the user to run `garmin-mcp auth login` in a terminal",
 		}
 	}
+	if in.Connect && !env.Credentials.Status(ctx).Connect.Present {
+		if err := connectConsent(ctx, env); err != nil {
+			return nil, err
+		}
+	}
 
 	var mu sync.Mutex
 	last := "waiting for you to sign in in the browser window"
@@ -110,6 +115,32 @@ func authLogin(ctx context.Context, env *tool.Env, in authLoginIn) (*tool.Result
 		}
 	}
 	return tool.OK(statusOut(ctx, env)), nil
+}
+
+// connectConsentPrompt is the human question before Garmin Connect (health
+// data) access is enabled for the first time.
+const connectConsentPrompt = "auth_login wants to sign in to Garmin Connect, giving this AI agent read access to your health and activity data (sleep, heart rate, activities). Allow?"
+
+// connectConsentHint is the way to enable Connect without elicitation.
+const connectConsentHint = "ask the user to run `garmin-mcp auth login --connect` in a terminal"
+
+// connectConsent asks the human to enable Garmin Connect. An agent alone can
+// never enable health-data access: without elicitation it is refused, even
+// when the profile allows proceeding without elicitation elsewhere.
+func connectConsent(ctx context.Context, env *tool.Env) error {
+	ok, err := false, error(tool.ErrElicitationUnavailable)
+	if env.Elicit != nil {
+		ok, err = env.Elicit(ctx, connectConsentPrompt)
+	}
+	switch {
+	case errors.Is(err, tool.ErrElicitationUnavailable):
+		return &tool.Error{Code: tool.ErrHumanRequired.Code, Message: "enabling Garmin Connect needs the user's approval, but the client cannot ask", Hint: connectConsentHint}
+	case err != nil:
+		return fmt.Errorf("ask for confirmation: %w", err)
+	case !ok:
+		return &tool.Error{Code: tool.ErrDeclined.Code, Message: "the user declined enabling Garmin Connect", Hint: connectConsentHint}
+	}
+	return nil
 }
 
 // progressWriter turns browser log lines into progress notifications.

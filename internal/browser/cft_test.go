@@ -195,15 +195,29 @@ func TestLocatePrecedence(t *testing.T) {
 		"bundled env forces CfT":      {"", "BUNDLED", mustNotCall, []string{installed}, cft, true, ""},
 		"explicit beats bundled env":  {explicit, "bundled", mustNotCall, []string{installed}, explicit, false, ""},
 		"chromium default first":      {"", "", braveDef, []string{installed}, brave, false, ""},
-		"safari default falls through": {"", "", safari, []string{missing, installed}, installed, false,
-			"Your default browser (Safari) can't be driven; using installed in a separate profile."},
-		"default exe missing": {"", "", braveGone, []string{installed}, installed, false,
-			"Your default browser (Brave Browser) can't be driven; using installed in a separate profile."},
+		"safari default falls through": {
+			"", "", safari,
+			[]string{missing, installed},
+			installed, false,
+			"Your default browser (Safari) can't be driven; using installed in a separate profile.",
+		},
+		"default exe missing": {
+			"", "", braveGone,
+			[]string{installed},
+			installed, false,
+			"Your default browser (Brave Browser) can't be driven; using installed in a separate profile.",
+		},
 		"installed beats CfT": {"", "", none, []string{missing, installed}, installed, false, ""},
-		"nothing installed → CfT": {"", "", none, []string{missing}, cft, true,
-			"No Chromium-based browser found; using Chrome for Testing " + cftVersion + " in a separate profile."},
-		"safari and nothing → CfT": {"", "", safari, nil, cft, true,
-			"Your default browser (Safari) can't be driven; using Chrome for Testing " + cftVersion + " in a separate profile."},
+		"nothing installed → CfT": {
+			"", "", none,
+			[]string{missing},
+			cft, true,
+			"No Chromium-based browser found; using Chrome for Testing " + cftVersion + " in a separate profile.",
+		},
+		"safari and nothing → CfT": {
+			"", "", safari, nil, cft, true,
+			"Your default browser (Safari) can't be driven; using Chrome for Testing " + cftVersion + " in a separate profile.",
+		},
 	} {
 		p, _ := locate(c.path, c.env, c.def, c.cands, cft)
 		if p.exe != c.wantExe || p.cft != c.wantCfT || p.note != c.wantNote {

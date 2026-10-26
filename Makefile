@@ -28,7 +28,7 @@ vuln:
 
 # Local release dry run (no publish, no signing, no image): dist/ + .mcpb.
 snapshot:
-	goreleaser release --snapshot --clean --skip=publish,sign,docker
+	goreleaser release --snapshot --clean --skip=publish,sign
 
 mcpb: snapshot
 	scripts/build-mcpb.sh

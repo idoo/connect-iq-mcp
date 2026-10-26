@@ -2,6 +2,7 @@ package redact
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -49,12 +50,12 @@ func TestCapResultGeneric(t *testing.T) {
 			},
 		},
 		{
-			name: "object with cursor drops it and fixes returned", in: map[string]any{"builds": builds, "returned": 8, "next_cursor": "c"},
-			max: sizeOf(t, map[string]any{"builds": builds[:3], "returned": 8, "next_cursor": "c"}), wantDropped: 5,
+			name: "object fixes returned", in: map[string]any{"builds": builds, "returned": 8, "page": 1},
+			max: sizeOf(t, map[string]any{"builds": builds[:3], "returned": 8, "page": 1}), wantDropped: 5,
 			check: func(t *testing.T, got any) {
 				m := got.(map[string]any)
-				if _, ok := m["next_cursor"]; ok || m["returned"] != 3 || len(m["builds"].([]any)) != 3 {
-					t.Errorf("got %v, want 3 builds, returned 3, no next_cursor", m)
+				if m["returned"] != 3 || fmt.Sprint(m["page"]) != "1" || len(m["builds"].([]any)) != 3 {
+					t.Errorf("got %v, want 3 builds, returned 3, page kept", m)
 				}
 			},
 		},
@@ -93,6 +94,9 @@ func TestCapResultGeneric(t *testing.T) {
 			}
 			if tr == nil || tr.Dropped != tt.wantDropped {
 				t.Fatalf("truncation = %+v, want dropped %d", tr, tt.wantDropped)
+			}
+			if !strings.Contains(tr.Hint, "lower page_size or request the next page") || strings.Contains(tr.Hint, "cursor") {
+				t.Errorf("hint = %q", tr.Hint)
 			}
 			if sizeOf(t, got) > tt.max {
 				t.Errorf("result exceeds cap")

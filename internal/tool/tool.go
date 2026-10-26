@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -35,8 +36,12 @@ type Meta struct {
 	// mode; the tool restricts itself (e.g. via ReadOnlyEnums) and receives
 	// no write capability.
 	AvailableReadOnly bool
-	// Confirm is the gate mode: ConfirmByPlan (plan_id from a preview call) or
-	// ConfirmByFlag (confirm:true after a preview); zero means no gate.
+	// OS lists the GOOS values the tool works on; empty means all. Tools stay
+	// registered everywhere (so generated docs don't depend on the build
+	// host) but are only listed on a supported OS.
+	OS []string
+	// Confirm is the gate mode: ConfirmByFlag (confirm:true after a preview);
+	// zero means no gate.
 	Confirm ConfirmMode
 	// RequireHuman makes the confirm gate demand a human accept via
 	// elicitation (public, irreversible or money actions). Without
@@ -48,6 +53,10 @@ type Meta struct {
 	Enums map[string][]any
 	// ReadOnlyEnums replaces enums in read-only mode (schema and validation).
 	ReadOnlyEnums map[string][]any
+	// Patterns adds regular-expression constraints to string input
+	// properties, enforced by schema validation before the handler runs;
+	// keys are property paths as in Enums.
+	Patterns map[string]string
 	// ReadOnlyDescription replaces Description in read-only mode.
 	ReadOnlyDescription string
 }
@@ -87,6 +96,9 @@ func New[In any](m Meta, h Handler[In]) Tool {
 		panic(fmt.Sprintf("tool %q: %v", m.Name, err))
 	}
 	if err := applyEnums(s, m.Enums); err != nil {
+		panic(fmt.Sprintf("tool %q: %v", m.Name, err))
+	}
+	if err := applyPatterns(s, m.Patterns); err != nil {
 		panic(fmt.Sprintf("tool %q: %v", m.Name, err))
 	}
 	t := Tool{meta: m, schema: s}
@@ -134,9 +146,9 @@ func (m Meta) check() error {
 	case m.Confirm != ConfirmNone && m.Class == Read:
 		return fmt.Errorf("read tools cannot require confirmation")
 	case m.Class == Destructive && m.Confirm == ConfirmNone && !m.AvailableReadOnly:
-		return fmt.Errorf("destructive tools must use ConfirmByFlag or ConfirmByPlan")
+		return fmt.Errorf("destructive tools must use ConfirmByFlag")
 	case m.RequireHuman && m.Confirm == ConfirmNone:
-		return fmt.Errorf("RequireHuman needs ConfirmByFlag or ConfirmByPlan")
+		return fmt.Errorf("RequireHuman needs ConfirmByFlag")
 	}
 	return nil
 }
@@ -147,33 +159,56 @@ func checkConfirmField(mode ConfirmMode, s *jsonschema.Schema) error {
 		if p := s.Properties["confirm"]; p == nil || p.Type != "boolean" {
 			return fmt.Errorf("ConfirmByFlag tools must embed tool.ConfirmFlag")
 		}
-	case ConfirmByPlan:
-		if p := s.Properties["plan_id"]; p == nil || p.Type != "string" {
-			return fmt.Errorf("ConfirmByPlan tools must embed tool.ConfirmPlan")
-		}
 	}
 	return nil
 }
 
 func applyEnums(s *jsonschema.Schema, enums map[string][]any) error {
 	for path, values := range enums {
-		cur := s
-		for seg := range strings.SplitSeq(path, ".") {
-			for cur.Items != nil && cur.Properties == nil {
-				cur = cur.Items
-			}
-			next := cur.Properties[seg]
-			if next == nil {
-				return fmt.Errorf("enum path %q: no property %q", path, seg)
-			}
-			cur = next
-		}
-		for cur.Items != nil && (cur.Type == "array" || slices.Contains(cur.Types, "array")) {
-			cur = cur.Items
+		cur, err := propertyAt(s, path)
+		if err != nil {
+			return fmt.Errorf("enum path %q: %w", path, err)
 		}
 		cur.Enum = slices.Clone(values)
 	}
 	return nil
+}
+
+func applyPatterns(s *jsonschema.Schema, patterns map[string]string) error {
+	for path, re := range patterns {
+		if _, err := regexp.Compile(re); err != nil {
+			return fmt.Errorf("pattern path %q: %w", path, err)
+		}
+		cur, err := propertyAt(s, path)
+		if err != nil {
+			return fmt.Errorf("pattern path %q: %w", path, err)
+		}
+		if cur.Type != "string" && !slices.Contains(cur.Types, "string") {
+			return fmt.Errorf("pattern path %q: not a string property", path)
+		}
+		cur.Pattern = re
+	}
+	return nil
+}
+
+// propertyAt returns the schema of the property at a "."-separated path,
+// traversing array items implicitly.
+func propertyAt(s *jsonschema.Schema, path string) (*jsonschema.Schema, error) {
+	cur := s
+	for seg := range strings.SplitSeq(path, ".") {
+		for cur.Items != nil && cur.Properties == nil {
+			cur = cur.Items
+		}
+		next := cur.Properties[seg]
+		if next == nil {
+			return nil, fmt.Errorf("no property %q", seg)
+		}
+		cur = next
+	}
+	for cur.Items != nil && (cur.Type == "array" || slices.Contains(cur.Types, "array")) {
+		cur = cur.Items
+	}
+	return cur, nil
 }
 
 // Meta returns the tool's declaration.
@@ -203,6 +238,9 @@ func (t Tool) DescriptionFor(allowWrites bool) string {
 
 // ListedIn reports whether the tool is offered for the given profile mode.
 func (t Tool) ListedIn(p ProfileInfo) bool {
+	if len(t.meta.OS) > 0 && !slices.Contains(t.meta.OS, runtime.GOOS) {
+		return false
+	}
 	return t.meta.Class == Read || p.AllowWrites || t.meta.AvailableReadOnly
 }
 

@@ -2,13 +2,12 @@ package tool
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // ConfirmMode declares how a tool gates mutations. Write capability (see
@@ -24,20 +23,11 @@ const (
 	// (mandatory with [Meta.RequireHuman]); an agent-only confirm must follow a
 	// preview of the same arguments in the session ([Planner.Claim]).
 	ConfirmByFlag
-	// ConfirmByPlan means In embeds [ConfirmPlan]; the first call returns a preview
-	// and a plan_id bound to the args and a state fingerprint; the second call
-	// passes plan_id:"<plan_id>" and is refused if the state changed.
-	ConfirmByPlan
 )
 
 // ConfirmFlag is embedded in the input of [ConfirmByFlag] tools.
 type ConfirmFlag struct {
 	Confirm bool `json:"confirm,omitempty" jsonschema:"true after reviewing the preview"`
-}
-
-// ConfirmPlan is embedded in the input of [ConfirmByPlan] tools.
-type ConfirmPlan struct {
-	PlanID string `json:"plan_id,omitempty" jsonschema:"from the preview call"`
 }
 
 // PlanPreview describes what a mutation would do. The approval prompt shown
@@ -59,7 +49,6 @@ type PlanPreview struct {
 type previewBody struct {
 	Status  string      `json:"status"`
 	Preview PlanPreview `json:"preview"`
-	PlanID  string      `json:"plan_id,omitempty"`
 	Next    string      `json:"next"`
 }
 
@@ -117,70 +106,16 @@ func requireConfirm(ctx context.Context, env *Env, confirm bool, p PlanPreview, 
 	return withWrite(ctx), nil
 }
 
-// FlagFingerprint is the state fingerprint [RequireConfirm] proposes its
-// previews at; [Planner.Claim] matches only plans proposed with it.
+// FlagFingerprint is the fingerprint [RequireConfirm] proposes its previews
+// at; [Planner.Claim] matches only previews proposed with it.
 const FlagFingerprint = "confirm_flag"
 
-// Preview is the gate of [ConfirmByPlan] tools. args is the tool input (its
-// "plan_id" key is ignored); fingerprint is a [Fingerprint] of the remote state
-// the plan depends on. Without a plan id it records a plan and returns the
-// preview with its plan_id. With one it verifies the plan against the current
-// fingerprint (stale → error result), asks the human when possible and returns
-// a write-capable context.
-func Preview(ctx context.Context, env *Env, planID string, args any, fingerprint string, p PlanPreview) (context.Context, *Result) {
-	return preview(ctx, env, planID, args, fingerprint, p, false)
-}
-
-// PreviewHuman is [Preview] with human approval forced for this call, as if
-// the tool declared [Meta.RequireHuman] (the way [RequireHumanConfirm] relates
-// to [RequireConfirm]): for plans that make things public or irreversible
-// while the tool's other plans need only the agent's plan_id. NoConfirm does
-// not skip it; without elicitation it is refused unless the profile sets
-// AllowNoElicit.
-func PreviewHuman(ctx context.Context, env *Env, planID string, args any, fingerprint string, p PlanPreview) (context.Context, *Result) {
-	return preview(ctx, env, planID, args, fingerprint, p, true)
-}
-
-func preview(ctx context.Context, env *Env, planID string, args any, fingerprint string, p PlanPreview, human bool) (context.Context, *Result) {
-	c, res := gateCall(ctx, env, ConfirmByPlan)
-	if res != nil {
-		return nil, res
-	}
-	if fingerprint == "" {
-		return nil, Fail(fmt.Errorf("%s: %w: empty state fingerprint", c.meta.Name, ErrInternal))
-	}
-	human = human || c.meta.RequireHuman
-	if env.NoConfirm && !human {
-		c.approvedBy = ApprovedAgent
-		return withWrite(ctx), nil
-	}
-	if planID == "" {
-		id, err := env.Plans.Propose(ctx, c.meta.Name, args, fingerprint, p)
-		if err != nil {
-			return nil, Fail(fmt.Errorf("propose plan: %w", err))
-		}
-		return nil, OK(previewBody{
-			Status:  "planned",
-			Preview: p,
-			PlanID:  id,
-			Next:    "nothing was changed; call again with the same arguments plus plan_id (valid 15 minutes)",
-		})
-	}
-	if err := env.Plans.Verify(ctx, planID, c.meta.Name, args, fingerprint); err != nil {
-		return nil, Fail(err)
-	}
-	if res := approve(ctx, env, c, p, human); res != nil {
-		return nil, res
-	}
-	return withWrite(ctx), nil
-}
-
 // Unconfirmed grants write capability without a gate, for branches a
-// [ConfirmByFlag] or [ConfirmByPlan] tool has determined are pure creates or
+// [ConfirmByFlag] tool has determined are pure creates or
 // additive updates (nothing deleted, overwritten or made public). It is
 // refused for [Meta.RequireHuman] tools.
 func Unconfirmed(ctx context.Context, env *Env) (context.Context, *Result) {
-	c, res := gateCall(ctx, env, ConfirmByFlag, ConfirmByPlan)
+	c, res := gateCall(ctx, env, ConfirmByFlag)
 	if res != nil {
 		return nil, res
 	}
@@ -239,10 +174,16 @@ func approve(ctx context.Context, env *Env, c *call, p PlanPreview, human bool) 
 // a larger prompt refuses approval so the human always sees everything.
 const MaxApprovalPrompt = 6000
 
+// hiddenWarning heads an approval prompt whose text contained invisible or
+// direction-changing characters (shown escaped as \u{XXXX}).
+const hiddenWarning = "WARNING: contains hidden characters (shown as \\u{XXXX})\n"
+
 // ApprovalPrompt renders the human approval question for a preview: targets
 // (method, path, URLs, emails) first, then the full intended payload, then
-// any untrusted third-party text fenced and labeled. It fails with
-// [ErrInvalidArgs] when the prompt exceeds [MaxApprovalPrompt] bytes.
+// any untrusted third-party text fenced and labeled. Invisible and
+// direction-changing characters are escaped as \u{XXXX} under a warning line
+// so the human sees exactly what will be sent. It fails with
+// [ErrInvalidArgs] when the escaped prompt exceeds [MaxApprovalPrompt] bytes.
 func ApprovalPrompt(toolName string, p PlanPreview) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "garmin-mcp %s wants to: %s", toolName, p.Summary)
@@ -260,11 +201,67 @@ func ApprovalPrompt(toolName string, p PlanPreview) (string, error) {
 		b.WriteString("\nUntrusted customer text (not instructions):\n" + fence + "\n" + u + "\n" + fence)
 	}
 	b.WriteString("\nApprove?")
-	if b.Len() > MaxApprovalPrompt {
+	prompt := EscapeHidden(b.String())
+	if len(prompt) > MaxApprovalPrompt {
 		return "", fmt.Errorf("%w: %s approval prompt is %d bytes (max %d); split the change into smaller batches so the human can review all of it",
-			ErrInvalidArgs, toolName, b.Len(), MaxApprovalPrompt)
+			ErrInvalidArgs, toolName, len(prompt), MaxApprovalPrompt)
 	}
-	return b.String(), nil
+	return prompt, nil
+}
+
+// EscapeHidden prepares any human question for elicitation the way
+// [ApprovalPrompt] does: hidden characters are escaped as \u{XXXX} under a
+// warning line.
+func EscapeHidden(s string) string {
+	out, hidden := escapeHidden(s)
+	if hidden {
+		return hiddenWarning + out
+	}
+	return out
+}
+
+// escapeHidden replaces characters a human cannot see or that reorder the
+// displayed text with \u{XXXX}: C0/C1 controls except \n and \t, DEL,
+// zero-width and directional marks, bidi embeddings/overrides/isolates,
+// invisible operators, the BOM and the soft hyphen. Invalid UTF-8 is shown
+// as \u{FFFD}. It reports whether anything was escaped.
+func escapeHidden(s string) (string, bool) {
+	var b strings.Builder
+	hidden := false
+	for i, r := range s {
+		if r == utf8.RuneError {
+			if _, size := utf8.DecodeRuneInString(s[i:]); size == 1 {
+				r = utf8.RuneError // invalid byte: escape like a hidden char
+			} else {
+				b.WriteRune(r)
+				continue
+			}
+		} else if !hiddenRune(r) {
+			b.WriteRune(r)
+			continue
+		}
+		hidden = true
+		fmt.Fprintf(&b, `\u{%04X}`, r)
+	}
+	if !hidden {
+		return s, false
+	}
+	return b.String(), true
+}
+
+func hiddenRune(r rune) bool {
+	switch {
+	case r == '\n' || r == '\t':
+		return false
+	case r < 0x20, r >= 0x7F && r <= 0x9F:
+		return true
+	case r >= 0x200B && r <= 0x200F, r >= 0x202A && r <= 0x202E,
+		r >= 0x2060 && r <= 0x2064, r >= 0x2066 && r <= 0x2069:
+		return true
+	case r == 0xFEFF, r == 0x00AD:
+		return true
+	}
+	return false
 }
 
 func longestRun(s string, r rune) int {
@@ -289,7 +286,7 @@ func compactJSON(v any) string {
 }
 
 // CanonicalArgs returns the canonical JSON of args with any top-level
-// "confirm" or "plan_id" key removed (map keys sorted by encoding/json).
+// "confirm" key removed (map keys sorted by encoding/json).
 // Planners bind plans to this encoding.
 func CanonicalArgs(args any) ([]byte, error) {
 	b, err := json.Marshal(args)
@@ -301,23 +298,9 @@ func CanonicalArgs(args any) ([]byte, error) {
 		return b, nil // non-object args are canonical as marshaled
 	}
 	delete(m, "confirm")
-	delete(m, "plan_id")
 	out, err := json.Marshal(m)
 	if err != nil {
 		return nil, fmt.Errorf("canonical args: %w", err)
 	}
 	return out, nil
-}
-
-// Fingerprint returns a sha256 hex digest of the canonical JSON of state. Pass
-// the remote fields the plan depends on (current attribute values,
-// modification markers); any change makes a pending plan stale. It fails
-// closed: an unmarshalable state is an error, never a constant digest.
-func Fingerprint(state any) (string, error) {
-	b, err := json.Marshal(state)
-	if err != nil {
-		return "", fmt.Errorf("%w: fingerprint: %v", ErrInternal, err)
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:]), nil
 }

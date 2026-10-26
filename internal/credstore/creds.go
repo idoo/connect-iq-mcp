@@ -61,6 +61,13 @@ func authRequired(what string, cause error) error {
 	return fmt.Errorf("%w: %s; %s", auth.ErrAuthRequired, what, loginHint)
 }
 
+// renewRateLimited reports a renewal Garmin's sign-in server refused with its
+// rate limit. It is not an auth failure: signing in again right away hits the
+// same limit, so the error says to wait rather than to call auth_login.
+func renewRateLimited(what string, err error) error {
+	return fmt.Errorf("%s and silent renewal was refused: %w", what, err)
+}
+
 // PortalCookies returns a Cookie header for apps.garmin.com, renewing it
 // silently when its seal expires within three days.
 func (s *Store) PortalCookies(ctx context.Context) (string, error) {
@@ -96,6 +103,9 @@ func (s *Store) PortalCookies(ctx context.Context) (string, error) {
 	}
 	if b.Portal != nil && !s.portalDead(b.Portal) {
 		return b.Portal.Cookies, nil // still valid, just close to expiry
+	}
+	if errors.Is(rerr, browser.ErrRateLimited) {
+		return "", renewRateLimited("developer portal session expired", rerr)
 	}
 	if b.Portal == nil {
 		return "", authRequired("not signed in to the Connect IQ developer portal", nil)
@@ -145,10 +155,18 @@ func (s *Store) SavePortalCookies(ctx context.Context, header string) error {
 // ConnectToken returns a DI OAuth2 access token, refreshing it within 15
 // minutes of expiry and renewing through the browser when the refresh token
 // is dead.
+//
+// A stored Connect credential is the human's consent marker: only an explicit
+// sign-in with connect=true (`garmin-mcp auth login --connect` or a
+// human-approved auth_login) stores one, and logout deletes it. Without it
+// ConnectToken never mints a token from the browser profile's SSO session.
 func (s *Store) ConnectToken(ctx context.Context) (string, error) {
 	b, _, _, err := s.view()
 	if err != nil {
 		return "", err
+	}
+	if b.Connect == nil {
+		return "", errNoConnectConsent()
 	}
 	if tok, ok := s.accessUsable(b.Connect); ok {
 		return tok, nil
@@ -160,6 +178,9 @@ func (s *Store) ConnectToken(ctx context.Context) (string, error) {
 	defer unlock()
 	if b, _, _, err = s.view(); err != nil { // another process may have refreshed
 		return "", err
+	}
+	if b.Connect == nil { // signed out meanwhile
+		return "", errNoConnectConsent()
 	}
 	if tok, ok := s.accessUsable(b.Connect); ok {
 		return tok, nil
@@ -179,15 +200,21 @@ func (s *Store) ConnectToken(ctx context.Context) (string, error) {
 		}
 		cause = err
 	}
-	if err := s.renewLocked(ctx, false, true, false); err == nil {
+	rerr := s.renewLocked(ctx, false, true, false)
+	if rerr == nil {
 		if b, _, _, err = s.view(); err == nil && b.Connect != nil && b.Connect.AccessToken != "" {
 			return b.Connect.AccessToken, nil
 		}
 	}
-	if b.Connect == nil {
-		return "", authRequired("not signed in to Garmin Connect (use --connect)", nil)
+	if errors.Is(rerr, browser.ErrRateLimited) {
+		return "", renewRateLimited("Garmin Connect sign-in expired", rerr)
 	}
 	return "", authRequired("Garmin Connect sign-in expired", cause)
+}
+
+// errNoConnectConsent is returned when Connect was never explicitly enabled.
+func errNoConnectConsent() error {
+	return authRequired(`Garmin Connect is not enabled; a human must run "garmin-mcp auth login --connect" (or approve auth_login with connect=true)`, nil)
 }
 
 func (s *Store) accessUsable(c *connectCred) (string, bool) {
@@ -224,10 +251,9 @@ func (s *Store) diToken(ctx context.Context, clientID string, form url.Values) (
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	switch {
-	case resp.StatusCode == http.StatusOK:
-	case resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized ||
-		resp.StatusCode == http.StatusForbidden:
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
 		return nil, fmt.Errorf("%w (HTTP %d)", errTokenRejected, resp.StatusCode)
 	default:
 		return nil, fmt.Errorf("garmin token endpoint: HTTP %d", resp.StatusCode)
@@ -452,7 +478,7 @@ func (s *Store) Status(context.Context) auth.Status {
 			st.Connect.Note += "; rotated tokens are kept in memory only"
 		}
 	} else {
-		st.Connect = auth.CredStatus{Renewable: renewable, Note: `not signed in; auth_login tool with connect=true or "garmin-mcp auth login --connect"`}
+		st.Connect = auth.CredStatus{Renewable: renewable, Note: `not enabled (optional; health data); a human enables it with "garmin-mcp auth login --connect" or by approving auth_login with connect=true`}
 	}
 	return st
 }
