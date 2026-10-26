@@ -1,0 +1,42 @@
+name: Publish to MCP Registry
+
+# Called by release.yml after the release is published; run by hand to
+# re-publish an existing release (e.g. after a registry validation fix).
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag (e.g. v0.1.0)
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v0.1.0)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # MCP Registry OIDC login
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          version="${TAG#v}"
+          dir="$RUNNER_TEMP/mcpb"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$dir" \
+            --pattern "ciq-mcp-${version}.mcpb" --pattern "ciq-mcp-${version}.mcpb.sha256"
+          (cd "$dir" && sha256sum -c "ciq-mcp-${version}.mcpb.sha256")
+          sha=$(awk '{print $1}' "$dir/ciq-mcp-${version}.mcpb.sha256")
+          scripts/publish-registry.sh "$TAG" "$sha"

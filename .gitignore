@@ -1,0 +1,10 @@
+/ciq-mcp
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+*.p8
+.ciq-mcp.toml
+.env
+.DS_Store

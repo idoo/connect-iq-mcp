@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# Local dry run:
+#   goreleaser release --snapshot --clean --skip=publish,sign,docker
+version: 2
+
+project_name: ciq-mcp
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: ciq-mcp
+    main: ./cmd/ciq-mcp
+    binary: ciq-mcp
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    # No build date: two builds of the same tag must be byte-identical so the
+    # provenance attestation can be reproduced.
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# Fat darwin binary for the .mcpb bundle only (mcpb platform overrides are
+# per-OS, not per-arch). Archives below take only the per-arch `ciq-mcp` builds.
+universal_binaries:
+  - id: ciq-mcp-universal
+    ids: [ciq-mcp]
+    name_template: ciq-mcp
+    replace: false
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: ciq-mcp
+    ids: [ciq-mcp]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+sboms:
+  - artifacts: archive
+    documents:
+      - "${artifact}.spdx.json"
+
+# Keyless cosign (GitHub OIDC) over checksums.txt; the bundle covers every
+# archive through its sha256. Verify:
+#   cosign verify-blob --bundle checksums.txt.sigstore.json \
+#     --certificate-identity-regexp '^https://github.com/idoo/ciq-mcp/.github/workflows/release.yml@refs/tags/v' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+signs:
+  - id: checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--bundle=${signature}", "${artifact}", "--yes"]
+
+# Docker image, distroless static, multi-arch: stdio by default; HTTP needs --allow-remote and TLS.
+dockers_v2:
+  - id: ciq-mcp
+    ids: [ciq-mcp]
+    images:
+      - ghcr.io/idoo/ciq-mcp
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    dockerfile: packaging/docker/Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.title: ciq-mcp
+      org.opencontainers.image.description: MCP server for Connect IQ, read-only by default
+      org.opencontainers.image.source: https://github.com/idoo/ciq-mcp
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.licenses: MIT
+      io.modelcontextprotocol.server.name: io.github.idoo/ciq-mcp
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^chore\\(deps\\)"
+      - "^Merge "
+  groups:
+    - title: Breaking changes
+      regexp: '^.*?(\([^)]+\))?!:.+$'
+      order: 0
+    - title: Features
+      regexp: '^.*?feat(\([^)]+\))?:.+$'
+      order: 1
+    - title: Fixes
+      regexp: '^.*?fix(\([^)]+\))?:.+$'
+      order: 2
+    - title: Security
+      regexp: '^.*?sec(urity)?(\([^)]+\))?:.+$'
+      order: 3
+    - title: Documentation
+      regexp: '^.*?docs(\([^)]+\))?:.+$'
+      order: 4
+    - title: Other
+      order: 999
+
+release:
+  github:
+    owner: idoo
+    name: ciq-mcp
+  prerelease: auto
+  # Immutable releases: goreleaser only creates a draft; release.yml adds the
+  # .mcpb, tools.json and attestations, then publishes it as the last step.
+  draft: true
+  replace_existing_draft: false
+  mode: keep-existing
+  footer: |
+    **Install:** `brew install idoo/tap/ciq-mcp`, `curl -fsSL https://raw.githubusercontent.com/idoo/ciq-mcp/main/install.sh | sh`,
+    `go install github.com/idoo/ciq-mcp/cmd/ciq-mcp@{{ .Tag }}`, `docker pull ghcr.io/idoo/ciq-mcp:{{ .Version }}`,
+    or `ciq-mcp-{{ .Version }}.mcpb` for Claude Desktop.
+
+    **Verify:** `gh attestation verify ciq-mcp_{{ .Version }}_<os>_<arch>.tar.gz --repo idoo/ciq-mcp`, or
+    `cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '^https://github.com/idoo/ciq-mcp/.github/workflows/release.yml@refs/tags/v' --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt`.
+    The .mcpb is listed in `ciq-mcp-{{ .Version }}.mcpb.sha256`.

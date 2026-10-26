@@ -1,0 +1,21 @@
+name: Feature request
+description: A workflow or tool behaviour you want
+labels: [enhancement]
+body:
+  - type: textarea
+    id: job
+    attributes:
+      label: What are you trying to get done?
+      description: The store, SDK, simulator or Connect job, in your own words.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: How do you do it today?
+      description: Manual steps in the developer portal, SDK or simulator you repeat.
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed tool or change
+      description: Name, arguments, and whether it reads, writes or is destructive/public.

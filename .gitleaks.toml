@@ -1,0 +1,9 @@
+title = "ciq-mcp gitleaks config"
+
+[extend]
+useDefault = true
+
+# Synthetic, non-functional secrets used to prove redaction works.
+[[allowlists]]
+description = "redaction test fixtures"
+paths = ['''internal/redact/redact_test\.go''']

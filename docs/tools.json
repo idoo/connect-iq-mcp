@@ -1,0 +1,70 @@
+[
+  {
+    "name": "auth_status",
+    "toolset": "core",
+    "class": "R",
+    "title": "Auth status",
+    "description": "Report whether developer-portal cookies and the Garmin Connect token are present, their source and expiry. Never returns secrets.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Auth status"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "toolsets",
+    "toolset": "core",
+    "class": "R",
+    "title": "Toolsets",
+    "description": "List toolsets, enable or disable them for this session (tool list refreshes), or ask the user to allow Connect IQ writes for this session.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Toolsets"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "what to do",
+          "enum": [
+            "list",
+            "enable",
+            "disable",
+            "enable_writes"
+          ],
+          "type": "string"
+        },
+        "toolsets": {
+          "description": "toolsets for enable/disable",
+          "items": {
+            "enum": [
+              "core",
+              "store",
+              "sdk",
+              "simulator",
+              "connect"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  }
+]
