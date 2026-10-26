@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/idoo/ciq-mcp/internal/auth"
+	_ "github.com/idoo/ciq-mcp/internal/credstore" // sets auth.Open and auth.CLI
 )
 
 const usage = `ciq-mcp — Garmin Connect IQ MCP server

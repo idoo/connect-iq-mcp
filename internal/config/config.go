@@ -32,7 +32,13 @@ type Config struct {
 type Profile struct {
 	AllowWrites   bool `toml:"allow_writes,omitempty"`
 	AllowNoElicit bool `toml:"allow_no_elicit,omitempty"`
+	// AutoRenew lets ciq-mcp silently renew expiring Garmin sessions with the
+	// dedicated browser profile. nil means true.
+	AutoRenew *bool `toml:"auto_renew,omitempty"`
 }
+
+// AutoRenewEnabled reports the effective auto_renew setting (default true).
+func (p Profile) AutoRenewEnabled() bool { return p.AutoRenew == nil || *p.AutoRenew }
 
 // DefaultPath returns the config file path: $XDG_CONFIG_HOME/ciq-mcp/config.toml,
 // ~/.config/ciq-mcp/config.toml, or %AppData%\ciq-mcp\config.toml on Windows.

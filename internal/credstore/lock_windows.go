@@ -1,0 +1,45 @@
+//go:build windows
+
+package credstore
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"time"
+
+	"golang.org/x/sys/windows"
+)
+
+// lockPath takes an exclusive LockFileEx lock on path, polling until ctx ends.
+func lockPath(ctx context.Context, path string) (unlock func(), err error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	h := windows.Handle(f.Fd())
+	for {
+		ol := new(windows.Overlapped)
+		err := windows.LockFileEx(h, windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, ol)
+		if err == nil {
+			return func() {
+				_ = windows.UnlockFileEx(h, 0, 1, 0, new(windows.Overlapped))
+				_ = f.Close()
+			}, nil
+		}
+		if !errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
+			_ = f.Close()
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			_ = f.Close()
+			return nil, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+}
