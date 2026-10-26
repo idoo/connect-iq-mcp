@@ -24,8 +24,10 @@ import (
 var ErrInteractionRequired = errors.New("garmin needs you to sign in")
 
 // ErrRateLimited means Cloudflare in front of Garmin's sign-in server
-// answered with error 1015. Retrying right away makes it worse.
-var ErrRateLimited = errors.New("garmin's sign-in server is rate limiting this IP (Cloudflare 1015); wait 15–30 minutes before retrying")
+// answered with error 1015. Live it was keyed on the signed-in profile, not
+// the IP (a fresh profile still loaded), and lasted over an hour.
+// Retrying right away makes it worse.
+var ErrRateLimited = errors.New("garmin's sign-in server is rate limiting this sign-in (Cloudflare 1015); the current session keeps working until it expires, retry renewal in an hour or more")
 
 var errClosed = errors.New("browser closed before sign-in finished")
 
