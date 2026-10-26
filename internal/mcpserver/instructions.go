@@ -3,7 +3,7 @@ package mcpserver
 // Instructions is the MCP server instructions text (kept ≤ 1.5 KB by a test).
 const Instructions = `This server helps Garmin Connect IQ developers: the Connect IQ Store developer portal (apps, versions, uploads), the local SDK (build, package, validate) and the simulator. The optional connect toolset reads Garmin Connect data.
 
-Credentials come from ciq-mcp auth (portal cookies, Connect token); call auth_status when a tool returns auth_required and ask the user to run ` + "`ciq-mcp auth login`" + ` in a terminal.
+Credentials come from ciq-mcp auth (portal cookies, Connect token). When a tool returns auth_required, call auth_login: it opens a browser window where the user signs in (the user can also run ` + "`ciq-mcp auth login`" + ` in a terminal).
 
 Safety:
 - Writes are off by default; write tools are hidden. To turn them on, call toolsets with action enable_writes: it asks the user (or returns setup steps). Steps marked locked:"writes_disabled" carry that call.

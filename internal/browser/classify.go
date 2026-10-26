@@ -117,6 +117,20 @@ func isMobileLoginAPI(raw string) bool {
 	return strings.HasSuffix(strings.ToLower(u.Hostname()), "garmin.com") && strings.HasSuffix(u.Path, "/mobile/api/login")
 }
 
+// parseDevToolsActivePort turns the profile's DevToolsActivePort file (port
+// line, then browser websocket path) into a websocket URL.
+func parseDevToolsActivePort(b []byte) (string, bool) {
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) < 2 {
+		return "", false
+	}
+	port, path := strings.TrimSpace(lines[0]), strings.TrimSpace(lines[1])
+	if port == "" || port == "0" || strings.Trim(port, "0123456789") != "" || !strings.HasPrefix(path, "/devtools/browser/") {
+		return "", false
+	}
+	return "ws://127.0.0.1:" + port + path, true
+}
+
 // cookieHeader joins cookies into a Cookie request header value.
 func cookieHeader(cs []Cookie) string {
 	var b strings.Builder

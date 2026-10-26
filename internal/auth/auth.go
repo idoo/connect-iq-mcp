@@ -5,6 +5,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"io"
 	"time"
 )
 
@@ -34,3 +35,37 @@ type CredStatus struct {
 
 // ErrAuthRequired means a credential is missing or can no longer be renewed.
 var ErrAuthRequired = errors.New("auth_required")
+
+// LoginOptions configures an interactive sign-in.
+type LoginOptions struct {
+	// Connect also signs in to Garmin Connect.
+	Connect bool
+	// BrowserPath overrides browser auto-detection ("" = auto).
+	BrowserPath string
+	// Timeout bounds the wait for the human (0 = browser default).
+	Timeout time.Duration
+	// SkipIfValid returns without a browser when the requested credentials
+	// still work (portal cookies verify, Connect token valid or refreshable).
+	SkipIfValid bool
+	// Log receives human-readable progress lines; never secrets.
+	Log io.Writer
+}
+
+// LoginResult describes a sign-in, without secrets.
+type LoginResult struct {
+	// AlreadyValid means no browser was opened.
+	AlreadyValid  bool
+	DeveloperID   string
+	DeveloperName string
+	// PortalExpires is the developer-portal session expiry (zero if unknown).
+	PortalExpires time.Time
+	// Connect reports a Garmin Connect sign-in; ConnectName is its display name.
+	Connect     bool
+	ConnectName string
+}
+
+// Loginer is implemented by stores that can sign in through an interactive
+// browser window (the code path behind `ciq-mcp auth login`).
+type Loginer interface {
+	Login(ctx context.Context, o LoginOptions) (LoginResult, error)
+}

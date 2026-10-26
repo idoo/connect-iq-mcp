@@ -27,7 +27,7 @@ type authStatusOut struct {
 	Hint       string    `json:"hint,omitempty"`
 }
 
-const loginHint = "ask the user to run `ciq-mcp auth login` in a terminal"
+const loginHint = "call auth_login (it opens a browser window for the user to sign in), or ask the user to run `ciq-mcp auth login` in a terminal"
 
 func init() {
 	tool.Register(tool.New(tool.Meta{
@@ -42,12 +42,17 @@ func init() {
 }
 
 func authStatus(ctx context.Context, env *tool.Env, _ authStatusIn) (*tool.Result, error) {
+	return tool.OK(statusOut(ctx, env)), nil
+}
+
+// statusOut is the auth_status payload, also returned by auth_login.
+func statusOut(ctx context.Context, env *tool.Env) authStatusOut {
 	out := authStatusOut{Profile: env.Profile.Name}
 	if env.Credentials == nil {
 		out.Portal.Note = "not configured"
 		out.Connect.Note = "not configured"
 		out.Hint = loginHint
-		return tool.OK(out), nil
+		return out
 	}
 	st := env.Credentials.Status(ctx)
 	out.Configured = true
@@ -55,7 +60,7 @@ func authStatus(ctx context.Context, env *tool.Env, _ authStatusIn) (*tool.Resul
 	if !st.Portal.Present || !st.Connect.Present {
 		out.Hint = loginHint
 	}
-	return tool.OK(out), nil
+	return out
 }
 
 func state(c auth.CredStatus) credState {

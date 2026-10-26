@@ -1,0 +1,114 @@
+package core
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/idoo/ciq-mcp/internal/auth"
+	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/ciq-mcp/internal/tool/tooltest"
+)
+
+// loginCreds is a fake store whose Login is scripted per test.
+type loginCreds struct {
+	*tooltest.FakeCredentials
+	login func(auth.LoginOptions) (auth.LoginResult, error)
+	calls int
+}
+
+func (c *loginCreds) Login(_ context.Context, o auth.LoginOptions) (auth.LoginResult, error) {
+	c.calls++
+	return c.login(o)
+}
+
+func authLoginTool(t *testing.T) tool.Tool {
+	t.Helper()
+	tl, ok := tool.Lookup("auth_login")
+	if !ok {
+		t.Fatal("auth_login not registered")
+	}
+	return tl
+}
+
+func setEnv(t *testing.T, vars map[string]string) {
+	t.Helper()
+	old := getenv
+	getenv = func(k string) string { return vars[k] }
+	t.Cleanup(func() { getenv = old })
+}
+
+func TestAuthLoginAlreadySignedIn(t *testing.T) {
+	setEnv(t, nil)
+	k := tooltest.New(t)
+	lc := &loginCreds{FakeCredentials: k.Creds, login: func(o auth.LoginOptions) (auth.LoginResult, error) {
+		if !o.SkipIfValid || o.Timeout != 10*time.Minute || o.Connect {
+			return auth.LoginResult{}, fmt.Errorf("options = %+v", o)
+		}
+		return auth.LoginResult{AlreadyValid: true}, nil
+	}}
+	k.Env.Credentials = lc
+	res := tooltest.MustOK(t, tooltest.Call(t, authLoginTool(t), k.Env, `{}`))
+	out := res.Data.(authStatusOut)
+	if !out.Configured || !out.Portal.Present || lc.calls != 1 {
+		t.Fatalf("out = %+v, calls %d", out, lc.calls)
+	}
+}
+
+func TestAuthLoginSuccessAndFailure(t *testing.T) {
+	setEnv(t, nil)
+	k := tooltest.New(t)
+	k.Creds.Cookie, k.Creds.Token = "", ""
+	lc := &loginCreds{FakeCredentials: k.Creds, login: func(o auth.LoginOptions) (auth.LoginResult, error) {
+		if !o.Connect || o.Timeout != 3*time.Minute {
+			return auth.LoginResult{}, fmt.Errorf("options = %+v", o)
+		}
+		_, _ = o.Log.Write([]byte("Sign in to Garmin in the window that just opened.\n"))
+		k.Creds.Cookie, k.Creds.Token = "SESSION=new", "tok"
+		return auth.LoginResult{DeveloperID: "42"}, nil
+	}}
+	k.Env.Credentials = lc
+	res := tooltest.MustOK(t, tooltest.Call(t, authLoginTool(t), k.Env, `{"connect":true,"timeout_minutes":3}`))
+	out := res.Data.(authStatusOut)
+	if !out.Portal.Present || !out.Connect.Present || out.Hint != "" {
+		t.Fatalf("out = %+v", out)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", out), "SESSION=new") {
+		t.Fatal("secret leaked")
+	}
+
+	k.Creds.Cookie, k.Creds.Token = "", ""
+	lc.login = func(auth.LoginOptions) (auth.LoginResult, error) {
+		return auth.LoginResult{}, errors.New("sign-in timed out after 10m0s without finishing in the browser window; nothing was saved")
+	}
+	body := tooltest.MustFail(t, tooltest.Call(t, authLoginTool(t), k.Env, `{}`), "login_failed")
+	if !strings.Contains(body.Message, "nothing was saved") {
+		t.Fatalf("body = %+v", body)
+	}
+	if k.Creds.Cookie != "" {
+		t.Fatal("credentials saved after timeout")
+	}
+}
+
+func TestAuthLoginRefusals(t *testing.T) {
+	k := tooltest.New(t)
+	lc := &loginCreds{FakeCredentials: k.Creds, login: func(auth.LoginOptions) (auth.LoginResult, error) {
+		return auth.LoginResult{}, errors.New("developer-portal cookies come from CIQ_MCP_PORTAL_COOKIES; unset it to sign in with the browser")
+	}}
+	k.Env.Credentials = lc
+	setEnv(t, map[string]string{"CIQ_MCP_CI": "1"})
+	tooltest.MustFail(t, tooltest.Call(t, authLoginTool(t), k.Env, `{}`), "login_unavailable")
+	if lc.calls != 0 {
+		t.Fatalf("CI called Login %d times", lc.calls)
+	}
+
+	setEnv(t, nil)
+	body := tooltest.MustFail(t, tooltest.Call(t, authLoginTool(t), k.Env, `{}`), "login_failed")
+	if !strings.Contains(body.Message, "CIQ_MCP_PORTAL_COOKIES") {
+		t.Fatalf("body = %+v", body)
+	}
+	tooltest.MustFail(t, tooltest.Call(t, authLoginTool(t), k.Env, `{"timeout_minutes":16}`), "invalid_arguments")
+}

@@ -142,59 +142,68 @@ func cliStore(flagProfile string) (*Store, error) {
 }
 
 func (s *Store) cliLogin(ctx context.Context, stdout, stderr io.Writer, connect, paste bool, browserPath string) error {
-	unlock, err := lockPath(ctx, s.lockFile())
-	if err != nil {
-		return fmt.Errorf("lock credentials: %w", err)
-	}
-	defer unlock()
-	var res signInResult
+	var res auth.LoginResult
+	var err error
 	if paste {
 		if connect {
 			return errors.New("--paste only covers the developer portal; run login --connect without --paste for Garmin Connect")
 		}
-		raw, err := io.ReadAll(io.LimitReader(stdin, 1<<20))
-		if err != nil {
+		if res, err = s.pasteLogin(ctx); err != nil {
 			return err
 		}
-		header, err := portal.ParseCookieInput(string(raw))
-		if err != nil {
-			return err
-		}
-		dev, rotated, err := s.verify(ctx, s.hc, header)
-		if err != nil {
-			return err
-		}
-		p := &portalCred{Cookies: rotated, DeveloperID: dev.ID, DeveloperName: dev.Name, SavedAt: s.now().Unix()}
-		if err := s.savePortal(p); err != nil {
-			return err
-		}
-		res.Portal = p
-		res.Expires, _ = portal.SealExpiry(rotated)
-	} else {
-		o := browser.Options{ProfileDir: s.browserDir(), BrowserPath: browserPath, Log: stderr}
-		if res, err = s.signIn(ctx, o, true, connect); err != nil {
-			return err
-		}
+	} else if res, err = s.Login(ctx, auth.LoginOptions{Connect: connect, BrowserPath: browserPath, Log: stderr}); err != nil {
+		return err
 	}
-	if p := res.Portal; p != nil {
-		name := p.DeveloperName
-		if name == "" {
-			name = "developer"
-		}
-		valid := "unknown"
-		if !res.Expires.IsZero() {
-			valid = res.Expires.Local().Format("2006-01-02")
-		}
-		_, _ = fmt.Fprintf(stdout, "Signed in as %s (%s). Session valid until %s.\n", name, p.DeveloperID, valid)
+	name := res.DeveloperName
+	if name == "" {
+		name = "developer"
 	}
-	if c := res.Connect; c != nil {
-		who := c.DisplayName
+	valid := "unknown"
+	if !res.PortalExpires.IsZero() {
+		valid = res.PortalExpires.Local().Format("2006-01-02")
+	}
+	_, _ = fmt.Fprintf(stdout, "Signed in as %s (%s). Session valid until %s.\n", name, res.DeveloperID, valid)
+	if res.Connect {
+		who := res.ConnectName
 		if who == "" {
 			who = "your account"
 		}
 		_, _ = fmt.Fprintf(stdout, "Garmin Connect: signed in as %s.\n", who)
 	}
 	return nil
+}
+
+// pasteLogin stores a developer-portal Cookie header read from stdin.
+func (s *Store) pasteLogin(ctx context.Context) (auth.LoginResult, error) {
+	if err := s.refuseEnv(false); err != nil {
+		return auth.LoginResult{}, err
+	}
+	raw, err := io.ReadAll(io.LimitReader(stdin, 1<<20))
+	if err != nil {
+		return auth.LoginResult{}, err
+	}
+	header, err := portal.ParseCookieInput(string(raw))
+	if err != nil {
+		return auth.LoginResult{}, err
+	}
+	unlock, err := lockPath(ctx, s.lockFile())
+	if err != nil {
+		return auth.LoginResult{}, fmt.Errorf("lock credentials: %w", err)
+	}
+	defer unlock()
+	dev, rotated, err := s.verify(ctx, s.hc, header)
+	if err != nil {
+		return auth.LoginResult{}, err
+	}
+	if rotated == "" {
+		rotated = header
+	}
+	r := signInResult{Portal: &portalCred{Cookies: rotated, DeveloperID: dev.ID, DeveloperName: dev.Name, SavedAt: s.now().Unix()}}
+	r.Expires, _ = portal.SealExpiry(rotated)
+	if err := s.savePortal(r.Portal); err != nil {
+		return auth.LoginResult{}, err
+	}
+	return r.result(), nil
 }
 
 type statusJSON struct {

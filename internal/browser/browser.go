@@ -25,7 +25,8 @@ var ErrInteractionRequired = errors.New("garmin needs you to sign in")
 
 var errClosed = errors.New("browser closed before sign-in finished")
 
-const signInHint = "Sign in to Garmin in the window that just opened. Tick “Remember me” so ciq-mcp can renew the session without you for up to 6 months."
+// signInHint is printed when the interactive window opens; %s is the browser.
+const signInHint = "Sign in to Garmin in the %s window that just opened (separate ciq-mcp profile). Keep “Remember me” ticked (ciq-mcp ticks it for you) so the session renews without you for up to 6 months."
 
 // Options configures the browser launch.
 type Options struct {
@@ -34,6 +35,7 @@ type Options struct {
 	Headless    bool          // true for silent renewal
 	Timeout     time.Duration // overall; default 10 min interactive, 60 s headless
 	Log         io.Writer     // human-readable progress lines; never secrets
+	BinDir      string        // Chrome for Testing download dir; "" = <state dir>/browser-bin
 }
 
 // Cookie is a browser cookie.
@@ -71,6 +73,13 @@ type pageState struct {
 const stateJS = `(() => {
   const q = s => { try { return !!document.querySelector(s); } catch (e) { return false; } };
   const text = document.body ? document.body.innerText.slice(0, 4000) : "";
+  // Tick "Remember me" once per page; the long-lived SSO cookie it sets is
+  // what silent renewal relies on. A user who unticks it is left alone.
+  if (!window.__ciqRemember) {
+    const rm = [...document.querySelectorAll('input[type=checkbox]')].find(b =>
+      /remember/i.test([b.name, b.id, b.getAttribute('aria-label'), b.labels && b.labels[0] ? b.labels[0].innerText : ''].join(' ')));
+    if (rm) { window.__ciqRemember = true; if (!rm.checked) rm.click(); }
+  }
   return {
     url: location.href,
     title: document.title || "",
@@ -81,6 +90,12 @@ const stateJS = `(() => {
 })()`
 
 const pollEvery = 700 * time.Millisecond
+
+// raiseEvery and raiseFor bound keepFront's retries.
+const (
+	raiseEvery = 4 * time.Second
+	raiseFor   = 2 * time.Minute
+)
 
 // Login launches the browser with the dedicated profile and captures what r
 // asks for. One launch handles the portal first, then Connect.
@@ -104,41 +119,25 @@ func Login(ctx context.Context, o Options, r Request) (Result, error) {
 	if logw == nil {
 		logw = io.Discard
 	}
-	exe, err := Find(o.BrowserPath)
+	if o.BinDir == "" {
+		o.BinDir = defaultBinDir()
+	}
+	exe, name, note, err := resolveBrowser(ctx, o.BrowserPath, o.BinDir, logw)
 	if err != nil {
 		return Result{}, err
+	}
+	if note != "" {
+		fmt.Fprintln(logw, note)
 	}
 	if err := os.MkdirAll(o.ProfileDir, 0o700); err != nil {
 		return Result{}, fmt.Errorf("browser: create profile dir: %w", err)
 	}
 	_ = os.Chmod(o.ProfileDir, 0o700)
 
-	opts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
-	opts = append(opts,
-		chromedp.ExecPath(exe),
-		chromedp.UserDataDir(o.ProfileDir),
-		chromedp.Flag("enable-automation", false),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-	)
-	if !o.Headless {
-		opts = append(opts, chromedp.VisibleWindow)
-	}
-
-	// The allocator kills the process when ctx is cancelled.
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
-	defer cancelAlloc()
-	bctx, cancelB := chromedp.NewContext(allocCtx)
-	defer cancelB()
-	defer func() {
-		// Graceful close so the profile's cookie store is flushed to disk.
-		cctx, cancel := context.WithTimeout(bctx, 10*time.Second)
-		defer cancel()
-		_ = chromedp.Cancel(cctx)
-	}()
-
-	// First call starts the browser; it must not carry the overall timeout.
-	if err := chromedp.Do(bctx); err != nil {
-		return Result{}, fmt.Errorf("browser: start %s: %w", exe, err)
+	bctx, cleanup, err := start(ctx, o, exe)
+	defer cleanup()
+	if err != nil {
+		return Result{}, err
 	}
 	if o.Headless {
 		v, err := chromedp.CallBrowser(bctx, cdpbrowser.GetVersion, cdp.Empty{})
@@ -152,7 +151,7 @@ func Login(ctx context.Context, o Options, r Request) (Result, error) {
 
 	wctx, cancelW := context.WithTimeout(bctx, o.Timeout)
 	defer cancelW()
-	s := &session{ctx: wctx, parent: ctx, headless: o.Headless, log: logw}
+	s := &session{ctx: wctx, parent: ctx, headless: o.Headless, log: logw, name: name, raise: !o.Headless && canLaunchApp}
 	if t := chromedp.FromContext(bctx).Target; t != nil {
 		s.targetID = t.TargetID
 	}
@@ -183,6 +182,39 @@ type session struct {
 	log      io.Writer
 	targetID target.ID
 	hinted   bool
+	name     string // browser display name for progress lines
+
+	raise      bool // keep raising the window until it has had focus once
+	focused    bool
+	raiseSince time.Time
+	lastRaise  time.Time
+}
+
+// keepFront re-raises the interactive window until it has had focus once.
+// macOS cooperative activation refuses to activate another app while the user
+// is typing in the active one, so the raise at launch can land behind; a later
+// attempt succeeds once the user pauses. Gives up after raiseFor.
+func (s *session) keepFront() {
+	if !s.raise || s.focused {
+		return
+	}
+	now := time.Now()
+	if s.raiseSince.IsZero() {
+		s.raiseSince = now
+	}
+	if now.Sub(s.raiseSince) > raiseFor {
+		s.raise = false
+		return
+	}
+	if has, err := chromedp.Run(s.ctx, chromedp.Evaluate[bool](`document.hasFocus()`)); err == nil && has {
+		s.focused = true
+		return
+	}
+	if now.Sub(s.lastRaise) < raiseEvery {
+		return
+	}
+	s.lastRaise = now
+	raiseWindow(s.ctx)
 }
 
 func (s *session) hint() {
@@ -190,7 +222,7 @@ func (s *session) hint() {
 		return
 	}
 	s.hinted = true
-	fmt.Fprintln(s.log, signInHint)
+	fmt.Fprintf(s.log, signInHint+"\n", s.name)
 }
 
 func (s *session) navigate(u string) error {
@@ -270,6 +302,7 @@ func (s *session) interaction(st pageState) error {
 }
 
 func (s *session) sleep() error {
+	s.keepFront()
 	t := time.NewTimer(pollEvery)
 	defer t.Stop()
 	select {
@@ -439,6 +472,7 @@ func (s *session) connect() (string, error) {
 		fmt.Fprintln(s.log, "Waiting for the Garmin Connect sign-in to finish…")
 	}
 	for {
+		s.keepFront()
 		select {
 		case t := <-tickets:
 			_, _ = chromedp.Call(s.ctx, fetch.Disable, cdp.Empty{})

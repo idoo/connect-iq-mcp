@@ -57,7 +57,7 @@ func wrap(err error) error {
 		case 404:
 			ae.Hint = "no data for that date or id, or the endpoint is not available for this account"
 		case 403:
-			ae.Hint = "the Connect token lacks access; run `ciq-mcp auth login --connect`"
+			ae.Hint = "the Connect token lacks access; call auth_login with connect=true (or run `ciq-mcp auth login --connect`)"
 		}
 		return ae
 	}
@@ -317,11 +317,15 @@ func connectTraining(ctx context.Context, env *tool.Env, in dateIn) (*tool.Resul
 		return nil, err
 	}
 	c := client(env)
+	name, err := c.DisplayName(ctx)
+	if err != nil {
+		return nil, wrap(err)
+	}
 	out := map[string]any{"date": ymd(d)}
 	parts := []struct{ key, path string }{
 		{"readiness", "/metrics-service/metrics/trainingreadiness/" + ymd(d)},
 		{"status", "/metrics-service/metrics/trainingstatus/aggregated/" + ymd(d)},
-		{"race_predictions", "/metrics-service/metrics/racepredictions"},
+		{"race_predictions", "/metrics-service/metrics/racepredictions/latest/" + url.PathEscape(name)},
 	}
 	failed := 0
 	var last error

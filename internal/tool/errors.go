@@ -77,7 +77,7 @@ var (
 	ErrAuthRequired = &Error{
 		Code:    "auth_required",
 		Message: "Connect IQ credentials are missing or expired",
-		Hint:    "run `ciq-mcp auth login` in a terminal, then retry",
+		Hint:    "call the auth_login tool (it opens a browser window for the user to sign in), or ask the user to run `ciq-mcp auth login` in a terminal, then retry",
 	}
 	ErrUnavailable = &Error{
 		Code:    "unavailable",

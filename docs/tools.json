@@ -1,5 +1,35 @@
 [
   {
+    "name": "auth_login",
+    "toolset": "core",
+    "class": "W",
+    "title": "Sign in to Garmin",
+    "description": "Sign the user in to Garmin: opens a browser window, waits up to timeout_minutes (progress every 5 s; clients without progress may cancel after ~60 s). Returns auth_status at once if credentials still work. connect=true adds Garmin Connect. No secrets returned.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Sign in to Garmin"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "connect": {
+          "description": "also sign in to Garmin Connect (default false)",
+          "type": "boolean"
+        },
+        "timeout_minutes": {
+          "description": "how long to wait for the user to finish signing in, 1-15 (default 10)",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
     "name": "auth_status",
     "toolset": "core",
     "class": "R",
@@ -17,6 +47,1714 @@
     },
     "default_toolset": true,
     "confirm": "none"
+  },
+  {
+    "name": "connect_activities_list",
+    "toolset": "connect",
+    "class": "R",
+    "title": "List activities",
+    "description": "List your activities newest first: id, name (untrusted), type, start, duration, distance, avg HR, calories.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "List activities"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "activity_type": {
+          "description": "typeKey, e.g. running, cycling",
+          "type": "string"
+        },
+        "end_date": {
+          "description": "YYYY-MM-DD",
+          "type": "string"
+        },
+        "limit": {
+          "description": "1-100, default 20",
+          "type": "integer"
+        },
+        "start": {
+          "description": "offset, default 0",
+          "type": "integer"
+        },
+        "start_date": {
+          "description": "YYYY-MM-DD",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": false,
+    "confirm": "none"
+  },
+  {
+    "name": "connect_activity_download",
+    "toolset": "connect",
+    "class": "W",
+    "title": "Download activity",
+    "description": "Save an activity file (fit, tcx, gpx, csv, kml) into the project root. Returns the path and size, not the file.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Download activity"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "description": "file format, default fit",
+          "enum": [
+            "fit",
+            "tcx",
+            "gpx",
+            "csv",
+            "kml"
+          ],
+          "type": "string"
+        },
+        "id": {
+          "description": "activity id",
+          "type": "integer"
+        },
+        "path": {
+          "description": "output file inside the project root; default garmin/activity-\u003cid\u003e.\u003cformat\u003e",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "default_toolset": false,
+    "confirm": "none"
+  },
+  {
+    "name": "connect_activity_get",
+    "toolset": "connect",
+    "class": "R",
+    "title": "Get activity",
+    "description": "Read one activity's summary; optional laps/splits and sampled details.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get activity"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "details": {
+          "description": "include sampled metric details",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "activity id",
+          "type": "integer"
+        },
+        "splits": {
+          "description": "include laps/splits",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "default_toolset": false,
+    "confirm": "none"
+  },
+  {
+    "name": "connect_daily_summary",
+    "toolset": "connect",
+    "class": "R",
+    "title": "Daily summary",
+    "description": "Daily totals for one day: steps, calories, distance, floors, intensity minutes, resting HR, stress.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Daily summary"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "date": {
+          "description": "YYYY-MM-DD; default today (local time)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": false,
+    "confirm": "none"
+  },
+  {
+    "name": "connect_devices",
+    "toolset": "connect",
+    "class": "R",
+    "title": "Devices",
+    "description": "List your registered Garmin devices: model, part number, firmware, nickname (untrusted).",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Devices"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "default_toolset": false,
+    "confirm": "none"
+  },
+  {
+    "name": "connect_heart_rate",
+    "toolset": "connect",
+    "class": "R",
+    "title": "Heart rate",
+    "description": "Heart rate for one day: resting, min, max, 7-day resting average. Full series only with series:true.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Heart rate"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "date": {
+          "description": "YYYY-MM-DD; default today (local time)",
+          "type": "string"
+        },
+        "series": {
+          "description": "include the full time series",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": false,
+    "confirm": "none"
+  },
+  {
+    "name": "connect_hrv",
+    "toolset": "connect",
+    "class": "R",
+    "title": "HRV",
+    "description": "Heart rate variability for one night: weekly average, last night average, baseline, status.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "HRV"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "date": {
+          "description": "YYYY-MM-DD; default today (local time)",
+          "type": "string"
+        },
+        "series": {
+          "description": "include the full time series",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": false,
+    "confirm": "none"
+  },
+  {
+    "name": "connect_personal_records",
+    "toolset": "connect",
+    "class": "R",
+    "title": "Personal records",
+    "description": "List your personal records (fastest times, longest distances).",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Personal records"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "default_toolset": false,
+    "confirm": "none"
+  },
+  {
+    "name": "connect_profile",
+    "toolset": "connect",
+    "class": "R",
+    "title": "Connect profile",
+    "description": "Show your Garmin Connect profile: display name, full name and a settings summary (units, height, weight, VO2 max).",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Connect profile"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "default_toolset": false,
+    "confirm": "none"
+  },
+  {
+    "name": "connect_sleep",
+    "toolset": "connect",
+    "class": "R",
+    "title": "Sleep",
+    "description": "Sleep for one night: duration, stages, score. Per-minute series only with series:true.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Sleep"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "date": {
+          "description": "YYYY-MM-DD; default today (local time)",
+          "type": "string"
+        },
+        "series": {
+          "description": "include the full time series",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": false,
+    "confirm": "none"
+  },
+  {
+    "name": "connect_stress_body_battery",
+    "toolset": "connect",
+    "class": "R",
+    "title": "Stress and Body Battery",
+    "description": "Stress levels and Body Battery for one day. Full series only with series:true.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Stress and Body Battery"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "date": {
+          "description": "YYYY-MM-DD; default today (local time)",
+          "type": "string"
+        },
+        "series": {
+          "description": "include the full time series",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": false,
+    "confirm": "none"
+  },
+  {
+    "name": "connect_training",
+    "toolset": "connect",
+    "class": "R",
+    "title": "Training",
+    "description": "Training readiness, training status and race predictions for one day.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Training"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "date": {
+          "description": "YYYY-MM-DD; default today (local time)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": false,
+    "confirm": "none"
+  },
+  {
+    "name": "connect_weight",
+    "toolset": "connect",
+    "class": "R",
+    "title": "Weight",
+    "description": "Weigh-ins and body composition between two dates (at most 92 days).",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Weight"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "description": "YYYY-MM-DD; default today",
+          "type": "string"
+        },
+        "start": {
+          "description": "YYYY-MM-DD; default 30 days before end",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": false,
+    "confirm": "none"
+  },
+  {
+    "name": "sdk_build",
+    "toolset": "sdk",
+    "class": "W",
+    "title": "Build PRG (monkeyc)",
+    "description": "Compile the project for one device (debug, release or unit-test) with monkeyc; returns the PRG path and structured diagnostics.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Build PRG (monkeyc)"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "device": {
+          "description": "device id, e.g. fenix7",
+          "type": "string"
+        },
+        "jungle": {
+          "description": "jungle file relative to the project (default monkey.jungle)",
+          "type": "string"
+        },
+        "key": {
+          "description": "developer key (.der) inside the root",
+          "type": "string"
+        },
+        "output": {
+          "description": "PRG path inside the root (default \u003cproject\u003e/bin/\u003cdevice\u003e.prg)",
+          "type": "string"
+        },
+        "project": {
+          "description": "project dir inside the root (default: root)",
+          "type": "string"
+        },
+        "release": {
+          "description": "release build (-r)",
+          "type": "boolean"
+        },
+        "sdk": {
+          "description": "SDK path or installed version, e.g. 9.2.0; default CIQ_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
+          "type": "string"
+        },
+        "test": {
+          "description": "unit-test build (-t); not with release",
+          "type": "boolean"
+        },
+        "type_check": {
+          "description": "type check level 0-3 (-l)",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "device",
+        "key"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sdk_device_get",
+    "toolset": "sdk",
+    "class": "R",
+    "title": "Get device",
+    "description": "Full summary of one installed device: display, buttons, touch, app-type memory limits, CIQ version, languages.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Get device"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "device id as in manifest products, e.g. fenix7",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sdk_devices_list",
+    "toolset": "sdk",
+    "class": "R",
+    "title": "List devices",
+    "description": "Installed Connect IQ devices: id, name, shape, resolution, bpp, touch, max CIQ version. Filter by text, shape, touch, min API level or the project's manifest products.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "List devices"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "in_manifest": {
+          "description": "manifest.xml (or project dir) inside the root; keep only its products",
+          "type": "string"
+        },
+        "limit": {
+          "description": "max devices (default 200)",
+          "type": "integer"
+        },
+        "min_api": {
+          "description": "minimum Connect IQ version, e.g. 4.2.0",
+          "type": "string"
+        },
+        "query": {
+          "description": "case-insensitive substring of id or display name",
+          "type": "string"
+        },
+        "shape": {
+          "description": "screen shape",
+          "enum": [
+            "round",
+            "semiround",
+            "rectangle",
+            "semioctagon"
+          ],
+          "type": "string"
+        },
+        "touch": {
+          "description": "only touch (true) or non-touch (false) devices",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sdk_export",
+    "toolset": "sdk",
+    "class": "W",
+    "title": "Export store package (.iq)",
+    "description": "Build the store .iq for all manifest products (monkeyc -e -r). Slow (minutes); returns diagnostics grouped by device.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Export store package (.iq)"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "jungle": {
+          "description": "jungle file relative to the project (default monkey.jungle)",
+          "type": "string"
+        },
+        "key": {
+          "description": "developer key (.der) inside the root",
+          "type": "string"
+        },
+        "output": {
+          "description": "package path inside the root (default \u003cproject\u003e/release/\u003cdir\u003e.iq)",
+          "type": "string"
+        },
+        "project": {
+          "description": "project dir inside the root (default: root)",
+          "type": "string"
+        },
+        "sdk": {
+          "description": "SDK path or installed version, e.g. 9.2.0; default CIQ_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sdk_info",
+    "toolset": "sdk",
+    "class": "R",
+    "title": "Connect IQ SDK info",
+    "description": "Installed Connect IQ SDKs, the active one and which source picked it (arg/env/current-sdk.cfg/newest), Java, data root and device count.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Connect IQ SDK info"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "sdk": {
+          "description": "SDK path or installed version, e.g. 9.2.0",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sdk_key_check",
+    "toolset": "sdk",
+    "class": "R",
+    "title": "Check developer key",
+    "description": "Validate a developer key: PKCS#8 DER, RSA size, file permissions, SHA-256 fingerprint of the public key. Never returns key bytes.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Check developer key"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "developer key (.der) inside the root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sdk_key_generate",
+    "toolset": "sdk",
+    "class": "W",
+    "title": "Generate developer key",
+    "description": "Create an RSA-4096 PKCS#8 DER developer key (0600). Refuses to overwrite. Store updates need the same key forever: back it up. Without confirm:true previews.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Generate developer key"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "true after reviewing the preview",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "new key file inside the root, e.g. keys/developer_key.der",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "flag"
+  },
+  {
+    "name": "sdk_manifest_get",
+    "toolset": "sdk",
+    "class": "R",
+    "title": "Read manifest.xml",
+    "description": "Parse a project's manifest.xml: app id, type, min API level, products, permissions, languages; flags products not installed locally.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Read manifest.xml"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "manifest.xml or project dir inside the root (default: root)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sdk_manifest_set_products",
+    "toolset": "sdk",
+    "class": "W",
+    "title": "Edit manifest products",
+    "description": "Add/remove <iq:product> entries in manifest.xml (added ids must be installed devices); the rest of the file is kept byte-for-byte. Without confirm:true previews.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Edit manifest products"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "add": {
+          "description": "device ids to add (must be installed)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "confirm": {
+          "description": "true after reviewing the preview",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "manifest.xml or project dir inside the root (default: root)",
+          "type": "string"
+        },
+        "remove": {
+          "description": "device ids to remove",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "flag"
+  },
+  {
+    "name": "sim_crash_log",
+    "toolset": "simulator",
+    "class": "R",
+    "title": "Crash log",
+    "description": "Parse the newest entries of the simulator's CIQ_LOG.YML (error, details, app, file:line stack). Use after a run reports a crash. Headless.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Crash log"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "description": "newest entries to return, default 3",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sim_logs",
+    "toolset": "simulator",
+    "class": "R",
+    "title": "Session logs",
+    "description": "Read a monkeydo session's println/logger lines after a cursor (next_token), with latest_token, dropped count, exit and crash flags. Default: newest session.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Session logs"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "description": "cursor: return lines after this (next_token of the previous call)",
+          "type": "integer"
+        },
+        "limit": {
+          "description": "max lines, default 500",
+          "type": "integer"
+        },
+        "session_id": {
+          "description": "default: newest session",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sim_press",
+    "toolset": "simulator",
+    "class": "W",
+    "title": "Press button",
+    "description": "macOS: press/hold a simulator button via synthetic keys (menu = long up). Steals focus: requires allow_focus:true and Accessibility permission. Not on Linux/Windows.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Press button"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_focus": {
+          "description": "must be true: brings the simulator to front and sends keys",
+          "type": "boolean"
+        },
+        "button": {
+          "description": "simulator button",
+          "enum": [
+            "up",
+            "down",
+            "enter",
+            "esc",
+            "back",
+            "menu"
+          ],
+          "type": "string"
+        },
+        "hold_ms": {
+          "description": "hold time, default 100 (min 50; menu \u003e= 1100)",
+          "type": "integer"
+        },
+        "warmup": {
+          "description": "send an inert Shift first (first key after an app launch is swallowed)",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "button",
+        "allow_focus"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sim_run",
+    "toolset": "simulator",
+    "class": "W",
+    "title": "Run app in simulator",
+    "description": "Run a PRG (or build project+device first) on a device in the running simulator via monkeydo; returns a session id once the client prints or exits. Read output with sim_logs. No focus needed.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Run app in simulator"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "device": {
+          "description": "device id, e.g. fenix7",
+          "type": "string"
+        },
+        "key": {
+          "description": "developer key (.der) inside the root; required when building",
+          "type": "string"
+        },
+        "prg": {
+          "description": "PRG inside the root; omit to build project",
+          "type": "string"
+        },
+        "project": {
+          "description": "project dir inside the root to build (default: root)",
+          "type": "string"
+        },
+        "sdk": {
+          "description": "SDK path or installed version, e.g. 9.2.0; default CIQ_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
+          "type": "string"
+        },
+        "wait_seconds": {
+          "description": "max wait for first output, default 60 (device switch can take ~15 s)",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "device"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sim_screenshot",
+    "toolset": "simulator",
+    "class": "R",
+    "title": "Screenshot",
+    "description": "macOS: capture the simulator window (works behind other windows; needs Screen Recording and an unlocked screen), crop to the device display at native size, save PNG under the root and return it as an image.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Screenshot"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "device": {
+          "description": "device whose display to crop; default newest session's, else simulator.ini LastUsedDevice",
+          "type": "string"
+        },
+        "full_window": {
+          "description": "return the whole window instead of the cropped display",
+          "type": "boolean"
+        },
+        "output": {
+          "description": "PNG path inside the root (default sim-screenshots/\u003cdevice\u003e-\u003ctime\u003e.png)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sim_set_position",
+    "toolset": "simulator",
+    "class": "W",
+    "title": "Set GPS position",
+    "description": "macOS: set the simulated GPS position via Settings → Set Position. Steals focus: requires allow_focus:true and Accessibility permission. Not on Linux/Windows.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Set GPS position"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_focus": {
+          "description": "must be true: brings the simulator to front and drives its menu",
+          "type": "boolean"
+        },
+        "lat": {
+          "description": "latitude, decimal degrees",
+          "type": "number"
+        },
+        "lon": {
+          "description": "longitude, decimal degrees",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lat",
+        "lon",
+        "allow_focus"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sim_start",
+    "toolset": "simulator",
+    "class": "W",
+    "title": "Start simulator",
+    "description": "Start the Connect IQ simulator of the resolved SDK and wait until port 1234 is stable. Errors if a simulator of another SDK runs. Opens a GUI window; no focus or permissions needed.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Start simulator"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "sdk": {
+          "description": "SDK path or installed version, e.g. 9.2.0; default CIQ_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sim_status",
+    "toolset": "simulator",
+    "class": "R",
+    "title": "Simulator status",
+    "description": "Report whether the Connect IQ simulator runs (pid, SDK, port 1234 ready) and the monkeydo sessions of this server. No GUI or permissions needed.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Simulator status"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sim_stop",
+    "toolset": "simulator",
+    "class": "W",
+    "title": "Stop simulator",
+    "description": "Kill monkeydo sessions, then the simulator, and wait for port 1234 to close. Also recovers a wedged simulator.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Stop simulator"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "sim_test",
+    "toolset": "simulator",
+    "class": "W",
+    "title": "Run unit tests",
+    "description": "Run (:test) unit tests: build project with -t or take a test PRG, run monkeydo -t [filter] in the running simulator, parse the transcript (exit code ignored). No focus needed.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Run unit tests"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "device": {
+          "description": "device id, e.g. fenix7",
+          "type": "string"
+        },
+        "filter": {
+          "description": "run only this test name",
+          "type": "string"
+        },
+        "key": {
+          "description": "developer key (.der) inside the root; required when building",
+          "type": "string"
+        },
+        "prg": {
+          "description": "PRG inside the root; omit to build project",
+          "type": "string"
+        },
+        "project": {
+          "description": "project dir inside the root to build (default: root)",
+          "type": "string"
+        },
+        "sdk": {
+          "description": "SDK path or installed version, e.g. 9.2.0; default CIQ_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
+          "type": "string"
+        },
+        "wait_seconds": {
+          "description": "max wait for first output, default 60 (device switch can take ~15 s)",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "device"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "store_app_create",
+    "toolset": "store",
+    "class": "D",
+    "title": "Submit a new app",
+    "description": "Submit a brand-new app (.iq, icon, 1-5 screenshots, listing) for store review. Without confirm:true previews; a human approves.",
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Submit a new app"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "beta": {
+          "description": "private beta app (side-load only)",
+          "type": "boolean"
+        },
+        "category": {
+          "description": "category id from store_references categories",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "true after reviewing the preview",
+          "type": "boolean"
+        },
+        "countries": {
+          "description": "country ids from store_references countries; omit for the portal default",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dev_email": {
+          "description": "support email shown on the store page",
+          "type": "string"
+        },
+        "icon": {
+          "description": "500x500 png/jpg icon, max 300 KB",
+          "type": "string"
+        },
+        "locales": {
+          "description": "listing per locale; title and description required",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "description": {
+                "description": "max 4000 UTF-16 units",
+                "type": "string"
+              },
+              "locale": {
+                "description": "listing locale code from store_references languages, e.g. en",
+                "type": "string"
+              },
+              "title": {
+                "description": "max 50 UTF-16 units",
+                "type": "string"
+              },
+              "whats_new": {
+                "description": "max 4000 UTF-16 units",
+                "type": "string"
+              }
+            },
+            "required": [
+              "locale"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "path": {
+          "description": ".iq file inside the project root",
+          "type": "string"
+        },
+        "screenshots": {
+          "description": "1-5 images, max 150 KB each",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "version": {
+          "description": "external version, e.g. 1.0.0",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "version",
+        "category",
+        "dev_email",
+        "icon",
+        "screenshots",
+        "locales"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "human"
+  },
+  {
+    "name": "store_app_delete",
+    "toolset": "store",
+    "class": "D",
+    "title": "Delete an app",
+    "description": "Permanently delete an app from the Connect IQ store. Without confirm:true previews; a human approves.",
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Delete an app"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "app": {
+          "description": "store UUID, manifest id, or exact app title",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "true after reviewing the preview",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "app"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "human"
+  },
+  {
+    "name": "store_app_get",
+    "toolset": "store",
+    "class": "R",
+    "title": "Get app metadata",
+    "description": "Read an app's store metadata: manifest id, current version, category, devices, per-locale listing text (untrusted).",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get app metadata"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "app": {
+          "description": "store UUID, manifest id, or exact app title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "app"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "store_apps_list",
+    "toolset": "store",
+    "class": "R",
+    "title": "List store apps",
+    "description": "List your Connect IQ store apps with store UUID, title and review status.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "List store apps"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "store_compatible_devices",
+    "toolset": "store",
+    "class": "R",
+    "title": "Compatible devices",
+    "description": "List the devices an app version supports in the store.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Compatible devices"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "app": {
+          "description": "store UUID, manifest id, or exact app title",
+          "type": "string"
+        },
+        "internal_version": {
+          "description": "internal app version; default current",
+          "type": "string"
+        }
+      },
+      "required": [
+        "app"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "store_developer",
+    "toolset": "store",
+    "class": "R",
+    "title": "Developer account",
+    "description": "Show the signed-in Connect IQ developer account (id, name).",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Developer account"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "store_installs",
+    "toolset": "store",
+    "class": "R",
+    "title": "Install stats",
+    "description": "Show an app's install/download statistics over a date range.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Install stats"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "app": {
+          "description": "store UUID, manifest id, or exact app title",
+          "type": "string"
+        },
+        "end": {
+          "description": "end date",
+          "type": "string"
+        },
+        "start": {
+          "description": "start date as the portal expects, e.g. 2026-01-01",
+          "type": "string"
+        },
+        "temporal_level": {
+          "description": "e.g. DAY, WEEK, MONTH",
+          "type": "string"
+        }
+      },
+      "required": [
+        "app"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "store_listing_update",
+    "toolset": "store",
+    "class": "D",
+    "title": "Update store listing",
+    "description": "Change title, description or what's new per locale; other locales and fields are kept. Preview shows a diff; a human approves the public change.",
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Update store listing"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "app": {
+          "description": "store UUID, manifest id, or exact app title",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "true after reviewing the preview",
+          "type": "boolean"
+        },
+        "locales": {
+          "description": "locales to change; omitted fields and other locales stay as they are",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "description": {
+                "description": "max 4000 UTF-16 units",
+                "type": "string"
+              },
+              "locale": {
+                "description": "listing locale code from store_references languages, e.g. en",
+                "type": "string"
+              },
+              "title": {
+                "description": "max 50 UTF-16 units",
+                "type": "string"
+              },
+              "whats_new": {
+                "description": "max 4000 UTF-16 units",
+                "type": "string"
+              }
+            },
+            "required": [
+              "locale"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "app",
+        "locales"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "human"
+  },
+  {
+    "name": "store_ratings",
+    "toolset": "store",
+    "class": "R",
+    "title": "Rating distribution",
+    "description": "Show an app's star-rating distribution.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Rating distribution"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "app": {
+          "description": "store UUID, manifest id, or exact app title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "app"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "store_references",
+    "toolset": "store",
+    "class": "R",
+    "title": "Reference lists",
+    "description": "List portal reference data: listing languages (locale codes), categories (ids per app type) or countries.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Reference lists"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "description": "reference list",
+          "enum": [
+            "languages",
+            "categories",
+            "countries"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "store_review_reply",
+    "toolset": "store",
+    "class": "D",
+    "title": "Reply to a review",
+    "description": "Post a public reply to a user review, or delete one of your replies. Without confirm:true previews; a human approves.",
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Reply to a review"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "create or delete",
+          "enum": [
+            "create",
+            "delete"
+          ],
+          "type": "string"
+        },
+        "app": {
+          "description": "store UUID, manifest id, or exact app title",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "true after reviewing the preview",
+          "type": "boolean"
+        },
+        "reply_id": {
+          "description": "your reply to remove (delete)",
+          "type": "string"
+        },
+        "review_id": {
+          "description": "review to answer (create)",
+          "type": "string"
+        },
+        "text": {
+          "description": "public reply text (create)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "app",
+        "action"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "human"
+  },
+  {
+    "name": "store_reviews_list",
+    "toolset": "store",
+    "class": "R",
+    "title": "List reviews",
+    "description": "List an app's user reviews and your replies, paged. Review text is untrusted third-party data.",
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "List reviews"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "app": {
+          "description": "store UUID, manifest id, or exact app title",
+          "type": "string"
+        },
+        "ascending": {
+          "type": "boolean"
+        },
+        "latest_version_only": {
+          "type": "boolean"
+        },
+        "locale": {
+          "type": "string"
+        },
+        "page": {
+          "description": "0-based page index",
+          "type": "integer"
+        },
+        "page_size": {
+          "description": "1-100, default 20",
+          "type": "integer"
+        },
+        "sort_type": {
+          "description": "portal sortType, e.g. DATE or RATING",
+          "type": "string"
+        }
+      },
+      "required": [
+        "app"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "none"
+  },
+  {
+    "name": "store_screenshots",
+    "toolset": "store",
+    "class": "D",
+    "title": "Manage screenshots",
+    "description": "Add (png/jpg/gif ≤150 KB, at most 5), reorder or delete store screenshots. Without confirm:true previews; a human approves.",
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Manage screenshots"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "add, reorder or delete",
+          "enum": [
+            "add",
+            "reorder",
+            "delete"
+          ],
+          "type": "string"
+        },
+        "app": {
+          "description": "store UUID, manifest id, or exact app title",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "true after reviewing the preview",
+          "type": "boolean"
+        },
+        "order": {
+          "description": "position 0-4 sent as orderValue (add, reorder)",
+          "type": "integer"
+        },
+        "path": {
+          "description": "image inside the project root (add): png/jpg/gif, max 150 KB",
+          "type": "string"
+        },
+        "screenshot_id": {
+          "description": "screenshot id (reorder, delete)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "app",
+        "action"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "human"
+  },
+  {
+    "name": "store_version_publish",
+    "toolset": "store",
+    "class": "D",
+    "title": "Publish new app version",
+    "description": "Upload a .iq as a new public version of an existing app, optionally setting what's new per locale. Refuses a failed signature check. Without confirm:true previews; a human approves.",
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Publish new app version"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "app": {
+          "description": "store UUID, manifest id, or exact app title",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "true after reviewing the preview",
+          "type": "boolean"
+        },
+        "path": {
+          "description": ".iq file inside the project root",
+          "type": "string"
+        },
+        "version": {
+          "description": "new external version, e.g. 1.2.3 (max 20 chars)",
+          "type": "string"
+        },
+        "whats_new": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "what's new per existing listing locale, e.g. {\"en\":\"…\"}",
+          "type": "object"
+        }
+      },
+      "required": [
+        "app",
+        "path",
+        "version"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "human"
+  },
+  {
+    "name": "store_version_validate",
+    "toolset": "store",
+    "class": "W",
+    "title": "Validate .iq (dry run)",
+    "description": "Upload a .iq to the portal validator only: manifest id, signature check, devices. Nothing is published. Without confirm:true previews.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Validate .iq (dry run)"
+    },
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "app": {
+          "description": "existing app (store UUID, manifest id, or title); omit for a brand-new app",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "true after reviewing the preview",
+          "type": "boolean"
+        },
+        "path": {
+          "description": ".iq file inside the project root",
+          "type": "string"
+        },
+        "version": {
+          "description": "external version, e.g. 1.2.3 (max 20 chars)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "version"
+      ],
+      "type": "object"
+    },
+    "default_toolset": true,
+    "confirm": "flag"
   },
   {
     "name": "toolsets",

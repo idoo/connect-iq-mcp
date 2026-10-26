@@ -1,0 +1,136 @@
+package browser
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	cdpbrowser "github.com/chromedp/cdproto/browser"
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/target"
+	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/remote"
+)
+
+// windowSize is the interactive window size: a normal window, so it is not
+// mistaken for one of the user's own browser windows.
+const windowSize = "1100,900"
+
+// start launches the browser and returns a chromedp context bound to one tab.
+// cleanup is always non-nil and closes the browser gracefully (cookies are
+// flushed to the profile), killing it if it does not exit.
+func start(ctx context.Context, o Options, exe string) (context.Context, func(), error) {
+	if !o.Headless && canLaunchApp {
+		if bundle := appBundle(exe); bundle != "" {
+			return startApp(ctx, o, bundle)
+		}
+	}
+	return startExec(ctx, o, exe)
+}
+
+// startExec runs the browser as our child process (headless, non-macOS, or a
+// bare executable outside an .app bundle).
+func startExec(ctx context.Context, o Options, exe string) (context.Context, func(), error) {
+	opts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
+	opts = append(opts,
+		chromedp.ExecPath(exe),
+		chromedp.UserDataDir(o.ProfileDir),
+		chromedp.Flag("enable-automation", false),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+	)
+	if !o.Headless {
+		opts = append(opts, chromedp.VisibleWindow,
+			chromedp.Flag("start-maximized", false),
+			chromedp.Flag("window-size", windowSize))
+	}
+	// The allocator kills the process when ctx is cancelled.
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
+	bctx, cancelB := chromedp.NewContext(allocCtx)
+	cleanup := func() {
+		cctx, cancel := context.WithTimeout(bctx, 10*time.Second)
+		_ = chromedp.Cancel(cctx)
+		cancel()
+		cancelB()
+		cancelAlloc()
+	}
+	// First call starts the browser; it must not carry the overall timeout.
+	if err := chromedp.Do(bctx); err != nil {
+		return nil, cleanup, fmt.Errorf("browser: start %s: %w", exe, err)
+	}
+	return bctx, cleanup, nil
+}
+
+// startApp launches the .app through LaunchServices so its window comes to
+// the front, then attaches over the DevTools websocket.
+func startApp(ctx context.Context, o Options, bundle string) (context.Context, func(), error) {
+	ws, err := launchApp(ctx, bundle, o.ProfileDir, "about:blank")
+	if err != nil {
+		return nil, func() {}, err
+	}
+	allocCtx, cancelAlloc := remote.NewAllocator(ctx, ws, remote.NoModifyURL)
+	rootCtx, cancelRoot := chromedp.NewContext(allocCtx)
+	cancelTab := func() {}
+	cleanup := func() {
+		cancelTab()
+		cancelRoot()
+		cancelAlloc()
+		closeApp(ws, o.ProfileDir)
+	}
+	infos, err := chromedp.CallBrowser(rootCtx, target.GetTargets, target.GetTargetsParams{})
+	if err != nil {
+		return nil, cleanup, fmt.Errorf("browser: attach to %s: %w", bundle, err)
+	}
+	var tabOpts []chromedp.ContextOption
+	for _, t := range infos.TargetInfos {
+		if t.Type == "page" {
+			tabOpts = append(tabOpts, chromedp.WithTargetID(t.TargetID))
+			break
+		}
+	}
+	bctx, cancelB := chromedp.NewContext(rootCtx, tabOpts...)
+	cancelTab = cancelB
+	if err := chromedp.Do(bctx); err != nil {
+		return nil, cleanup, fmt.Errorf("browser: attach to %s tab: %w", bundle, err)
+	}
+	raiseWindow(bctx)
+	return bctx, cleanup, nil
+}
+
+// raiseWindow asks the browser itself to bring our window forward. A
+// LaunchServices launch can land behind the active app under macOS
+// cooperative activation; de-miniaturizing a window makes its app activate
+// it, and Page.bringToFront focuses the tab. Best effort: errors are ignored.
+func raiseWindow(ctx context.Context) {
+	t := chromedp.FromContext(ctx).Target
+	if t == nil {
+		return
+	}
+	w, err := chromedp.CallBrowser(ctx, cdpbrowser.GetWindowForTarget, cdpbrowser.GetWindowForTargetParams{TargetID: t.TargetID})
+	if err != nil {
+		return
+	}
+	setState := func(s cdpbrowser.WindowState) {
+		_, _ = chromedp.CallBrowser(ctx, cdpbrowser.SetWindowBounds, cdpbrowser.SetWindowBoundsParams{WindowID: w.WindowID, Bounds: &cdpbrowser.Bounds{WindowState: s}})
+	}
+	setState(cdpbrowser.WindowStateMinimized)
+	time.Sleep(400 * time.Millisecond)
+	setState(cdpbrowser.WindowStateNormal)
+	_, _ = chromedp.Call(ctx, page.BringToFront, cdp.Empty{})
+}
+
+// closeApp closes a browser we did not start as a child: Browser.close over a
+// fresh connection (the caller's may be cancelled), then wait for exit, then
+// kill the profile's processes.
+func closeApp(ws, profile string) {
+	cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	allocCtx, cancelAlloc := remote.NewAllocator(cctx, ws, remote.NoModifyURL)
+	bctx, cancelB := chromedp.NewContext(allocCtx)
+	_, _ = chromedp.CallBrowser(bctx, cdpbrowser.Close, cdp.Empty{})
+	cancelB()
+	cancelAlloc()
+	if !waitProfileExit(profile, 5*time.Second) {
+		killProfile(profile)
+	}
+}
