@@ -18,26 +18,26 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"github.com/idoo/ciq-mcp/internal/config"
-	"github.com/idoo/ciq-mcp/internal/tool"
-	_ "github.com/idoo/ciq-mcp/internal/tools/all" // registers every tool for the permissions list.
+	"github.com/idoo/garmin-mcp/internal/config"
+	"github.com/idoo/garmin-mcp/internal/tool"
+	_ "github.com/idoo/garmin-mcp/internal/tools/all" // registers every tool for the permissions list.
 )
 
 // clients lists the supported `config snippet|install` targets.
 var clients = []string{"claude-code", "claude-desktop", "codex", "cursor", "vscode", "windsurf"}
 
 // serverName is the MCP server name used in every client config.
-const serverName = "ciq-mcp"
+const serverName = "garmin-mcp"
 
 // sessionTools are read-only tools the server adds per session (not in the
 // tool registry).
 var sessionTools = []string{"toolsets"}
 
-// configUsage is printed for `ciq-mcp config --help` and misuse.
-var configUsage = "usage: ciq-mcp config <snippet|install> <client> [--profile NAME]\nclients: " + strings.Join(clients, ", ")
+// configUsage is printed for `garmin-mcp config --help` and misuse.
+var configUsage = "usage: garmin-mcp config <snippet|install> <client> [--profile NAME]\nclients: " + strings.Join(clients, ", ")
 
-// credentialsNote reminds that credentials come from `ciq-mcp auth`.
-const credentialsNote = "credentials: run `ciq-mcp auth login` once in a terminal; the server reads them from the OS keychain"
+// credentialsNote reminds that credentials come from `garmin-mcp auth`.
+const credentialsNote = "credentials: run `garmin-mcp auth login` once in a terminal; the server reads them from the OS keychain"
 
 func runConfig(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
@@ -46,7 +46,7 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("config "+sub, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	profile := fs.String("profile", "", "pin the server to this profile via CIQ_MCP_PROFILE")
+	profile := fs.String("profile", "", "pin the server to this profile via GARMIN_MCP_PROFILE")
 	if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
 		return usageErr(configUsage)
 	}
@@ -101,12 +101,12 @@ func wantsHelp(args []string) bool {
 }
 
 // binaryPath returns the path clients should launch: a stable PATH location
-// (e.g. /opt/homebrew/bin/ciq-mcp), never the versioned Homebrew Cellar path,
+// (e.g. /opt/homebrew/bin/garmin-mcp), never the versioned Homebrew Cellar path,
 // which `brew upgrade` deletes.
 func binaryPath() (string, error) {
 	p, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("locate ciq-mcp binary: %w", err)
+		return "", fmt.Errorf("locate garmin-mcp binary: %w", err)
 	}
 	return stableBinaryPath(p, exec.LookPath), nil
 }
@@ -143,7 +143,7 @@ func profileEnv(profile string) map[string]string {
 	return env
 }
 
-// readToolPermissions lists `mcp__ciq-mcp__<tool>` for every read-class tool.
+// readToolPermissions lists `mcp__garmin-mcp__<tool>` for every read-class tool.
 func readToolPermissions() []string {
 	var out []string
 	for _, t := range tool.All() {
@@ -184,7 +184,7 @@ func snippet(client, bin, profile string, perms []string) (string, error) {
 	switch client {
 	case "claude-code":
 		var b strings.Builder
-		b.WriteString("# Register ciq-mcp for every project:\n")
+		b.WriteString("# Register garmin-mcp for every project:\n")
 		b.WriteString(shellJoin(claudeAddArgs(bin, profile)...) + "\n\n")
 		b.WriteString("# Optional: pre-approve read-only tools in ~/.claude/settings.json:\n")
 		perm, err := json.MarshalIndent(map[string]any{"permissions": map[string]any{"allow": perms}}, "", "  ")
@@ -227,13 +227,13 @@ func shellJoin(args ...string) string {
 }
 
 // Codex timeouts: Codex's defaults (10 s startup, 60 s per tool) cut off
-// builds_wait and report fan-outs before ciq-mcp's own limits.
+// builds_wait and report fan-outs before garmin-mcp's own limits.
 const (
 	codexStartupTimeout = "startup_timeout_sec = 20"
 	codexToolTimeout    = "tool_timeout_sec = 330"
 )
 
-// codexBlock renders the [mcp_servers.ciq-mcp] table.
+// codexBlock renders the [mcp_servers.garmin-mcp] table.
 func codexBlock(bin, profile string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[mcp_servers.%s]\ncommand = %s\nargs = []\n%s\n%s\n", serverName, tomlString(bin), codexStartupTimeout, codexToolTimeout)
@@ -305,7 +305,7 @@ func installClaudeCode(bin, profile string, stdout io.Writer) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, exec.ErrNotFound):
-		fmt.Fprintf(stdout, "Claude Code CLI not found. Run this once it's installed (or see `ciq-mcp config snippet claude-code`):\n  %s\n", shellJoin(args...))
+		fmt.Fprintf(stdout, "Claude Code CLI not found. Run this once it's installed (or see `garmin-mcp config snippet claude-code`):\n  %s\n", shellJoin(args...))
 		return nil
 	case ctx.Err() != nil:
 		fmt.Fprintf(stdout, "`claude mcp add` didn't finish in %s. Run it yourself:\n  %s\n", claudeTimeout, shellJoin(args...))
@@ -353,7 +353,7 @@ type mergeResult struct {
 }
 
 // mergeFile rewrites path with merge(old). An existing file is first copied
-// to path.ciq-mcp-backup-<timestamp>. The new content is written atomically,
+// to path.garmin-mcp-backup-<timestamp>. The new content is written atomically,
 // keeping the old file mode (0600 for new files). Identical content is left
 // alone: no backup, no write.
 func mergeFile(path string, merge func(old []byte) ([]byte, error)) (mergeResult, error) {
@@ -381,7 +381,7 @@ func mergeFile(path string, merge func(old []byte) ([]byte, error)) (mergeResult
 	}
 	backup := ""
 	if exists {
-		backup = path + ".ciq-mcp-backup-" + time.Now().UTC().Format("20060102T150405Z")
+		backup = path + ".garmin-mcp-backup-" + time.Now().UTC().Format("20060102T150405Z")
 		if err := os.WriteFile(backup, old, mode); err != nil { //nolint:gosec // backup next to the client config path we chose.
 			return mergeResult{}, fmt.Errorf("backup %s: %w", path, err)
 		}
@@ -433,7 +433,7 @@ func mergeJSONServer(old []byte, key, name string, entry map[string]any) ([]byte
 	return append(out, '\n'), nil
 }
 
-// mergeCodexTOML replaces the [mcp_servers.ciq-mcp] table (and its sub-tables)
+// mergeCodexTOML replaces the [mcp_servers.garmin-mcp] table (and its sub-tables)
 // with block, keeping every other line, including comments. Timeouts the user
 // set in the old table are kept. The result must parse as TOML.
 func mergeCodexTOML(old []byte, block string) ([]byte, error) {

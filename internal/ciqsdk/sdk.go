@@ -22,8 +22,8 @@ const (
 	SourceNewest = "newest"
 )
 
-// Env vars naming an SDK (path or version); CIQ_MCP_SDK wins over CIQ_SDK.
-var EnvVars = []string{"CIQ_MCP_SDK", "CIQ_SDK"}
+// Env vars naming an SDK (path or version); GARMIN_MCP_SDK wins over CIQ_SDK.
+var EnvVars = []string{"GARMIN_MCP_SDK", "CIQ_SDK"}
 
 // SDK is one installed SDK.
 type SDK struct {
@@ -188,7 +188,7 @@ type ResolveOpts struct {
 	Getenv   func(string) string
 }
 
-// Resolve picks the SDK: explicit arg → CIQ_MCP_SDK/CIQ_SDK → current-sdk.cfg →
+// Resolve picks the SDK: explicit arg → GARMIN_MCP_SDK/CIQ_SDK → current-sdk.cfg →
 // newest installed. A source that is set but broken is an error, never a
 // silent fall-through.
 func Resolve(o ResolveOpts) (Resolved, error) {
@@ -237,7 +237,7 @@ func Resolve(o ResolveOpts) (Resolved, error) {
 		}
 		return Resolved{SDK: v, Source: SourceNewest}, nil
 	}
-	return Resolved{}, fmt.Errorf("no Connect IQ SDK found under %s; install one with SdkManager or set CIQ_MCP_SDK", filepath.Join(o.DataRoot, "Sdks"))
+	return Resolved{}, fmt.Errorf("no Connect IQ SDK found under %s; install one with SdkManager or set GARMIN_MCP_SDK", filepath.Join(o.DataRoot, "Sdks"))
 }
 
 // pick resolves a path or an installed version string.

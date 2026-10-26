@@ -7,8 +7,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/idoo/ciq-mcp/internal/redact"
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/redact"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 type sessionKey struct{}
@@ -126,7 +126,7 @@ func canElicit(ss *mcp.ServerSession) bool {
 }
 
 // render converts a tool result into an MCP result: structuredContent is
-// {data, next, _meta:{ciq}}, the text content is its compact JSON (or
+// {data, next, _meta:{garmin}}, the text content is its compact JSON (or
 // Result.Text), images follow, and everything is capped and redacted.
 func (s *session) render(r *tool.Result) *mcp.CallToolResult {
 	s.markLocked(r)
@@ -138,7 +138,7 @@ func (s *session) render(r *tool.Result) *mcp.CallToolResult {
 	if trunc != nil {
 		r.Meta.Truncated = trunc
 	}
-	obj := map[string]any{"_meta": map[string]any{"ciq": r.Meta}}
+	obj := map[string]any{"_meta": map[string]any{"garmin": r.Meta}}
 	if data != nil {
 		obj["data"] = data
 	}

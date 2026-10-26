@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/auth"
 )
 
 // BaseURL is the Connect API host.

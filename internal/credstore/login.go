@@ -7,16 +7,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
-	"github.com/idoo/ciq-mcp/internal/browser"
-	"github.com/idoo/ciq-mcp/internal/portal"
+	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/browser"
+	"github.com/idoo/garmin-mcp/internal/portal"
 )
 
 var _ auth.Loginer = (*Store)(nil)
 
 // Login signs in through the dedicated browser profile (interactive window)
 // and stores what it captured. It is the one code path behind both
-// `ciq-mcp auth login` and the auth_login tool. On any error nothing is saved.
+// `garmin-mcp auth login` and the auth_login tool. On any error nothing is saved.
 func (s *Store) Login(ctx context.Context, o auth.LoginOptions) (auth.LoginResult, error) {
 	if err := s.refuseEnv(o.Connect); err != nil {
 		return auth.LoginResult{}, err
@@ -45,10 +45,10 @@ func (s *Store) refuseEnv(connect bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.envPortal != nil {
-		return errors.New("developer-portal cookies come from CIQ_MCP_PORTAL_COOKIES; unset it to sign in with the browser")
+		return errors.New("developer-portal cookies come from GARMIN_MCP_PORTAL_COOKIES; unset it to sign in with the browser")
 	}
 	if connect && s.envConnect != nil {
-		return errors.New("the Garmin Connect token comes from CIQ_MCP_CONNECT_REFRESH_TOKEN; unset it to sign in with the browser")
+		return errors.New("the Garmin Connect token comes from GARMIN_MCP_CONNECT_REFRESH_TOKEN; unset it to sign in with the browser")
 	}
 	return nil
 }
@@ -115,7 +115,7 @@ func (r signInResult) result() auth.LoginResult {
 func loginError(ctx context.Context, err error, timeout time.Duration) error {
 	switch {
 	case errors.Is(err, browser.ErrNoBrowser):
-		return fmt.Errorf("%w: set %s to a Chrome, Edge, Brave or Chromium executable; when none is installed ciq-mcp downloads a pinned Chrome for Testing on first use", err, browser.EnvBrowser)
+		return fmt.Errorf("%w: set %s to a Chrome, Edge, Brave or Chromium executable; when none is installed garmin-mcp downloads a pinned Chrome for Testing on first use", err, browser.EnvBrowser)
 	case ctx.Err() != nil:
 		return fmt.Errorf("sign-in cancelled; nothing was saved: %w", ctx.Err())
 	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "timed out"):

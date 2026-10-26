@@ -3,16 +3,16 @@
 #   goreleaser release --snapshot --clean --skip=publish,sign,docker
 version: 2
 
-project_name: ciq-mcp
+project_name: garmin-mcp
 
 before:
   hooks:
     - go mod download
 
 builds:
-  - id: ciq-mcp
-    main: ./cmd/ciq-mcp
-    binary: ciq-mcp
+  - id: garmin-mcp
+    main: ./cmd/garmin-mcp
+    binary: garmin-mcp
     env:
       - CGO_ENABLED=0
     goos: [darwin, linux, windows]
@@ -26,17 +26,17 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 # Fat darwin binary for the .mcpb bundle only (mcpb platform overrides are
-# per-OS, not per-arch). Archives below take only the per-arch `ciq-mcp` builds.
+# per-OS, not per-arch). Archives below take only the per-arch `garmin-mcp` builds.
 universal_binaries:
-  - id: ciq-mcp-universal
-    ids: [ciq-mcp]
-    name_template: ciq-mcp
+  - id: garmin-mcp-universal
+    ids: [garmin-mcp]
+    name_template: garmin-mcp
     replace: false
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
-  - id: ciq-mcp
-    ids: [ciq-mcp]
+  - id: garmin-mcp
+    ids: [garmin-mcp]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     format_overrides:
@@ -58,7 +58,7 @@ sboms:
 # Keyless cosign (GitHub OIDC) over checksums.txt; the bundle covers every
 # archive through its sha256. Verify:
 #   cosign verify-blob --bundle checksums.txt.sigstore.json \
-#     --certificate-identity-regexp '^https://github.com/idoo/ciq-mcp/.github/workflows/release.yml@refs/tags/v' \
+#     --certificate-identity-regexp '^https://github.com/idoo/garmin-mcp/.github/workflows/release.yml@refs/tags/v' \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
 signs:
   - id: checksums
@@ -69,10 +69,10 @@ signs:
 
 # Docker image, distroless static, multi-arch: stdio by default; HTTP needs --allow-remote and TLS.
 dockers_v2:
-  - id: ciq-mcp
-    ids: [ciq-mcp]
+  - id: garmin-mcp
+    ids: [garmin-mcp]
     images:
-      - ghcr.io/idoo/ciq-mcp
+      - ghcr.io/idoo/garmin-mcp
     tags:
       - "{{ .Version }}"
       - "{{ if not .Prerelease }}latest{{ end }}"
@@ -81,13 +81,13 @@ dockers_v2:
       - linux/amd64
       - linux/arm64
     labels:
-      org.opencontainers.image.title: ciq-mcp
+      org.opencontainers.image.title: garmin-mcp
       org.opencontainers.image.description: MCP server for Connect IQ, read-only by default
-      org.opencontainers.image.source: https://github.com/idoo/ciq-mcp
+      org.opencontainers.image.source: https://github.com/idoo/garmin-mcp
       org.opencontainers.image.version: "{{ .Version }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.licenses: MIT
-      io.modelcontextprotocol.server.name: io.github.idoo/ciq-mcp
+      io.modelcontextprotocol.server.name: io.github.idoo/garmin-mcp
 
 changelog:
   use: git
@@ -118,7 +118,7 @@ changelog:
 release:
   github:
     owner: idoo
-    name: ciq-mcp
+    name: garmin-mcp
   prerelease: auto
   # Immutable releases: goreleaser only creates a draft; release.yml adds the
   # .mcpb, tools.json and attestations, then publishes it as the last step.
@@ -126,10 +126,10 @@ release:
   replace_existing_draft: false
   mode: keep-existing
   footer: |
-    **Install:** `brew install idoo/tap/ciq-mcp`, `curl -fsSL https://raw.githubusercontent.com/idoo/ciq-mcp/main/install.sh | sh`,
-    `go install github.com/idoo/ciq-mcp/cmd/ciq-mcp@{{ .Tag }}`, `docker pull ghcr.io/idoo/ciq-mcp:{{ .Version }}`,
-    or `ciq-mcp-{{ .Version }}.mcpb` for Claude Desktop.
+    **Install:** `brew install idoo/tap/garmin-mcp`, `curl -fsSL https://raw.githubusercontent.com/idoo/garmin-mcp/main/install.sh | sh`,
+    `go install github.com/idoo/garmin-mcp/cmd/garmin-mcp@{{ .Tag }}`, `docker pull ghcr.io/idoo/garmin-mcp:{{ .Version }}`,
+    or `garmin-mcp-{{ .Version }}.mcpb` for Claude Desktop.
 
-    **Verify:** `gh attestation verify ciq-mcp_{{ .Version }}_<os>_<arch>.tar.gz --repo idoo/ciq-mcp`, or
-    `cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '^https://github.com/idoo/ciq-mcp/.github/workflows/release.yml@refs/tags/v' --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt`.
-    The .mcpb is listed in `ciq-mcp-{{ .Version }}.mcpb.sha256`.
+    **Verify:** `gh attestation verify garmin-mcp_{{ .Version }}_<os>_<arch>.tar.gz --repo idoo/garmin-mcp`, or
+    `cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '^https://github.com/idoo/garmin-mcp/.github/workflows/release.yml@refs/tags/v' --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt`.
+    The .mcpb is listed in `garmin-mcp-{{ .Version }}.mcpb.sha256`.

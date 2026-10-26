@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/ciqsdk"
-	"github.com/idoo/ciq-mcp/internal/state"
+	"github.com/idoo/garmin-mcp/internal/ciqsdk"
+	"github.com/idoo/garmin-mcp/internal/state"
 )
 
 // Addr is the simulator's loopback command port.

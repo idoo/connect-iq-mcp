@@ -16,7 +16,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/auth"
 )
 
 // maxBody caps how much of a portal response is read.

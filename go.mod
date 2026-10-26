@@ -1,4 +1,4 @@
-module github.com/idoo/ciq-mcp
+module github.com/idoo/garmin-mcp
 
 go 1.25.0
 

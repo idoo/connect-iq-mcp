@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
-	"github.com/idoo/ciq-mcp/internal/tool/tooltest"
+	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
 )
 
 func kit(t *testing.T, h http.HandlerFunc) *tooltest.Kit {

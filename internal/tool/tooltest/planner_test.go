@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/mcpserver"
-	"github.com/idoo/ciq-mcp/internal/tool"
-	"github.com/idoo/ciq-mcp/internal/tool/tooltest"
+	"github.com/idoo/garmin-mcp/internal/mcpserver"
+	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
 )
 
 func TestPlannerConformanceFake(t *testing.T) {

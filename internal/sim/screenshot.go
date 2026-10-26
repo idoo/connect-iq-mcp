@@ -90,10 +90,10 @@ func CaptureWindow(ctx context.Context, id int, path string) error {
 	}
 	out, err := exec.CommandContext(ctx, "screencapture", "-x", "-o", "-l", fmt.Sprint(id), path).CombinedOutput()
 	if err != nil || len(out) > 0 && strings.Contains(string(out), "could not create image") {
-		return fmt.Errorf("screencapture failed (grant Screen Recording to the app running ciq-mcp): %v %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("screencapture failed (grant Screen Recording to the app running garmin-mcp): %v %s", err, strings.TrimSpace(string(out)))
 	}
 	if fi, err := os.Stat(path); err != nil || fi.Size() == 0 {
-		return errors.New("screencapture wrote no image (grant Screen Recording to the app running ciq-mcp)")
+		return errors.New("screencapture wrote no image (grant Screen Recording to the app running garmin-mcp)")
 	}
 	return nil
 }

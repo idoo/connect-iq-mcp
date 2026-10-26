@@ -12,9 +12,9 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/ciqsdk"
-	"github.com/idoo/ciq-mcp/internal/sim"
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/ciqsdk"
+	"github.com/idoo/garmin-mcp/internal/sim"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 func init() {
@@ -112,7 +112,7 @@ func simStatus(ctx context.Context, _ *tool.Env, _ noIn) (*tool.Result, error) {
 }
 
 type sdkIn struct {
-	SDK string `json:"sdk,omitempty" jsonschema:"SDK path or installed version, e.g. 9.2.0; default CIQ_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest"`
+	SDK string `json:"sdk,omitempty" jsonschema:"SDK path or installed version, e.g. 9.2.0; default GARMIN_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest"`
 }
 
 func simStart(ctx context.Context, env *tool.Env, in sdkIn) (*tool.Result, error) {
@@ -156,7 +156,7 @@ func simStop(ctx context.Context, env *tool.Env, _ noIn) (*tool.Result, error) {
 // --- run / test ---
 
 type runIn struct {
-	SDK     string `json:"sdk,omitempty" jsonschema:"SDK path or installed version, e.g. 9.2.0; default CIQ_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest"`
+	SDK     string `json:"sdk,omitempty" jsonschema:"SDK path or installed version, e.g. 9.2.0; default GARMIN_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest"`
 	Device  string `json:"device" jsonschema:"device id, e.g. fenix7"`
 	PRG     string `json:"prg,omitempty" jsonschema:"PRG inside the root; omit to build project"`
 	Project string `json:"project,omitempty" jsonschema:"project dir inside the root to build (default: root)"`

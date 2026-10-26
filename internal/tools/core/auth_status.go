@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 type authStatusIn struct{}
@@ -27,7 +27,7 @@ type authStatusOut struct {
 	Hint       string    `json:"hint,omitempty"`
 }
 
-const loginHint = "call auth_login (it opens a browser window for the user to sign in), or ask the user to run `ciq-mcp auth login` in a terminal"
+const loginHint = "call auth_login (it opens a browser window for the user to sign in), or ask the user to run `garmin-mcp auth login` in a terminal"
 
 func init() {
 	tool.Register(tool.New(tool.Meta{

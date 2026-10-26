@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/idoo/ciq-mcp/internal/portal"
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/portal"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 type localeEdit struct {

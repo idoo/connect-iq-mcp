@@ -9,10 +9,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
-	"github.com/idoo/ciq-mcp/internal/config"
-	"github.com/idoo/ciq-mcp/internal/state"
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/config"
+	"github.com/idoo/garmin-mcp/internal/state"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // httpTimeout bounds one outbound request.
@@ -20,7 +20,7 @@ const httpTimeout = 2 * time.Minute
 
 // NewEnv builds the base tool environment for resolved. Without configured
 // credentials Env.Credentials stays nil and tools report auth_required. The
-// file root comes from CIQ_MCP_ROOT when set (see [ProjectFiles]).
+// file root comes from GARMIN_MCP_ROOT when set (see [ProjectFiles]).
 func NewEnv(ctx context.Context, r *config.Resolved, version string) (*tool.Env, error) {
 	return newEnv(ctx, r, version, os.Getenv(config.EnvRoot))
 }
@@ -45,7 +45,7 @@ func newEnv(ctx context.Context, r *config.Resolved, version, root string) (*too
 	}
 	env := &tool.Env{
 		HTTP: &http.Client{
-			Transport: userAgent{base: tool.GuardWrites(nil), ua: "ciq-mcp/" + version},
+			Transport: userAgent{base: tool.GuardWrites(nil), ua: "garmin-mcp/" + version},
 			Timeout:   httpTimeout,
 		},
 		State:     store,

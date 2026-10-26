@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/auth"
 )
 
 func seal(ms int64) string {

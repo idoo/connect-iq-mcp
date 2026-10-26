@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
-	"github.com/idoo/ciq-mcp/internal/config"
+	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/config"
 )
 
 // report collects doctor lines and remembers failures.
@@ -49,7 +49,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 }
 
 func doctor(ctx context.Context, rep *report, profile string) {
-	fmt.Fprintf(rep.w, "ciq-mcp %s\n", buildVersion())
+	fmt.Fprintf(rep.w, "garmin-mcp %s\n", buildVersion())
 	r, err := config.Resolve(config.Options{Flags: config.Flags{Profile: profile}})
 	if err != nil {
 		rep.fail("config: %v", err)
@@ -96,7 +96,7 @@ func credentialChecks(ctx context.Context, rep *report, profile string) {
 		return
 	}
 	if store == nil {
-		rep.warn("credentials: none configured; run `ciq-mcp auth login`")
+		rep.warn("credentials: none configured; run `garmin-mcp auth login`")
 		return
 	}
 	st := store.Status(ctx)
@@ -106,7 +106,7 @@ func credentialChecks(ctx context.Context, rep *report, profile string) {
 
 func credLine(rep *report, name string, c auth.CredStatus) {
 	if !c.Present {
-		rep.warn("%s: missing; run `ciq-mcp auth login`%s", name, note(c.Note))
+		rep.warn("%s: missing; run `garmin-mcp auth login`%s", name, note(c.Note))
 		return
 	}
 	line := fmt.Sprintf("%s: present (%s)", name, c.Source)

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 type toolsetsIn struct {
@@ -158,25 +158,25 @@ func clientName(ctx context.Context) string {
 	return ""
 }
 
-// writesInstructions returns copy-paste steps to restart ciq-mcp with writes on
+// writesInstructions returns copy-paste steps to restart garmin-mcp with writes on
 // for the detected MCP client.
 func writesInstructions(client string) string {
-	const tail = " Then restart the client. Alternatively set allow_writes = true in the profile in ~/.config/ciq-mcp/config.toml."
+	const tail = " Then restart the client. Alternatively set allow_writes = true in the profile in ~/.config/garmin-mcp/config.toml."
 	c := strings.ToLower(client)
 	switch {
 	case strings.Contains(c, "claude-code") || strings.Contains(c, "claude code"):
-		return "Ask the user to run: claude mcp remove ciq-mcp -s user && claude mcp add ciq-mcp -s user -e CIQ_MCP_ALLOW_WRITES=1 <existing -e flags> -- ciq-mcp." + tail
+		return "Ask the user to run: claude mcp remove garmin-mcp -s user && claude mcp add garmin-mcp -s user -e GARMIN_MCP_ALLOW_WRITES=1 <existing -e flags> -- garmin-mcp." + tail
 	case strings.Contains(c, "claude"):
-		return `Ask the user to add "CIQ_MCP_ALLOW_WRITES": "1" to mcpServers.ciq-mcp.env in claude_desktop_config.json.` + tail
+		return `Ask the user to add "GARMIN_MCP_ALLOW_WRITES": "1" to mcpServers.garmin-mcp.env in claude_desktop_config.json.` + tail
 	case strings.Contains(c, "cursor"):
-		return `Ask the user to add "CIQ_MCP_ALLOW_WRITES": "1" to mcpServers.ciq-mcp.env in ~/.cursor/mcp.json.` + tail
+		return `Ask the user to add "GARMIN_MCP_ALLOW_WRITES": "1" to mcpServers.garmin-mcp.env in ~/.cursor/mcp.json.` + tail
 	case strings.Contains(c, "codex"):
-		return `Ask the user to add CIQ_MCP_ALLOW_WRITES = "1" to env of [mcp_servers.ciq-mcp] in ~/.codex/config.toml.` + tail
+		return `Ask the user to add GARMIN_MCP_ALLOW_WRITES = "1" to env of [mcp_servers.garmin-mcp] in ~/.codex/config.toml.` + tail
 	case strings.Contains(c, "visual studio code") || strings.Contains(c, "vscode"):
-		return `Ask the user to add "CIQ_MCP_ALLOW_WRITES": "1" to servers.ciq-mcp.env in .vscode/mcp.json.` + tail
+		return `Ask the user to add "GARMIN_MCP_ALLOW_WRITES": "1" to servers.garmin-mcp.env in .vscode/mcp.json.` + tail
 	case strings.Contains(c, "windsurf"):
-		return `Ask the user to add "CIQ_MCP_ALLOW_WRITES": "1" to mcpServers.ciq-mcp.env in ~/.codeium/windsurf/mcp_config.json.` + tail
+		return `Ask the user to add "GARMIN_MCP_ALLOW_WRITES": "1" to mcpServers.garmin-mcp.env in ~/.codeium/windsurf/mcp_config.json.` + tail
 	default:
-		return "Ask the user to set the environment variable CIQ_MCP_ALLOW_WRITES=1 in this client's ciq-mcp server config (or start ciq-mcp with --allow-writes)." + tail
+		return "Ask the user to set the environment variable GARMIN_MCP_ALLOW_WRITES=1 in this client's garmin-mcp server config (or start garmin-mcp with --allow-writes)." + tail
 	}
 }

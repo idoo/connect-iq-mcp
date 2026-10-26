@@ -13,8 +13,8 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/idoo/ciq-mcp/internal/redact"
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/redact"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // Deps configures one MCP server (one per client session).
@@ -26,7 +26,7 @@ type Deps struct {
 	Env tool.Env
 	// Profile is the active profile; Profile.AllowWrites is the start mode.
 	Profile tool.ProfileInfo
-	// WritesLocked forbids toolsets enable_writes (e.g. a .ciq-mcp.toml pin with
+	// WritesLocked forbids toolsets enable_writes (e.g. a .garmin-mcp.toml pin with
 	// allow_writes=false).
 	WritesLocked bool
 	// Toolsets enabled at start; nil means [tool.DefaultToolsets].
@@ -108,7 +108,7 @@ func newSession(deps Deps) (*session, error) {
 		seen[t.Name()] = true
 		s.tools = append(s.tools, t)
 	}
-	s.srv = mcp.NewServer(&mcp.Implementation{Name: "ciq-mcp", Title: "ciq-mcp", Version: deps.Version}, &mcp.ServerOptions{
+	s.srv = mcp.NewServer(&mcp.Implementation{Name: "garmin-mcp", Title: "garmin-mcp", Version: deps.Version}, &mcp.ServerOptions{
 		Instructions:              Instructions,
 		Logger:                    deps.Logger,
 		Capabilities:              &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{ListChanged: true}},
@@ -180,7 +180,7 @@ func (s *session) mcpTool(t tool.Tool, writes bool) *mcp.Tool {
 
 // legacyProtocolVersions is every SDK protocol version older than
 // mrtrProtocol. On 2026-07-28 a server may no longer send elicitation/create
-// mid-request, which is how ciq-mcp asks the human to approve, so ciq-mcp caps
+// mid-request, which is how garmin-mcp asks the human to approve, so garmin-mcp caps
 // sessions at 2025-11-25: a 2026-07-28 client is told the supported list and
 // falls back to the initialize handshake at 2025-11-25.
 func legacyProtocolVersions() []string {
@@ -293,7 +293,7 @@ func (s *session) enableWrites() {
 var errWritesLocked = &tool.Error{
 	Code:    "writes_locked",
 	Message: "writes are pinned off for this project or profile",
-	Hint:    "writes are pinned off for this project or profile; remove allow_writes=false or add the pin's directory to trusted_pins, then restart ciq-mcp",
+	Hint:    "writes are pinned off for this project or profile; remove allow_writes=false or add the pin's directory to trusted_pins, then restart garmin-mcp",
 }
 
 // isElicitUnavailable reports whether err means the client cannot elicit.

@@ -17,9 +17,9 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
-	"github.com/idoo/ciq-mcp/internal/browser"
-	"github.com/idoo/ciq-mcp/internal/portal"
+	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/browser"
+	"github.com/idoo/garmin-mcp/internal/portal"
 )
 
 func seal(t time.Time) string {
@@ -202,7 +202,7 @@ func TestDeadRefreshNoProfileAuthRequired(t *testing.T) {
 	s.diauthURL = srv.URL
 	seedConnect(t, s, "revoked")
 	_, err := s.ConnectToken(context.Background())
-	if !errors.Is(err, auth.ErrAuthRequired) || !strings.Contains(err.Error(), "ciq-mcp auth login") {
+	if !errors.Is(err, auth.ErrAuthRequired) || !strings.Contains(err.Error(), "garmin-mcp auth login") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -225,7 +225,7 @@ func TestExpiredPortalNoProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := s.PortalCookies(context.Background())
-	if !errors.Is(err, auth.ErrAuthRequired) || !strings.Contains(err.Error(), `run "ciq-mcp auth login" in a terminal`) {
+	if !errors.Is(err, auth.ErrAuthRequired) || !strings.Contains(err.Error(), `run "garmin-mcp auth login" in a terminal`) {
 		t.Fatalf("err = %v", err)
 	}
 	if strings.Contains(err.Error(), "Fe26") {
@@ -267,8 +267,8 @@ func TestEnvOverridePrecedence(t *testing.T) {
 	srv, _ := diauth(t, 0)
 	envCookies := cookies(time.Now().Add(20 * 24 * time.Hour))
 	s := testStore(t, map[string]string{
-		"CIQ_MCP_PORTAL_COOKIES":        envCookies,
-		"CIQ_MCP_CONNECT_REFRESH_TOKEN": "rt-0",
+		"GARMIN_MCP_PORTAL_COOKIES":        envCookies,
+		"GARMIN_MCP_CONNECT_REFRESH_TOKEN": "rt-0",
 	})
 	s.diauthURL = srv.URL
 	_, _ = s.writeStored(blob{Portal: &portalCred{Cookies: cookies(time.Now().Add(40 * 24 * time.Hour))}})

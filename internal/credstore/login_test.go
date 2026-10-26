@@ -10,9 +10,9 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
-	"github.com/idoo/ciq-mcp/internal/browser"
-	"github.com/idoo/ciq-mcp/internal/portal"
+	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/browser"
+	"github.com/idoo/garmin-mcp/internal/portal"
 )
 
 func okVerify(_ context.Context, _ *http.Client, h string) (portal.Developer, string, error) {
@@ -42,14 +42,14 @@ func TestLoginSkipsBrowserWhenValid(t *testing.T) {
 
 func TestLoginRefusesEnvOverride(t *testing.T) {
 	keyring.MockInit()
-	s := testStore(t, map[string]string{"CIQ_MCP_PORTAL_COOKIES": cookies(time.Now().Add(time.Hour))})
+	s := testStore(t, map[string]string{"GARMIN_MCP_PORTAL_COOKIES": cookies(time.Now().Add(time.Hour))})
 	_, err := s.Login(context.Background(), auth.LoginOptions{})
-	if err == nil || !strings.Contains(err.Error(), "CIQ_MCP_PORTAL_COOKIES") {
+	if err == nil || !strings.Contains(err.Error(), "GARMIN_MCP_PORTAL_COOKIES") {
 		t.Fatalf("err = %v", err)
 	}
-	s = testStore(t, map[string]string{"CIQ_MCP_CONNECT_REFRESH_TOKEN": "rt"})
+	s = testStore(t, map[string]string{"GARMIN_MCP_CONNECT_REFRESH_TOKEN": "rt"})
 	_, err = s.Login(context.Background(), auth.LoginOptions{Connect: true})
-	if err == nil || !strings.Contains(err.Error(), "CIQ_MCP_CONNECT_REFRESH_TOKEN") {
+	if err == nil || !strings.Contains(err.Error(), "GARMIN_MCP_CONNECT_REFRESH_TOKEN") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -105,7 +105,7 @@ func TestLoginFailureSavesNothing(t *testing.T) {
 	s.login = func(context.Context, browser.Options, browser.Request) (browser.Result, error) {
 		return browser.Result{}, browser.ErrNoBrowser
 	}
-	if _, err := s.Login(context.Background(), auth.LoginOptions{}); err == nil || !strings.Contains(err.Error(), "CIQ_MCP_BROWSER") {
+	if _, err := s.Login(context.Background(), auth.LoginOptions{}); err == nil || !strings.Contains(err.Error(), "GARMIN_MCP_BROWSER") {
 		t.Fatalf("no-browser err = %v", err)
 	}
 }

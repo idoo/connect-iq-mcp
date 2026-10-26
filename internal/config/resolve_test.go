@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 func envMap(m map[string]string) func(string) string {
@@ -26,7 +26,7 @@ func writeFile(t *testing.T, path, body string) {
 func TestResolve(t *testing.T) {
 	home := t.TempDir()
 	proj := filepath.Join(home, "proj")
-	cfgPath := filepath.Join(home, ".config", "ciq-mcp", "config.toml")
+	cfgPath := filepath.Join(home, ".config", "garmin-mcp", "config.toml")
 	writeFile(t, cfgPath, "default_profile = \"rw\"\n[profiles.rw]\nallow_writes = true\n[profiles.ro]\n")
 	if err := os.Mkdir(filepath.Join(home, "proj"), 0o700); err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func TestResolve(t *testing.T) {
 		t.Fatalf("env = %+v toolsets=%v", r.Profile, r.Toolsets)
 	}
 	if r = resolve(map[string]string{EnvAllowWrites: "0"}, Flags{}); r.Profile.AllowWrites {
-		t.Fatal("CIQ_MCP_ALLOW_WRITES=0 ignored")
+		t.Fatal("GARMIN_MCP_ALLOW_WRITES=0 ignored")
 	}
 
 	// A pin can only narrow writes.

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // PlannerConformance checks that a [tool.Planner] has the contract every

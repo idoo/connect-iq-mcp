@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/auth"
 )
 
 // baseURL is BaseURL; tests point it at a fake server.

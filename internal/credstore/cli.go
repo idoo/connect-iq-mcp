@@ -14,11 +14,11 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
-	"github.com/idoo/ciq-mcp/internal/browser"
-	"github.com/idoo/ciq-mcp/internal/config"
-	"github.com/idoo/ciq-mcp/internal/portal"
-	"github.com/idoo/ciq-mcp/internal/state"
+	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/browser"
+	"github.com/idoo/garmin-mcp/internal/config"
+	"github.com/idoo/garmin-mcp/internal/portal"
+	"github.com/idoo/garmin-mcp/internal/state"
 )
 
 func init() {
@@ -48,13 +48,13 @@ func Open(_ context.Context, profile string) (auth.Store, error) {
 }
 
 const cliUsage = `usage:
-  ciq-mcp auth login  [--profile P] [--connect] [--browser PATH] [--paste]
-  ciq-mcp auth status [--profile P] [--json]
-  ciq-mcp auth renew  [--profile P]
-  ciq-mcp auth logout [--profile P]
-  ciq-mcp auth export --portal [--profile P]   (stdout must not be a terminal)`
+  garmin-mcp auth login  [--profile P] [--connect] [--browser PATH] [--paste]
+  garmin-mcp auth status [--profile P] [--json]
+  garmin-mcp auth renew  [--profile P]
+  garmin-mcp auth logout [--profile P]
+  garmin-mcp auth export --portal [--profile P]   (stdout must not be a terminal)`
 
-// CLI runs `ciq-mcp auth ARGS` and returns the exit code.
+// CLI runs `garmin-mcp auth ARGS` and returns the exit code.
 func CLI(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprintln(stderr, cliUsage)
@@ -295,7 +295,7 @@ func (s *Store) cliLogout(stdout, stderr io.Writer) error {
 	}
 	_, _ = fmt.Fprintf(stdout, "Signed out of profile %s.\n", s.profile)
 	if s.envPortal != nil || s.envConnect != nil {
-		_, _ = fmt.Fprintln(stdout, "Note: CIQ_MCP_* environment variables still provide credentials.")
+		_, _ = fmt.Fprintln(stdout, "Note: GARMIN_MCP_* environment variables still provide credentials.")
 	}
 	return nil
 }

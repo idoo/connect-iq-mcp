@@ -17,7 +17,7 @@ var KeyCodes = map[string]int{"up": 126, "down": 125, "enter": 36, "esc": 53, "b
 const MenuHoldMS = 1100
 
 // ErrAccessibility means macOS refused synthetic input.
-var ErrAccessibility = errors.New("macOS Accessibility permission missing: System Settings → Privacy & Security → Accessibility → enable the app running ciq-mcp (terminal or MCP client), then retry")
+var ErrAccessibility = errors.New("macOS Accessibility permission missing: System Settings → Privacy & Security → Accessibility → enable the app running garmin-mcp (terminal or MCP client), then retry")
 
 func mapAXError(out []byte, err error) error {
 	s := string(out)

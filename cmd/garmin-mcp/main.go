@@ -1,4 +1,4 @@
-// Command ciq-mcp is the Garmin Connect IQ MCP server.
+// Command garmin-mcp is the Garmin Connect IQ MCP server.
 //
 // With no arguments it serves MCP over stdio. Subcommands manage credentials
 // profiles, diagnose the setup and configure MCP clients; they never run the
@@ -14,28 +14,28 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
-	_ "github.com/idoo/ciq-mcp/internal/credstore" // sets auth.Open and auth.CLI
+	"github.com/idoo/garmin-mcp/internal/auth"
+	_ "github.com/idoo/garmin-mcp/internal/credstore" // sets auth.Open and auth.CLI
 )
 
-const usage = `ciq-mcp — Garmin Connect IQ MCP server
+const usage = `garmin-mcp — Garmin Connect IQ MCP server
 
 Usage:
-  ciq-mcp [serve] [flags]          serve MCP over stdio (or --http ADDR); ciq-mcp serve --help lists flags
-  ciq-mcp auth <subcommand>        manage Connect IQ portal and Garmin Connect credentials
-  ciq-mcp doctor [--profile NAME]  check config and credentials
-  ciq-mcp config snippet <client>  print client config (claude-code, claude-desktop, codex, cursor, vscode, windsurf)
-  ciq-mcp config install <client>  write it into the client's config (with backup)
-  ciq-mcp version
+  garmin-mcp [serve] [flags]          serve MCP over stdio (or --http ADDR); garmin-mcp serve --help lists flags
+  garmin-mcp auth <subcommand>        manage Connect IQ portal and Garmin Connect credentials
+  garmin-mcp doctor [--profile NAME]  check config and credentials
+  garmin-mcp config snippet <client>  print client config (claude-code, claude-desktop, codex, cursor, vscode, windsurf)
+  garmin-mcp config install <client>  write it into the client's config (with backup)
+  garmin-mcp version
 
 Any subcommand with --help prints its usage and does nothing else.
 `
 
-// subUsage is the usage text printed for `ciq-mcp <cmd> --help`.
+// subUsage is the usage text printed for `garmin-mcp <cmd> --help`.
 var subUsage = map[string]string{
 	"config":  configUsage,
-	"doctor":  "usage: ciq-mcp doctor [--profile NAME]\n  checks the config and credentials",
-	"version": "usage: ciq-mcp version",
+	"doctor":  "usage: garmin-mcp doctor [--profile NAME]\n  checks the config and credentials",
+	"version": "usage: garmin-mcp version",
 }
 
 // usageError is a command-line misuse; it exits with status 2.
@@ -62,10 +62,10 @@ func main() {
 	case errors.As(err, &ee):
 		os.Exit(int(ee))
 	case errors.As(err, &ue):
-		fmt.Fprintln(os.Stderr, "ciq-mcp:", err)
+		fmt.Fprintln(os.Stderr, "garmin-mcp:", err)
 		os.Exit(2)
 	default:
-		fmt.Fprintln(os.Stderr, "ciq-mcp:", err)
+		fmt.Fprintln(os.Stderr, "garmin-mcp:", err)
 		os.Exit(1)
 	}
 }
@@ -102,7 +102,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case "config":
 		return runConfig(rest, stdout, stderr)
 	case "version", "--version":
-		_, err := fmt.Fprintln(stdout, "ciq-mcp", buildVersion())
+		_, err := fmt.Fprintln(stdout, "garmin-mcp", buildVersion())
 		return err
 	default:
 		return usageErr(fmt.Sprintf("unknown command %q\n\n%s", cmd, usage))

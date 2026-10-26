@@ -12,7 +12,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 type stubIn struct {
@@ -294,7 +294,7 @@ func TestEnableWrites(t *testing.T) {
 		h := connect(t, Deps{Tools: (&fixture{}).tools(), Profile: team(false)}, "cursor", nil)
 		res, body := h.call(t, "toolsets", args)
 		instr, _ := dataOf(body)["instructions"].(string)
-		if res.IsError || !strings.Contains(instr, "~/.cursor/mcp.json") || !strings.Contains(instr, "CIQ_MCP_ALLOW_WRITES") {
+		if res.IsError || !strings.Contains(instr, "~/.cursor/mcp.json") || !strings.Contains(instr, "GARMIN_MCP_ALLOW_WRITES") {
 			t.Fatalf("fallback = %v", body)
 		}
 	})
@@ -312,7 +312,7 @@ func TestEnableWrites(t *testing.T) {
 		h := connectOpts(t, Deps{Tools: (&fixture{}).tools(), Profile: team(false)}, "cursor", opts, "2025-11-25")
 		res, body := h.call(t, "toolsets", args)
 		instr, _ := dataOf(body)["instructions"].(string)
-		if res.IsError || !strings.Contains(instr, "CIQ_MCP_ALLOW_WRITES") {
+		if res.IsError || !strings.Contains(instr, "GARMIN_MCP_ALLOW_WRITES") {
 			t.Fatalf("url-only result = %v", body)
 		}
 		if got := h.names(t); slices.Contains(got, "release_submit") {

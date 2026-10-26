@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Error is a typed ciq-mcp error with a stable machine-readable code. The
+// Error is a typed garmin-mcp error with a stable machine-readable code. The
 // package-level Err* values are sentinels: wrap them with fmt.Errorf("...: %w")
 // and test with errors.Is.
 type Error struct {
@@ -19,7 +19,7 @@ type Error struct {
 // Error implements error.
 func (e *Error) Error() string { return e.Message }
 
-// EnableWritesHint is the one way ciq-mcp tells agents to turn writes on: the
+// EnableWritesHint is the one way garmin-mcp tells agents to turn writes on: the
 // toolsets tool asks the human in the client and, when the client cannot
 // ask, returns the restart steps for that client.
 const EnableWritesHint = `call toolsets {"action":"enable_writes"} so the user can approve writes for this session (if the client cannot show the approval, it returns the restart steps)`
@@ -49,7 +49,7 @@ var (
 	ErrOutcomeUnknown = &Error{
 		Code:    "outcome_unknown",
 		Message: "the request may or may not have been applied",
-		Hint:    "read the object back before retrying; ciq-mcp never replays mutations",
+		Hint:    "read the object back before retrying; garmin-mcp never replays mutations",
 	}
 	ErrDeclined = &Error{
 		Code:    "declined",
@@ -67,17 +67,17 @@ var (
 	ErrInternal = &Error{
 		Code:    "internal_error",
 		Message: "internal error",
-		Hint:    "this is a ciq-mcp bug; please report it",
+		Hint:    "this is a garmin-mcp bug; please report it",
 	}
 	ErrWriteGuard = &Error{
 		Code:    "write_guard",
 		Message: "refused a non-GET request outside an approved write call",
-		Hint:    "this is a ciq-mcp bug; please report it",
+		Hint:    "this is a garmin-mcp bug; please report it",
 	}
 	ErrAuthRequired = &Error{
 		Code:    "auth_required",
 		Message: "Connect IQ credentials are missing or expired",
-		Hint:    "call the auth_login tool (it opens a browser window for the user to sign in), or ask the user to run `ciq-mcp auth login` in a terminal, then retry",
+		Hint:    "call the auth_login tool (it opens a browser window for the user to sign in), or ask the user to run `garmin-mcp auth login` in a terminal, then retry",
 	}
 	ErrUnavailable = &Error{
 		Code:    "unavailable",

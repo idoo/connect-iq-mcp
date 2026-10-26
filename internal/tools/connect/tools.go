@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
-	"github.com/idoo/ciq-mcp/internal/connectapi"
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/connectapi"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // baseURL is the Connect API host; tests point it at a fake server.
@@ -57,7 +57,7 @@ func wrap(err error) error {
 		case 404:
 			ae.Hint = "no data for that date or id, or the endpoint is not available for this account"
 		case 403:
-			ae.Hint = "the Connect token lacks access; call auth_login with connect=true (or run `ciq-mcp auth login --connect`)"
+			ae.Hint = "the Connect token lacks access; call auth_login with connect=true (or run `garmin-mcp auth login --connect`)"
 		}
 		return ae
 	}

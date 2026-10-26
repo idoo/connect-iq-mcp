@@ -462,7 +462,7 @@
           "type": "boolean"
         },
         "sdk": {
-          "description": "SDK path or installed version, e.g. 9.2.0; default CIQ_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
+          "description": "SDK path or installed version, e.g. 9.2.0; default GARMIN_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
           "type": "string"
         },
         "test": {
@@ -595,7 +595,7 @@
           "type": "string"
         },
         "sdk": {
-          "description": "SDK path or installed version, e.g. 9.2.0; default CIQ_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
+          "description": "SDK path or installed version, e.g. 9.2.0; default GARMIN_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
           "type": "string"
         }
       },
@@ -903,7 +903,7 @@
           "type": "string"
         },
         "sdk": {
-          "description": "SDK path or installed version, e.g. 9.2.0; default CIQ_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
+          "description": "SDK path or installed version, e.g. 9.2.0; default GARMIN_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
           "type": "string"
         },
         "wait_seconds": {
@@ -1008,7 +1008,7 @@
       "additionalProperties": false,
       "properties": {
         "sdk": {
-          "description": "SDK path or installed version, e.g. 9.2.0; default CIQ_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
+          "description": "SDK path or installed version, e.g. 9.2.0; default GARMIN_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
           "type": "string"
         }
       },
@@ -1093,7 +1093,7 @@
           "type": "string"
         },
         "sdk": {
-          "description": "SDK path or installed version, e.g. 9.2.0; default CIQ_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
+          "description": "SDK path or installed version, e.g. 9.2.0; default GARMIN_MCP_SDK/CIQ_SDK, current-sdk.cfg, newest",
           "type": "string"
         },
         "wait_seconds": {

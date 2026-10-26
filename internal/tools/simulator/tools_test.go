@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 func TestRegistered(t *testing.T) {

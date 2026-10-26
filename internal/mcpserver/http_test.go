@@ -12,12 +12,12 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 func testHTTPHandler(t *testing.T) http.Handler {
 	t.Helper()
-	srv := mcp.NewServer(&mcp.Implementation{Name: "ciq-mcp", Version: "test"}, nil)
+	srv := mcp.NewServer(&mcp.Implementation{Name: "garmin-mcp", Version: "test"}, nil)
 	h, err := HTTPHandler(HTTPOptions{
 		Token:          "s3cret",
 		AllowedOrigins: []string{"https://app.example"},
@@ -161,7 +161,7 @@ func TestSessionFactoryServesInitialize(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := doHTTP(t, h, "/mcp", "Bearer t", "")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"ciq-mcp"`) {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"garmin-mcp"`) {
 		t.Errorf("initialize = %d %q", rec.Code, rec.Body.String())
 	}
 }
@@ -249,7 +249,7 @@ func TestHTTPBuildsOneServerPerSession(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	// The probe, the session server, and one throwaway Build for the
-	// client's server/discover attempt (rejected: ciq-mcp caps at 2025-11-25).
+	// client's server/discover attempt (rejected: garmin-mcp caps at 2025-11-25).
 	// Before the fix, every request built a server (~13 here).
 	live := 0
 	for s := range seen {

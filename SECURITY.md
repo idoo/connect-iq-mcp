@@ -4,7 +4,7 @@ Only the latest release gets fixes, so upgrade before reporting.
 
 ## Reporting
 
-Use [private vulnerability reporting](https://github.com/idoo/ciq-mcp/security/advisories/new), not a public issue. It's one person on the other end, so expect a reply within a few days and a fix or plan within two weeks for anything serious. You get credit in the advisory unless you'd rather not.
+Use [private vulnerability reporting](https://github.com/idoo/garmin-mcp/security/advisories/new), not a public issue. It's one person on the other end, so expect a reply within a few days and a fix or plan within two weeks for anything serious. You get credit in the advisory unless you'd rather not.
 
 ## In scope
 
@@ -17,12 +17,12 @@ Use [private vulnerability reporting](https://github.com/idoo/ciq-mcp/security/a
 ## Out of scope
 
 - A model fooled by injected text *and* a human clicking yes.
-- Setups that switch safety off on purpose: auto-approve everything, `allow_no_elicit`, `--no-confirm` with `CIQ_MCP_CI=1`.
+- Setups that switch safety off on purpose: auto-approve everything, `allow_no_elicit`, `--no-confirm` with `GARMIN_MCP_CI=1`.
 - Processes running as you reading your keychain.
 - Garmin's own portal and API behaviour.
 
 ## Credentials
 
-ciq-mcp keeps developer-portal cookies and the Garmin Connect token in the OS keychain (service `ciq-mcp`). The config file never holds secrets. Only `ciq-mcp auth` can change credentials. Cookies and tokens are sent only to Garmin hosts and redacted from everything ciq-mcp prints.
+garmin-mcp keeps developer-portal cookies and the Garmin Connect token in the OS keychain (service `garmin-mcp`). The config file never holds secrets. Only `garmin-mcp auth` can change credentials. Cookies and tokens are sent only to Garmin hosts and redacted from everything garmin-mcp prints.
 
-No telemetry. ciq-mcp talks to apps.garmin.com, Garmin Connect (only with the opt-in connect toolset) and your local Connect IQ SDK; `ciq-mcp config install claude-code` runs your local `claude`.
+No telemetry. garmin-mcp talks to apps.garmin.com, Garmin Connect (only with the opt-in connect toolset) and your local Connect IQ SDK; `garmin-mcp config install claude-code` runs your local `claude`.

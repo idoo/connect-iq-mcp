@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
-	"github.com/idoo/ciq-mcp/internal/tool/tooltest"
+	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
 )
 
 func TestParallelBoundsConcurrency(t *testing.T) {

@@ -40,9 +40,9 @@ linters:
             - "**/internal/tools/**"
             - "!**/internal/tools/docsgen/**"
           deny:
-            - pkg: github.com/idoo/ciq-mcp/internal/app
+            - pkg: github.com/idoo/garmin-mcp/internal/app
               desc: tool packages use tool.Env, never the app wiring
-            - pkg: github.com/idoo/ciq-mcp/internal/mcpserver
+            - pkg: github.com/idoo/garmin-mcp/internal/mcpserver
               desc: tool packages use tool.Env, never the server
     forbidigo:
       forbid:

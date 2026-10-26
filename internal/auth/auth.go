@@ -65,7 +65,7 @@ type LoginResult struct {
 }
 
 // Loginer is implemented by stores that can sign in through an interactive
-// browser window (the code path behind `ciq-mcp auth login`).
+// browser window (the code path behind `garmin-mcp auth login`).
 type Loginer interface {
 	Login(ctx context.Context, o LoginOptions) (LoginResult, error)
 }

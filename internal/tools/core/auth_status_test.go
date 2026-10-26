@@ -3,8 +3,8 @@ package core
 import (
 	"testing"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
-	"github.com/idoo/ciq-mcp/internal/tool/tooltest"
+	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
 )
 
 func authStatusTool(t *testing.T) tool.Tool {

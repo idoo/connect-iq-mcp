@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/idoo/ciq-mcp/internal/ciqsdk"
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/ciqsdk"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // maxManifest caps manifest.xml reads.

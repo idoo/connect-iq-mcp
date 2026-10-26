@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // PlanCapacity is the number of pending plans kept per session (LRU).

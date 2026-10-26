@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // ParseToolsets resolves a toolset expression into toolsets in display order.
@@ -96,17 +96,17 @@ func joinToolsets(ts []tool.Toolset) string {
 func ValidateBaseURL(raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
-		return "", fmt.Errorf("CIQ_MCP_BASE_URL: %w", err)
+		return "", fmt.Errorf("GARMIN_MCP_BASE_URL: %w", err)
 	}
 	switch {
 	case u.Scheme != "http" && u.Scheme != "https":
-		return "", fmt.Errorf("CIQ_MCP_BASE_URL: scheme %q must be http or https", u.Scheme)
+		return "", fmt.Errorf("GARMIN_MCP_BASE_URL: scheme %q must be http or https", u.Scheme)
 	case u.User != nil:
-		return "", errors.New("CIQ_MCP_BASE_URL: userinfo is not allowed")
+		return "", errors.New("GARMIN_MCP_BASE_URL: userinfo is not allowed")
 	case u.RawQuery != "" || u.Fragment != "" || u.Opaque != "":
-		return "", errors.New("CIQ_MCP_BASE_URL: query and fragment are not allowed")
+		return "", errors.New("GARMIN_MCP_BASE_URL: query and fragment are not allowed")
 	case !isLoopback(u.Hostname()):
-		return "", fmt.Errorf("CIQ_MCP_BASE_URL: host %q is not loopback; the override exists only for local test servers", u.Hostname())
+		return "", fmt.Errorf("GARMIN_MCP_BASE_URL: host %q is not loopback; the override exists only for local test servers", u.Hostname())
 	}
 	return strings.TrimRight(u.String(), "/"), nil
 }

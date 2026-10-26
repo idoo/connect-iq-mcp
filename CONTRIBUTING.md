@@ -1,13 +1,13 @@
 # Contributing
 
-ciq-mcp is small on purpose. Open a short issue before a big PR.
+garmin-mcp is small on purpose. Open a short issue before a big PR.
 
 ## Setup
 
 Go 1.25+, plus golangci-lint v2 for linting.
 
 ```sh
-make build      # bin/ciq-mcp
+make build      # bin/garmin-mcp
 make test       # go test -race ./...
 make vet
 make lint

@@ -8,9 +8,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
-	"github.com/idoo/ciq-mcp/internal/portal"
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/portal"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // Listing limits in UTF-16 code units (portal form limits).

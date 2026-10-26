@@ -18,8 +18,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // Kit bundles a ready [tool.Env] with handles to its fakes.

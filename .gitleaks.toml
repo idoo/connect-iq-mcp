@@ -1,4 +1,4 @@
-title = "ciq-mcp gitleaks config"
+title = "garmin-mcp gitleaks config"
 
 [extend]
 useDefault = true

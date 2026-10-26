@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/auth"
-	"github.com/idoo/ciq-mcp/internal/browser"
-	"github.com/idoo/ciq-mcp/internal/portal"
+	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/browser"
+	"github.com/idoo/garmin-mcp/internal/portal"
 )
 
 const (
@@ -26,7 +26,7 @@ const (
 	portalRenewWindow  = 3 * 24 * time.Hour
 	accessRefreshSlack = 15 * time.Minute
 	renewInterval      = 10 * time.Minute
-	loginHint          = `call the auth_login tool (it opens a browser window for the user to sign in), or run "ciq-mcp auth login" in a terminal`
+	loginHint          = `call the auth_login tool (it opens a browser window for the user to sign in), or run "garmin-mcp auth login" in a terminal`
 )
 
 // diClientIDs are tried in order when exchanging a service ticket.
@@ -75,7 +75,7 @@ func (s *Store) PortalCookies(ctx context.Context) (string, error) {
 		if b.Portal != nil && !s.portalDead(b.Portal) {
 			return b.Portal.Cookies, nil
 		}
-		return "", authRequired("CIQ_MCP_PORTAL_COOKIES holds an expired session", nil)
+		return "", authRequired("GARMIN_MCP_PORTAL_COOKIES holds an expired session", nil)
 	}
 	unlock, err := lockPath(ctx, s.lockFile())
 	if err != nil {
@@ -337,7 +337,7 @@ func (s *Store) renewLocked(ctx context.Context, wantPortal, wantConnect, force 
 		return fmt.Errorf("%w: auto_renew is off", errNoRenewal)
 	}
 	if !s.hasProfile(s.browserDir()) {
-		return fmt.Errorf("%w: no browser profile (sign in once with the auth_login tool or \"ciq-mcp auth login\")", errNoRenewal)
+		return fmt.Errorf("%w: no browser profile (sign in once with the auth_login tool or \"garmin-mcp auth login\")", errNoRenewal)
 	}
 	if !force {
 		if fi, err := os.Stat(s.stampFile()); err == nil && s.now().Sub(fi.ModTime()) < renewInterval {
@@ -440,7 +440,7 @@ func (s *Store) Status(context.Context) auth.Status {
 		exp, _ := portal.SealExpiry(b.Portal.Cookies)
 		st.Portal = s.credStatus(ps, exp, renewable && ps != srcEnv)
 	} else {
-		st.Portal = auth.CredStatus{Renewable: renewable, Note: `not signed in; auth_login tool or "ciq-mcp auth login"`}
+		st.Portal = auth.CredStatus{Renewable: renewable, Note: `not signed in; auth_login tool or "garmin-mcp auth login"`}
 	}
 	if b.Connect != nil && b.Connect.RefreshToken != "" {
 		var exp time.Time
@@ -452,7 +452,7 @@ func (s *Store) Status(context.Context) auth.Status {
 			st.Connect.Note += "; rotated tokens are kept in memory only"
 		}
 	} else {
-		st.Connect = auth.CredStatus{Renewable: renewable, Note: `not signed in; auth_login tool with connect=true or "ciq-mcp auth login --connect"`}
+		st.Connect = auth.CredStatus{Renewable: renewable, Note: `not signed in; auth_login tool with connect=true or "garmin-mcp auth login --connect"`}
 	}
 	return st
 }
@@ -468,7 +468,7 @@ func (s *Store) credStatus(src string, exp time.Time, renewable bool) auth.CredS
 		if auto {
 			cs.Note += ", renews automatically on next use"
 		} else {
-			cs.Note += `; auth_login tool or "ciq-mcp auth login"`
+			cs.Note += `; auth_login tool or "garmin-mcp auth login"`
 		}
 		return cs
 	default:

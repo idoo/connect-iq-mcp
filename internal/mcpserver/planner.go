@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 const (

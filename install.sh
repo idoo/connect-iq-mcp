@@ -1,21 +1,21 @@
 #!/bin/sh
-# ciq-mcp installer: downloads a release binary from GitHub, verifies its
+# garmin-mcp installer: downloads a release binary from GitHub, verifies its
 # sha256 against checksums.txt, the cosign signature of checksums.txt (if
 # `cosign` is installed) and the build provenance (if `gh` is installed),
 # and installs it to ~/.local/bin.
 #
-#   curl -fsSL https://raw.githubusercontent.com/idoo/ciq-mcp/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/idoo/garmin-mcp/main/install.sh | sh
 #
 # Environment:
-#   CIQ_MCP_VERSION         release to install, e.g. 0.1.0 (default: latest)
-#   CIQ_MCP_INSTALL_DIR     target directory (default: ~/.local/bin)
-#   CIQ_MCP_REQUIRE_COSIGN  1 = refuse to install unless cosign verifies checksums.txt
+#   GARMIN_MCP_VERSION         release to install, e.g. 0.1.0 (default: latest)
+#   GARMIN_MCP_INSTALL_DIR     target directory (default: ~/.local/bin)
+#   GARMIN_MCP_REQUIRE_COSIGN  1 = refuse to install unless cosign verifies checksums.txt
 set -eu
 
-repo=idoo/ciq-mcp
-install_dir=${CIQ_MCP_INSTALL_DIR:-$HOME/.local/bin}
+repo=idoo/garmin-mcp
+install_dir=${GARMIN_MCP_INSTALL_DIR:-$HOME/.local/bin}
 
-say() { printf 'ciq-mcp-install: %s\n' "$*" >&2; }
+say() { printf 'garmin-mcp-install: %s\n' "$*" >&2; }
 die() {
 	say "error: $*"
 	exit 1
@@ -50,25 +50,25 @@ if [ "$os" = darwin ] && [ "$arch" = amd64 ] && [ "$(sysctl -n hw.optional.arm64
 	arch=arm64
 fi
 
-version=${CIQ_MCP_VERSION:-}
+version=${GARMIN_MCP_VERSION:-}
 if [ -z "$version" ]; then
 	# The releases/latest page redirects to .../releases/tag/vX.Y.Z; no API
 	# call, so no 60-requests-per-hour limit.
 	latest=$(resolve "https://github.com/$repo/releases/latest") || latest=
 	case $latest in
 	*/releases/tag/*) version=${latest##*/releases/tag/} ;;
-	*) die "could not determine the latest release (set CIQ_MCP_VERSION)" ;;
+	*) die "could not determine the latest release (set GARMIN_MCP_VERSION)" ;;
 	esac
 fi
 version=${version#v}
 
-archive="ciq-mcp_${version}_${os}_${arch}.tar.gz"
+archive="garmin-mcp_${version}_${os}_${arch}.tar.gz"
 base="https://github.com/$repo/releases/download/v$version"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-say "downloading ciq-mcp $version ($os/$arch)"
+say "downloading garmin-mcp $version ($os/$arch)"
 fetch "$base/$archive" "$tmp/$archive"
 fetch "$base/checksums.txt" "$tmp/checksums.txt"
 
@@ -81,8 +81,8 @@ if command -v cosign >/dev/null 2>&1; then
 		"$tmp/checksums.txt" >/dev/null 2>&1 ||
 		die "cosign could not verify checksums.txt; refusing to install"
 	say "checksums.txt signature verified (cosign)"
-elif [ "${CIQ_MCP_REQUIRE_COSIGN:-0}" = 1 ]; then
-	die "CIQ_MCP_REQUIRE_COSIGN=1 but cosign is not installed"
+elif [ "${GARMIN_MCP_REQUIRE_COSIGN:-0}" = 1 ]; then
+	die "GARMIN_MCP_REQUIRE_COSIGN=1 but cosign is not installed"
 else
 	say "warning: cosign not installed; skipping the checksums.txt signature check"
 fi
@@ -109,11 +109,11 @@ else
 	die "gh attestation verify failed for $archive; refusing to install"
 fi
 
-tar -xzf "$tmp/$archive" -C "$tmp" ciq-mcp
+tar -xzf "$tmp/$archive" -C "$tmp" garmin-mcp
 mkdir -p "$install_dir"
-dest="$install_dir/ciq-mcp"
-# Install via a temp name + rename so a running ciq-mcp is not truncated.
-cp "$tmp/ciq-mcp" "$dest.new"
+dest="$install_dir/garmin-mcp"
+# Install via a temp name + rename so a running garmin-mcp is not truncated.
+cp "$tmp/garmin-mcp" "$dest.new"
 chmod 0755 "$dest.new"
 if [ "$os" = darwin ]; then
 	xattr -d com.apple.quarantine "$dest.new" 2>/dev/null || true
@@ -130,5 +130,5 @@ case ":$PATH:" in
 	;;
 esac
 
-say "next: create an API key (Connect IQ > Users and Access > Integrations), then add ciq-mcp to Claude Code:"
+say "next: create an API key (Connect IQ > Users and Access > Integrations), then add garmin-mcp to Claude Code:"
 "$dest" config snippet claude-code || true

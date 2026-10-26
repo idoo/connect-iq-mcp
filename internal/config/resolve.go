@@ -7,19 +7,19 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // Mode environment variables.
 const (
-	EnvProfile          = "CIQ_MCP_PROFILE"
-	EnvAllowWrites      = "CIQ_MCP_ALLOW_WRITES"
-	EnvToolsets         = "CIQ_MCP_TOOLSETS"
-	EnvDiscovery        = "CIQ_MCP_DISCOVERY"
-	EnvMaxResponseBytes = "CIQ_MCP_MAX_RESPONSE_BYTES"
-	EnvMaxRetries       = "CIQ_MCP_MAX_RETRIES"
-	EnvCI               = "CIQ_MCP_CI"
-	EnvRoot             = "CIQ_MCP_ROOT"
+	EnvProfile          = "GARMIN_MCP_PROFILE"
+	EnvAllowWrites      = "GARMIN_MCP_ALLOW_WRITES"
+	EnvToolsets         = "GARMIN_MCP_TOOLSETS"
+	EnvDiscovery        = "GARMIN_MCP_DISCOVERY"
+	EnvMaxResponseBytes = "GARMIN_MCP_MAX_RESPONSE_BYTES"
+	EnvMaxRetries       = "GARMIN_MCP_MAX_RETRIES"
+	EnvCI               = "GARMIN_MCP_CI"
+	EnvRoot             = "GARMIN_MCP_ROOT"
 )
 
 // DefaultProfileName is used when no profile is configured or selected.
@@ -40,7 +40,7 @@ type Flags struct {
 	AllowWrites *bool
 	Toolsets    *string
 	Discovery   *bool
-	// NoConfirm skips confirmations; honored only when CIQ_MCP_CI is true.
+	// NoConfirm skips confirmations; honored only when GARMIN_MCP_CI is true.
 	NoConfirm bool
 }
 
@@ -60,7 +60,7 @@ type ResolvedProfile struct {
 	Name          string
 	AllowWrites   bool
 	AllowNoElicit bool
-	// PinSource is the .ciq-mcp.toml path when a pin was applied.
+	// PinSource is the .garmin-mcp.toml path when a pin was applied.
 	PinSource string
 	// Problems are user-fixable issues doctor reports; the server still starts.
 	Problems []string

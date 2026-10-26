@@ -10,7 +10,7 @@ import (
 )
 
 // TestCursorsSurviveConcurrentProcesses uses one Store per goroutine (as
-// separate ciq-mcp processes would, with no shared mutex) and checks no
+// separate garmin-mcp processes would, with no shared mutex) and checks no
 // cursor update is lost.
 func TestCursorsSurviveConcurrentProcesses(t *testing.T) {
 	dir := t.TempDir()
@@ -109,7 +109,7 @@ func TestStoreFilesAre0600AndAtomic(t *testing.T) {
 }
 
 func TestStoreRoundTripAndPerms(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "ciq-mcp")
+	dir := filepath.Join(t.TempDir(), "garmin-mcp")
 	s, err := New(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +201,7 @@ func TestDefaultDirXDG(t *testing.T) {
 	}
 	t.Setenv("XDG_STATE_HOME", "/tmp/xdg")
 	d, err := DefaultDir()
-	if err != nil || d != filepath.Join("/tmp/xdg", "ciq-mcp") {
+	if err != nil || d != filepath.Join("/tmp/xdg", "garmin-mcp") {
 		t.Fatalf("DefaultDir = %q, %v", d, err)
 	}
 }

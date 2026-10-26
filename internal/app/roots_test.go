@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // fileURI returns the file:// URI for p: file:///C:/x on Windows (the drive
@@ -63,8 +63,8 @@ func TestProjectFilesRefusesHomeAndDiskRoot(t *testing.T) {
 			}
 			if tc.refused {
 				body := tool.BodyFor(err)
-				if body.Error != "unavailable" || !strings.Contains(body.Message, "--root") || !strings.Contains(body.Message, "CIQ_MCP_ROOT") {
-					t.Fatalf("refusal must name --root and CIQ_MCP_ROOT: %+v", body)
+				if body.Error != "unavailable" || !strings.Contains(body.Message, "--root") || !strings.Contains(body.Message, "GARMIN_MCP_ROOT") {
+					t.Fatalf("refusal must name --root and GARMIN_MCP_ROOT: %+v", body)
 				}
 				if pf.Root() != "" {
 					t.Fatalf("Root() = %q for a refused root", pf.Root())

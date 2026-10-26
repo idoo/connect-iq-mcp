@@ -1,7 +1,7 @@
 // Package credstore implements auth.Store: Connect IQ developer-portal cookies
 // and Garmin Connect DI OAuth2 tokens kept in the OS keychain (or a 0600 file),
 // cross-process locked refresh, silent renewal through a dedicated browser
-// profile, and the `ciq-mcp auth` CLI.
+// profile, and the `garmin-mcp auth` CLI.
 package credstore
 
 import (
@@ -18,12 +18,12 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/idoo/ciq-mcp/internal/browser"
-	"github.com/idoo/ciq-mcp/internal/portal"
+	"github.com/idoo/garmin-mcp/internal/browser"
+	"github.com/idoo/garmin-mcp/internal/portal"
 )
 
 const (
-	keyringService = "ciq-mcp"
+	keyringService = "garmin-mcp"
 	// Windows Credential Manager caps blobs at 2560 bytes; elsewhere the
 	// keyring reports its own limit through Set errors.
 	windowsKeyringMax = 2500
@@ -58,7 +58,7 @@ type connectCred struct {
 // Store implements auth.Store for one profile.
 type Store struct {
 	profile   string
-	dir       string // ciq-mcp state directory
+	dir       string // garmin-mcp state directory
 	autoRenew bool
 
 	hc         *http.Client
@@ -103,11 +103,11 @@ func newHTTPClient() *http.Client {
 
 // loadEnv reads the environment overrides into memory.
 func (s *Store) loadEnv() {
-	if v := s.getenv("CIQ_MCP_PORTAL_COOKIES"); v != "" {
+	if v := s.getenv("GARMIN_MCP_PORTAL_COOKIES"); v != "" {
 		s.envPortal = &portalCred{Cookies: v}
 	}
-	if v := s.getenv("CIQ_MCP_CONNECT_REFRESH_TOKEN"); v != "" {
-		s.envConnect = &connectCred{RefreshToken: v, ClientID: s.getenv("CIQ_MCP_CONNECT_CLIENT_ID")}
+	if v := s.getenv("GARMIN_MCP_CONNECT_REFRESH_TOKEN"); v != "" {
+		s.envConnect = &connectCred{RefreshToken: v, ClientID: s.getenv("GARMIN_MCP_CONNECT_CLIENT_ID")}
 	}
 }
 

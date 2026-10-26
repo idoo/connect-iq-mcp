@@ -23,16 +23,16 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/idoo/ciq-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // EnvHTTPToken is the environment variable holding the HTTP bearer token.
-const EnvHTTPToken = "CIQ_MCP_HTTP_TOKEN" //nolint:gosec // variable name, not a credential.
+const EnvHTTPToken = "GARMIN_MCP_HTTP_TOKEN" //nolint:gosec // variable name, not a credential.
 
 // Session limits for HTTP mode, overridable by HTTPOptions or env.
 const (
-	EnvHTTPSessionTimeout = "CIQ_MCP_HTTP_SESSION_TIMEOUT"
-	EnvHTTPMaxSessions    = "CIQ_MCP_HTTP_MAX_SESSIONS"
+	EnvHTTPSessionTimeout = "GARMIN_MCP_HTTP_SESSION_TIMEOUT"
+	EnvHTTPMaxSessions    = "GARMIN_MCP_HTTP_MAX_SESSIONS"
 	// DefaultSessionTimeout closes idle sessions; it outlives PlanTTL so a
 	// pending plan never loses its session first.
 	DefaultSessionTimeout = 30 * time.Minute
@@ -67,11 +67,11 @@ type HTTPOptions struct {
 	// StderrIsTTY overrides terminal detection of os.Stderr (tests).
 	StderrIsTTY *bool
 	// SessionTimeout closes sessions idle this long; 0 reads
-	// CIQ_MCP_HTTP_SESSION_TIMEOUT (a Go duration), else DefaultSessionTimeout.
+	// GARMIN_MCP_HTTP_SESSION_TIMEOUT (a Go duration), else DefaultSessionTimeout.
 	// Negative never expires sessions.
 	SessionTimeout time.Duration
 	// MaxSessions caps open sessions (new ones get 503); 0 reads
-	// CIQ_MCP_HTTP_MAX_SESSIONS, else DefaultMaxSessions. Negative is unlimited.
+	// GARMIN_MCP_HTTP_MAX_SESSIONS, else DefaultMaxSessions. Negative is unlimited.
 	MaxSessions int
 }
 
@@ -168,7 +168,7 @@ func HTTPHandler(opts HTTPOptions) (http.Handler, error) {
 		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		sum := sha256.Sum256([]byte(got))
 		if !ok || subtle.ConstantTimeCompare(sum[:], want[:]) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="ciq-mcp"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="garmin-mcp"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -295,7 +295,7 @@ func SessionFactory(deps Deps) func(*http.Request) *mcp.Server {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	probe := mcp.NewServer(&mcp.Implementation{Name: "ciq-mcp", Version: deps.Version}, &mcp.ServerOptions{
+	probe := mcp.NewServer(&mcp.Implementation{Name: "garmin-mcp", Version: deps.Version}, &mcp.ServerOptions{
 		Logger:                    logger,
 		SupportedProtocolVersions: legacyProtocolVersions(),
 	})
@@ -383,7 +383,7 @@ func generateToken(opts HTTPOptions) (string, error) {
 	if w == nil {
 		w = os.Stderr
 	}
-	if _, err := fmt.Fprintf(w, "ciq-mcp: HTTP bearer token (set %s to reuse): %s\n", EnvHTTPToken, tok); err != nil {
+	if _, err := fmt.Fprintf(w, "garmin-mcp: HTTP bearer token (set %s to reuse): %s\n", EnvHTTPToken, tok); err != nil {
 		return "", fmt.Errorf("mcpserver: http: print token: %w", err)
 	}
 	return tok, nil

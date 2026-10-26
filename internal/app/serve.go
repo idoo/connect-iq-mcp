@@ -6,15 +6,15 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/idoo/ciq-mcp/internal/config"
-	"github.com/idoo/ciq-mcp/internal/mcpserver"
+	"github.com/idoo/garmin-mcp/internal/config"
+	"github.com/idoo/garmin-mcp/internal/mcpserver"
 )
 
 // ServeOptions configures [Serve].
 type ServeOptions struct {
 	// Resolved is the effective configuration.
 	Resolved *config.Resolved
-	// Version is the ciq-mcp build version.
+	// Version is the garmin-mcp build version.
 	Version string
 	// HTTPAddr serves Streamable HTTP when set; empty serves stdio.
 	HTTPAddr string
@@ -23,7 +23,7 @@ type ServeOptions struct {
 	// Logger receives server logs on stderr; nil uses a stderr text logger.
 	Logger *slog.Logger
 	// Root confines file tools to this directory (--root); empty falls back
-	// to CIQ_MCP_ROOT, then the client's MCP roots, then the git root of the cwd.
+	// to GARMIN_MCP_ROOT, then the client's MCP roots, then the git root of the cwd.
 	Root string
 }
 
@@ -53,7 +53,7 @@ func Serve(ctx context.Context, opts ServeOptions) error {
 		defer func() { _ = pf.Close() }()
 	}
 	if env.Credentials == nil {
-		logger.Warn("no Connect IQ credentials configured; run `ciq-mcp auth login`")
+		logger.Warn("no Connect IQ credentials configured; run `garmin-mcp auth login`")
 	}
 	deps := mcpserver.Deps{
 		Env:            *env,

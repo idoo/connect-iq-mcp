@@ -26,7 +26,7 @@ var ErrInteractionRequired = errors.New("garmin needs you to sign in")
 var errClosed = errors.New("browser closed before sign-in finished")
 
 // signInHint is printed when the interactive window opens; %s is the browser.
-const signInHint = "Sign in to Garmin in the %s window that just opened (separate ciq-mcp profile). Keep “Remember me” ticked (ciq-mcp ticks it for you) so the session renews without you for up to 6 months."
+const signInHint = "Sign in to Garmin in the %s window that just opened (separate garmin-mcp profile). Keep “Remember me” ticked (garmin-mcp ticks it for you) so the session renews without you for up to 6 months."
 
 // Options configures the browser launch.
 type Options struct {
