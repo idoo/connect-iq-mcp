@@ -1,0 +1,22 @@
+[
+  {
+    "appExternalVersion": "1.0.2",
+    "appInternalVersion": 3,
+    "changeDate": 1793019658000,
+    "date": 1793016118000,
+    "id": "00000000-0000-4000-8000-000000000001",
+    "rating": 5,
+    "replies": [
+      {
+        "changeDate": 1793017632000,
+        "date": 1793017632000,
+        "id": "00000000-0000-4000-8000-000000000002",
+        "text": "Glad it helps! Thanks for the idea."
+      }
+    ],
+    "reviewerFullName": "Reviewer Name",
+    "reviewerId": "00000000-0000-4000-8000-000000000003",
+    "text": "That was quick, thank you very much!",
+    "upvotes": 0
+  }
+]

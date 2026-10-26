@@ -31,8 +31,12 @@ const (
 	bigArray = 24
 )
 
-// userTextKeys are user-written strings in Connect payloads.
-var userTextKeys = []string{"activityName", "description", "displayName", "deviceName", "nickname", "locationName", "notes", "comment", "name"}
+// userTextKeys are user-written strings in Connect payloads, including the
+// names of other users (owners of public activities, profiles).
+var userTextKeys = []string{
+	"activityName", "description", "displayName", "deviceName", "nickname", "locationName", "notes", "comment", "name",
+	"ownerFullName", "ownerDisplayName", "fullName", "userName", "courseName", "userProfileFullName", "userProfileDisplayName",
+}
 
 var activityTypeRE = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
 
@@ -156,7 +160,7 @@ type rangeIn struct {
 }
 
 type listIn struct {
-	Start        int    `json:"start,omitempty" jsonschema:"offset, default 0"`
+	Offset       int    `json:"offset,omitempty" jsonschema:"number of activities to skip, default 0"`
 	Limit        int    `json:"limit,omitempty" jsonschema:"1-100, default 20"`
 	StartDate    string `json:"start_date,omitempty" jsonschema:"YYYY-MM-DD"`
 	EndDate      string `json:"end_date,omitempty" jsonschema:"YYYY-MM-DD"`
@@ -207,8 +211,8 @@ func init() {
 	tool.Register(tool.New(tool.Meta{
 		Name: "connect_activity_download", Toolset: Toolset, Title: "Download activity",
 		Description: "Save an activity file (fit, tcx, gpx, csv, kml) into the project root. Returns the path and size, not the file.",
-		Class:       tool.Write, Local: true,
-		Enums: map[string][]any{"format": {"fit", "tcx", "gpx", "csv", "kml"}},
+		Class:       tool.Write,
+		Enums:       map[string][]any{"format": {"fit", "tcx", "gpx", "csv", "kml"}},
 	}, connectActivityDownload))
 }
 
@@ -218,7 +222,7 @@ func connectProfile(ctx context.Context, env *tool.Env, _ noIn) (*tool.Result, e
 	if err != nil {
 		return nil, wrap(err)
 	}
-	out := map[string]any{"display_name": p.DisplayName, "full_name": p.FullName}
+	out := map[string]any{"display_name": tool.Untrusted(p.DisplayName), "full_name": tool.Untrusted(p.FullName)}
 	var s map[string]any
 	if err := c.GetJSON(ctx, "/userprofile-service/userprofile/user-settings", nil, &s); err != nil {
 		out["settings_error"] = wrap(err).Error()
@@ -332,7 +336,7 @@ func connectTraining(ctx context.Context, env *tool.Env, in dateIn) (*tool.Resul
 	parts := []struct{ key, path string }{
 		{"readiness", "/metrics-service/metrics/trainingreadiness/" + ymd(d)},
 		{"status", "/metrics-service/metrics/trainingstatus/aggregated/" + ymd(d)},
-		{"race_predictions", "/metrics-service/metrics/racepredictions/latest/" + url.PathEscape(name)},
+		{"race_predictions", "/metrics-service/metrics/racepredictions/latest/" + name}, // DisplayName is already path-escaped
 	}
 	failed := 0
 	var last error
@@ -384,10 +388,10 @@ func connectActivitiesList(ctx context.Context, env *tool.Env, in listIn) (*tool
 	if in.Limit == 0 {
 		in.Limit = 20
 	}
-	if in.Limit < 1 || in.Limit > maxListLimit || in.Start < 0 {
-		return nil, tool.InvalidArgs("limit must be 1-%d and start >= 0", maxListLimit)
+	if in.Limit < 1 || in.Limit > maxListLimit || in.Offset < 0 {
+		return nil, tool.InvalidArgs("limit must be 1-%d and offset >= 0", maxListLimit)
 	}
-	q := url.Values{"start": {strconv.Itoa(in.Start)}, "limit": {strconv.Itoa(in.Limit)}}
+	q := url.Values{"start": {strconv.Itoa(in.Offset)}, "limit": {strconv.Itoa(in.Limit)}}
 	for _, f := range []struct{ v, field, param string }{{in.StartDate, "start_date", "startDate"}, {in.EndDate, "end_date", "endDate"}} {
 		if f.v == "" {
 			continue
@@ -419,7 +423,7 @@ func connectActivitiesList(ctx context.Context, env *tool.Env, in listIn) (*tool
 		}
 		rows = append(rows, r)
 	}
-	return tool.OK(map[string]any{"activities": rows, "count": len(rows), "start": in.Start}), nil
+	return tool.OK(map[string]any{"activities": rows, "count": len(rows), "offset": in.Offset}), nil
 }
 
 func activityPath(id int64) (string, error) {

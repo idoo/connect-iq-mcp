@@ -11,17 +11,10 @@ import (
 func unavail(what string) error { return fmt.Errorf("%s: %w", what, ErrUnavailable) }
 
 type (
-	noPlanner  struct{}
 	noStore    struct{}
 	noToolsets struct{}
 	noFiles    struct{}
 )
-
-func (noPlanner) Propose(context.Context, string, any, string, PlanPreview) (string, error) {
-	return "", unavail("plan store")
-}
-
-func (noPlanner) Claim(context.Context, string, any) error { return ErrPreviewRequired }
 
 func (noStore) Cursor(string, string, string) (string, error)  { return "", unavail("state store") }
 func (noStore) SetCursor(string, string, string, string) error { return unavail("state store") }

@@ -35,14 +35,26 @@ var (
 	anyURL = regexp.MustCompile(`https?://(?:[^\s"'<>\\]|\\u0026|\\/)+`)
 	// signedParam matches signing parameters outside a URL.
 	signedParam = regexp.MustCompile(`(?i)\b(X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token|Key-Pair-Id)=[^&\s"'\\]+`)
+	// ironSeal matches a bare Fe26.2 iron seal (portal session cookie value).
+	ironSeal = regexp.MustCompile(`Fe26\.2\*[A-Za-z0-9*_~.+/=-]+`)
+	// serviceTicket matches an SSO service ticket (ST-<n>-<random>…).
+	serviceTicket = regexp.MustCompile(`\bST-[0-9]+-[0-9A-Za-z._-]{3,}`)
+	// tokenField matches token fields in JSON ("k":"v") and key=value forms.
+	// Tickets are caught by shape (serviceTicket) and in URLs, so prose like
+	// "open a ticket: support" stays readable.
+	tokenField = regexp.MustCompile(`(?i)(\b(?:refresh|access|id)_token|\boauth_token(?:_secret)?)(["']?\s*[:=]\s*["']?)[^\s"'&;,\\<>]+`)
+	// sessionPair matches a session=<value> cookie pair outside a Cookie header.
+	sessionPair = regexp.MustCompile(`(?i)(\bsession=)[^\s"'&;,\\<>]+`)
 
 	redactLetters = regexp.MustCompile(`^[A-Za-z]+$`)
 )
 
 // Redact removes credentials from s: JWTs, PEM blocks, Authorization and
-// Bearer credentials, and the query string of signed URLs (X-Amz-*,
-// Signature, Expires, Key-Pair-Id, Policy, token, sig), keeping their scheme,
-// host and path. Text without secrets is returned unchanged.
+// Bearer credentials, cookies, Fe26.2 iron seals, session= pairs, SSO service
+// tickets (ST-…), *_token / oauth_token fields, and the query string of signed
+// or credential-carrying URLs (X-Amz-*, Signature, Expires, Key-Pair-Id,
+// Policy, token, *_token, ticket, code, sig), keeping their scheme, host and
+// path. Text without secrets is returned unchanged.
 func Redact(s string) string {
 	b := Bytes([]byte(s))
 	if bytes.Equal(b, []byte(s)) {
@@ -77,6 +89,18 @@ func Bytes(b []byte) []byte {
 	}
 	if signedParam.Match(b) {
 		b = signedParam.ReplaceAll(b, []byte("${1}="+redactedValue))
+	}
+	if ironSeal.Match(b) {
+		b = ironSeal.ReplaceAllLiteral(b, []byte(redactedValue))
+	}
+	if serviceTicket.Match(b) {
+		b = serviceTicket.ReplaceAllLiteral(b, []byte(redactedValue))
+	}
+	if tokenField.Match(b) {
+		b = tokenField.ReplaceAll(b, []byte("${1}${2}"+redactedValue))
+	}
+	if sessionPair.Match(b) {
+		b = sessionPair.ReplaceAll(b, []byte("${1}"+redactedValue))
 	}
 	return b
 }
@@ -116,7 +140,8 @@ func signedQuery(raw string) bool {
 		case strings.HasPrefix(k, "x-amz-"), strings.HasPrefix(k, "x-goog-"):
 			return true
 		case k == "signature", k == "expires", k == "key-pair-id", k == "policy",
-			k == "token", k == "access_token", k == "sig":
+			k == "token", k == "access_token", k == "refresh_token", k == "id_token",
+			k == "oauth_token", k == "oauth_verifier", k == "ticket", k == "code", k == "sig":
 			return true
 		}
 	}

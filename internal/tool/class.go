@@ -46,7 +46,9 @@ type Annotations struct {
 // Annotations derives the MCP tool annotations from the tool's metadata.
 // readOnlyHint follows the class, destructiveHint is explicit for non-read
 // tools, idempotentHint comes from Meta.Idempotent and openWorldHint is true
-// unless the tool is Local (never touches the network).
+// unless the tool is Local. Local only means "never touches the network";
+// it is independent of AvailableReadOnly, so a network tool usable in
+// read-only mode (auth_login) must not set it.
 func (m Meta) Annotations() Annotations {
 	a := Annotations{
 		Title:          m.Title,

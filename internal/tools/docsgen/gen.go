@@ -30,16 +30,30 @@ type Entry struct {
 }
 
 // confirmName returns the documented name of a tool's confirm gate; a gate
-// that requires a human is documented as "human".
+// that requires a human (always or on its public branch) is "human".
 func confirmName(m tool.Meta) string {
 	switch {
-	case m.RequireHuman:
+	case m.RequireHuman || m.HumanApproval:
 		return "human"
 	case m.Confirm == tool.ConfirmByFlag:
 		return "flag"
 	default:
 		return "none"
 	}
+}
+
+// metaOf returns the declaration of a listed tool: registered tools first,
+// then the tools each session builds itself (toolsets).
+func metaOf(name string) (tool.Meta, bool) {
+	if t, ok := tool.Lookup(name); ok {
+		return t.Meta(), true
+	}
+	for _, t := range mcpserver.SessionTools() {
+		if t.Name() == name {
+			return t.Meta(), true
+		}
+	}
+	return tool.Meta{}, false
 }
 
 // Entries lists every tool as advertised with writes enabled and all
@@ -74,19 +88,19 @@ func Entries(ctx context.Context) ([]Entry, error) {
 		if err != nil {
 			return nil, err
 		}
+		m, ok := metaOf(lt.Name)
+		if !ok {
+			return nil, fmt.Errorf("docsgen: tool %q has no declaration", lt.Name)
+		}
 		e := Entry{
 			Name:        lt.Name,
 			Title:       lt.Title,
 			Description: lt.Description,
 			Annotations: lt.Annotations,
 			InputSchema: schema,
-			Toolset:     tool.Core,
-			Class:       tool.Read.String(),
-			Confirm:     confirmName(tool.Meta{}),
-		}
-		if t, ok := tool.Lookup(lt.Name); ok {
-			m := t.Meta()
-			e.Toolset, e.Class, e.Confirm = m.Toolset, m.Class.String(), confirmName(m)
+			Toolset:     m.Toolset,
+			Class:       m.Class.String(),
+			Confirm:     confirmName(m),
 		}
 		e.DefaultToolset = e.Toolset.IsDefault()
 		out = append(out, e)

@@ -8,10 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -67,45 +64,8 @@ func launchApp(ctx context.Context, bundle, profile string, url string) (string,
 	}
 }
 
-// profilePIDs lists processes started with exactly this --user-data-dir.
-func profilePIDs(profile string) []int {
-	pat := "--user-data-dir=" + regexp.QuoteMeta(profile) + "( |$)"
-	out, err := exec.Command("pgrep", "-f", "--", pat).Output() //nolint:gosec // fixed program; pat is a regexp-quoted path after "--"
-	if err != nil {
-		return nil
-	}
-	var pids []int
-	for _, f := range strings.Fields(string(out)) {
-		if n, err := strconv.Atoi(f); err == nil && n != os.Getpid() {
-			pids = append(pids, n)
-		}
-	}
-	return pids
-}
-
-// waitProfileExit waits up to d for every process of the profile to exit.
-func waitProfileExit(profile string, d time.Duration) bool {
-	for end := time.Now().Add(d); ; {
-		if len(profilePIDs(profile)) == 0 {
-			return true
-		}
-		if time.Now().After(end) {
-			return false
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-// killProfile terminates the browser we launched for profile (we don't own
-// its pid because LaunchServices started it).
-func killProfile(profile string) {
-	for _, p := range profilePIDs(profile) {
-		_ = syscall.Kill(p, syscall.SIGTERM)
-	}
-	if waitProfileExit(profile, 3*time.Second) {
-		return
-	}
-	for _, p := range profilePIDs(profile) {
-		_ = syscall.Kill(p, syscall.SIGKILL)
-	}
+// excludeFromBackup keeps the signed-in profile out of Time Machine. Best
+// effort: errors are ignored.
+func excludeFromBackup(dir string) {
+	_ = exec.Command("tmutil", "addexclusion", dir).Run() //nolint:gosec // fixed program, argv array; dir is our own profile path
 }

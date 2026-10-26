@@ -3,8 +3,10 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
+	"github.com/idoo/garmin-mcp/internal/config"
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
@@ -161,7 +163,11 @@ func clientName(ctx context.Context) string {
 // writesInstructions returns copy-paste steps to restart garmin-mcp with writes on
 // for the detected MCP client.
 func writesInstructions(client string) string {
-	const tail = " Then restart the client. Alternatively set allow_writes = true in the profile in ~/.config/garmin-mcp/config.toml."
+	cfgPath, err := config.DefaultPath(os.Getenv)
+	if err != nil {
+		cfgPath = "the garmin-mcp config.toml"
+	}
+	tail := " Then restart the client. Alternatively set allow_writes = true in the profile in " + cfgPath + "."
 	c := strings.ToLower(client)
 	switch {
 	case strings.Contains(c, "claude-code") || strings.Contains(c, "claude code"):

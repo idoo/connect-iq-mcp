@@ -49,7 +49,7 @@ type session struct {
 	deps  Deps
 	srv   *mcp.Server
 	tools []tool.Tool
-	plans *Planner
+	plans *tool.Planner
 
 	syncMu sync.Mutex // serializes sync against the SDK
 	mu     sync.Mutex
@@ -68,6 +68,12 @@ func Build(_ context.Context, deps Deps) (*mcp.Server, error) {
 		return nil, err
 	}
 	return s.srv, nil
+}
+
+// SessionTools returns the tools every session builds itself (not in the
+// tool registry), for generated docs. Their handlers must not be called.
+func SessionTools() []tool.Tool {
+	return []tool.Tool{(&session{}).toolsetsTool()}
 }
 
 func newSession(deps Deps) (*session, error) {
@@ -89,7 +95,7 @@ func newSession(deps Deps) (*session, error) {
 	}
 	s := &session{
 		deps:   deps,
-		plans:  NewPlanner(deps.Now),
+		plans:  tool.NewPlanner(deps.Now),
 		on:     map[tool.Toolset]bool{tool.Core: true},
 		writes: deps.Profile.AllowWrites,
 		listed: map[string]bool{},

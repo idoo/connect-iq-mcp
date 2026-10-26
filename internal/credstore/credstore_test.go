@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,7 +62,7 @@ func TestKeyringRoundTrip(t *testing.T) {
 	keyring.MockInit()
 	s := testStore(t, nil)
 	exp := time.Now().Add(30 * 24 * time.Hour)
-	if err := s.SavePortalCookies(context.Background(), cookies(exp)); err != nil {
+	if err := s.savePortal(&portalCred{Cookies: cookies(exp)}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.PortalCookies(context.Background())
@@ -84,10 +85,13 @@ func TestKeyringRoundTrip(t *testing.T) {
 }
 
 func TestFileFallback0600(t *testing.T) {
-	keyring.MockInitWithError(errors.New("keychain locked"))
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no POSIX modes; the file is DPAPI-protected instead")
+	}
+	keyring.MockInitWithError(keyring.ErrUnsupportedPlatform)
 	defer keyring.MockInit()
 	s := testStore(t, nil)
-	if err := s.SavePortalCookies(context.Background(), cookies(time.Now().Add(time.Hour*24*10))); err != nil {
+	if err := s.savePortal(&portalCred{Cookies: cookies(time.Now().Add(time.Hour * 24 * 10))}); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(s.credFile())
@@ -100,7 +104,7 @@ func TestFileFallback0600(t *testing.T) {
 	if di, _ := os.Stat(filepath.Dir(s.credFile())); di.Mode().Perm() != 0o700 {
 		t.Fatalf("dir mode = %v", di.Mode().Perm())
 	}
-	if st := s.Status(context.Background()); st.Portal.Source != srcFile {
+	if st := s.Status(context.Background()); !strings.HasPrefix(st.Portal.Source, srcFile+" (keychain unavailable") {
 		t.Fatalf("source = %q", st.Portal.Source)
 	}
 }

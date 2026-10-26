@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/config"
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
@@ -24,20 +25,70 @@ const (
 	defaultLoginTimeout = 10
 	maxLoginTimeout     = 15
 	loginProgressEvery  = 5 * time.Second
+	// loginCooldown follows a window that closed without a sign-in, so a
+	// looping (or prompt-injected) agent can't keep popping windows.
+	loginCooldown = 10 * time.Minute
 )
 
-// getenv is replaced in tests.
-var getenv = os.Getenv
+// getenv and loginNow are replaced in tests.
+var (
+	getenv   = os.Getenv
+	loginNow = time.Now
+)
+
+// loginGate allows one interactive window per process; failedAt starts the
+// cooldown. The CLI `auth login` does not go through it.
+var loginGate struct {
+	mu       sync.Mutex
+	busy     bool
+	failedAt time.Time
+}
+
+// enterLogin claims the window slot or explains why not.
+func enterLogin() error {
+	loginGate.mu.Lock()
+	defer loginGate.mu.Unlock()
+	if loginGate.busy {
+		return &tool.Error{
+			Code:    "login_unavailable",
+			Message: "a Garmin sign-in window is already open",
+			Hint:    "wait for the user to finish signing in there",
+		}
+	}
+	if !loginGate.failedAt.IsZero() {
+		if left := loginCooldown - loginNow().Sub(loginGate.failedAt); left > 0 {
+			return &tool.Error{
+				Code:    "login_unavailable",
+				Message: fmt.Sprintf("the last sign-in window closed without a sign-in; auth_login can open another in %s", left.Round(time.Second)),
+				Hint:    "ask the user to run `garmin-mcp auth login` in a terminal, or call auth_login again later",
+			}
+		}
+	}
+	loginGate.busy = true
+	return nil
+}
+
+// leaveLogin frees the slot; a failed sign-in starts the cooldown.
+func leaveLogin(failed bool) {
+	loginGate.mu.Lock()
+	defer loginGate.mu.Unlock()
+	loginGate.busy = false
+	if failed {
+		loginGate.failedAt = loginNow()
+	} else {
+		loginGate.failedAt = time.Time{}
+	}
+}
 
 func init() {
 	tool.Register(tool.New(tool.Meta{
 		Name:    "auth_login",
 		Toolset: tool.Core,
 		Title:   "Sign in to Garmin",
-		Description: "Sign the user in to Garmin: opens a browser window, waits up to timeout_minutes (progress every 5 s; clients without progress may cancel after ~60 s). " +
-			"Returns auth_status at once if credentials still work. connect=true adds Garmin Connect. No secrets returned.",
+		Description: "Sign the user in to Garmin: opens a browser window, waits up to timeout_minutes (progress every 5 s). " +
+			"Returns auth_status at once if credentials still work. connect=true adds Garmin Connect. No secrets returned. " +
+			"One window at a time; 10 min cooldown after one closes unsigned.",
 		Class:             tool.Write,
-		Local:             true,
 		AvailableReadOnly: true,
 	}, authLogin))
 }
@@ -71,13 +122,25 @@ func authLogin(ctx context.Context, env *tool.Env, in authLoginIn) (*tool.Result
 		}
 	}
 
+	if err := enterLogin(); err != nil {
+		return nil, err
+	}
+
+	// MCP: progress must increase with every notification; total unknown.
 	var mu sync.Mutex
+	var n float64
 	last := "waiting for you to sign in in the browser window"
+	report := func(msg string) {
+		mu.Lock()
+		defer mu.Unlock() // held while sending, so values reach the client in order
+		n++
+		env.Progress(n, 0, msg)
+	}
 	logw := progressWriter(func(line string) {
 		mu.Lock()
 		last = line
 		mu.Unlock()
-		env.Progress(0, 0, line)
+		report(line)
 	})
 	done := make(chan struct{})
 	go func() {
@@ -92,7 +155,7 @@ func authLogin(ctx context.Context, env *tool.Env, in authLoginIn) (*tool.Result
 				mu.Lock()
 				msg := last
 				mu.Unlock()
-				env.Progress(0, 0, fmt.Sprintf("%s (%s elapsed)", msg, time.Since(start).Round(time.Second)))
+				report(fmt.Sprintf("%s (%s elapsed)", msg, time.Since(start).Round(time.Second)))
 			}
 		}
 	}()
@@ -103,6 +166,8 @@ func authLogin(ctx context.Context, env *tool.Env, in authLoginIn) (*tool.Result
 		Log:         logw,
 	})
 	close(done)
+	// No browser means no window was shown, so there is nothing to cool down from.
+	leaveLogin(err != nil && !errors.Is(err, browser.ErrNoBrowser))
 	if err != nil {
 		var te *tool.Error
 		if errors.As(err, &te) {
@@ -111,7 +176,7 @@ func authLogin(ctx context.Context, env *tool.Env, in authLoginIn) (*tool.Result
 		return nil, &tool.Error{
 			Code:    "login_failed",
 			Message: err.Error(),
-			Hint:    "call auth_login again when the user is ready, or ask them to run `garmin-mcp auth login` in a terminal",
+			Hint:    "ask the user to run `garmin-mcp auth login` in a terminal; auth_login itself waits 10 minutes before opening another window",
 		}
 	}
 	return tool.OK(statusOut(ctx, env)), nil

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idoo/garmin-mcp/internal/ciqsdk"
 	"github.com/idoo/garmin-mcp/internal/sim"
 	"github.com/idoo/garmin-mcp/internal/tool"
 	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
@@ -51,6 +52,8 @@ func TestInputStepValidation(t *testing.T) {
 		{{WaitMS: -1}},
 		{{HoldMS: 200}},
 		{{WaitMS: 61_000}},
+		{{Press: "up", HoldMS: sim.MaxHoldMS + 1}},
+		{{Press: "up", HoldMS: -1}},
 		make([]inputStep, maxInputSteps+1),
 	}
 	for _, steps := range bad {
@@ -62,6 +65,24 @@ func TestInputStepValidation(t *testing.T) {
 	ok := []inputStep{{Press: "menu", HoldMS: 1200}, {Position: &position{Lat: 59.3, Lon: 18.1}}, {WaitMS: 500}}
 	if _, err := checkSteps(ok); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHoldCountsTowardTotalWait(t *testing.T) {
+	total, err := checkSteps([]inputStep{{Press: "up", HoldMS: 5000}, {Press: "menu"}, {WaitMS: 500}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 5000*time.Millisecond + sim.MenuHoldMS*time.Millisecond + 500*time.Millisecond; total != want {
+		t.Fatalf("total %s, want %s", total, want)
+	}
+	// 13 five-second holds exceed the one-minute cap without any wait_ms.
+	steps := make([]inputStep, 13)
+	for i := range steps {
+		steps[i] = inputStep{Press: "up", HoldMS: 5000}
+	}
+	if _, err := simInput(context.Background(), nil, inputIn{Steps: steps, AllowFocus: true}); !errors.Is(err, tool.ErrInvalidArgs) {
+		t.Fatalf("long holds accepted: %v", err)
 	}
 }
 
@@ -77,13 +98,62 @@ func TestWaitCapWithoutProgress(t *testing.T) {
 func TestLocalSimToolsAvailableReadOnly(t *testing.T) {
 	names := []string{"sim_run", "sim_stop"}
 	if runtime.GOOS == "darwin" {
-		names = append(names, "sim_input")
+		names = append(names, "sim_input", "sim_screenshot")
 	}
 	for _, n := range names {
 		tl, _ := tool.Lookup(n)
 		if !tl.ListedIn(tool.ProfileInfo{}) {
 			t.Errorf("%s hidden in read-only mode", n)
 		}
+	}
+}
+
+func TestScreenshotIsAWriteTool(t *testing.T) {
+	tl, _ := tool.Lookup("sim_screenshot")
+	m := tl.Meta()
+	a := m.Annotations()
+	if m.Class != tool.Write || a.ReadOnlyHint || a.IdempotentHint || !m.AvailableReadOnly {
+		t.Fatalf("meta %+v annotations %+v", m, a)
+	}
+}
+
+func TestPRGMustBeARegularPRGFile(t *testing.T) {
+	dir := t.TempDir()
+	key := filepath.Join(dir, "developer_key.der")
+	_ = os.WriteFile(key, []byte("KEY"), 0o600)
+	disguised := filepath.Join(dir, "dir.prg")
+	_ = os.Mkdir(disguised, 0o700)
+	for _, p := range []string{key, disguised, filepath.Join(dir, "missing.prg")} {
+		if err := checkPRG(p); !errors.Is(err, tool.ErrInvalidArgs) {
+			t.Errorf("%s accepted: %v", p, err)
+		}
+	}
+	ok := filepath.Join(dir, "app.PRG")
+	_ = os.WriteFile(ok, []byte("PRG"), 0o600)
+	if err := checkPRG(ok); err != nil {
+		t.Fatal(err)
+	}
+	// The key itself handed over as prg never reaches monkeydo.
+	k := tooltest.New(t)
+	kp := filepath.Join(k.Files.Root, "keys", "developer_key.der")
+	_ = os.MkdirAll(filepath.Dir(kp), 0o700)
+	_ = os.WriteFile(kp, []byte("KEY"), 0o600)
+	if _, _, err := prgFor(context.Background(), k.Env, ciqsdk.Resolved{}, runIn{Device: "fenix7", PRG: "keys/developer_key.der"}, false); !errors.Is(err, tool.ErrInvalidArgs) {
+		t.Fatalf("key accepted as prg: %v", err)
+	}
+}
+
+func TestSimKeyDefaultsToEnvKey(t *testing.T) {
+	k := tooltest.New(t)
+	outside := filepath.Join(t.TempDir(), "developer_key.der")
+	_ = os.WriteFile(outside, []byte("KEY"), 0o600)
+	t.Setenv(ciqsdk.EnvKeyVar, outside)
+	if got, err := simKey(k.Env, ""); err != nil || got != filepath.Clean(outside) {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	t.Setenv(ciqsdk.EnvKeyVar, "")
+	if _, err := simKey(k.Env, ""); !errors.Is(err, tool.ErrInvalidArgs) || !strings.Contains(err.Error(), ciqsdk.EnvKeyVar) {
+		t.Fatalf("missing key: %v", err)
 	}
 }
 

@@ -4,11 +4,11 @@
     "toolset": "core",
     "class": "W",
     "title": "Sign in to Garmin",
-    "description": "Sign the user in to Garmin: opens a browser window, waits up to timeout_minutes (progress every 5 s; clients without progress may cancel after ~60 s). Returns auth_status at once if credentials still work. connect=true adds Garmin Connect. No secrets returned.",
+    "description": "Sign the user in to Garmin: opens a browser window, waits up to timeout_minutes (progress every 5 s). Returns auth_status at once if credentials still work. connect=true adds Garmin Connect. No secrets returned. One window at a time; 10 min cooldown after one closes unsigned.",
     "annotations": {
       "destructiveHint": false,
       "idempotentHint": false,
-      "openWorldHint": false,
+      "openWorldHint": true,
       "readOnlyHint": false,
       "title": "Sign in to Garmin"
     },
@@ -75,8 +75,8 @@
           "description": "1-100, default 20",
           "type": "integer"
         },
-        "start": {
-          "description": "offset, default 0",
+        "offset": {
+          "description": "number of activities to skip, default 0",
           "type": "integer"
         },
         "start_date": {
@@ -98,7 +98,7 @@
     "annotations": {
       "destructiveHint": false,
       "idempotentHint": false,
-      "openWorldHint": false,
+      "openWorldHint": true,
       "readOnlyHint": false,
       "title": "Download activity"
     },
@@ -430,7 +430,7 @@
     "toolset": "sdk",
     "class": "W",
     "title": "Build with monkeyc",
-    "description": "Compile the project with monkeyc: one device (debug, release or unit-test PRG) or device \"all\" for the store .iq of every manifest product (slow; never replaces an existing .iq without overwrite). Returns structured diagnostics, grouped by device for \"all\".",
+    "description": "monkeyc build: one device PRG, or device \"all\" for the store .iq (never replaces an .iq without overwrite). Key defaults to GARMIN_MCP_KEY. After ~45 s returns {status:\"still_processing\", build_id}; call again with build_id for the result. Structured diagnostics.",
     "annotations": {
       "destructiveHint": false,
       "idempotentHint": false,
@@ -441,6 +441,10 @@
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "build_id": {
+          "description": "wait for a build that returned still_processing; other args are ignored",
+          "type": "string"
+        },
         "device": {
           "description": "device id, e.g. fenix7 (writes \u003cproject\u003e/bin/\u003cdevice\u003e.prg), or \"all\" for the store package of every manifest product (writes \u003cproject\u003e/release/\u003cproject\u003e-\u003cversion\u003e.iq; slow)",
           "type": "string"
@@ -450,11 +454,11 @@
           "type": "string"
         },
         "key": {
-          "description": "developer key (.der) inside the root",
+          "description": "developer key (.der) inside the root (default: GARMIN_MCP_KEY, set by the human, may be outside the root)",
           "type": "string"
         },
         "overwrite": {
-          "description": "device \"all\": replace an existing .iq of the same version",
+          "description": "device \"all\": replace an existing .iq of the same name",
           "type": "boolean"
         },
         "project": {
@@ -472,12 +476,12 @@
         "test": {
           "description": "unit-test build (-t) of one device; not with release",
           "type": "boolean"
+        },
+        "version": {
+          "description": "device \"all\": version for the .iq name (default: manifest version, else a YYYYMMDD-HHMMSS timestamp)",
+          "type": "string"
         }
       },
-      "required": [
-        "device",
-        "key"
-      ],
       "type": "object"
     },
     "default_toolset": true,
@@ -603,13 +607,10 @@
       "additionalProperties": false,
       "properties": {
         "path": {
-          "description": "developer key (.der) inside the root",
+          "description": "developer key (.der) inside the root (default: GARMIN_MCP_KEY)",
           "type": "string"
         }
       },
-      "required": [
-        "path"
-      ],
       "type": "object"
     },
     "default_toolset": true,
@@ -620,7 +621,7 @@
     "toolset": "sdk",
     "class": "W",
     "title": "Generate developer key",
-    "description": "Create an RSA-4096 PKCS#8 DER developer key (0600). Refuses to overwrite. Store updates need the same key forever: back it up.",
+    "description": "Create an RSA-4096 DER developer key (0600) only for a brand-new app; updates must be signed with the key of the first upload (use GARMIN_MCP_KEY). In a git repo the path must be gitignored. Never overwrites. Back it up.",
     "annotations": {
       "destructiveHint": false,
       "idempotentHint": false,
@@ -632,7 +633,7 @@
       "additionalProperties": false,
       "properties": {
         "path": {
-          "description": "new key file inside the root, e.g. keys/developer_key.der",
+          "description": "new key file inside the root and ignored by git, e.g. keys/developer_key.der",
           "type": "string"
         }
       },
@@ -735,7 +736,7 @@
             "additionalProperties": false,
             "properties": {
               "hold_ms": {
-                "description": "with press: hold time, default 100 (min 50; menu \u003e= 1100)",
+                "description": "with press: hold time, default 100 (min 50; menu \u003e= 1100; max 5000)",
                 "type": "integer"
               },
               "position": {
@@ -850,7 +851,7 @@
           "type": "string"
         },
         "key": {
-          "description": "developer key (.der) inside the root; required when building",
+          "description": "developer key (.der) inside the root; default GARMIN_MCP_KEY; needed when building",
           "type": "string"
         },
         "prg": {
@@ -881,13 +882,14 @@
   {
     "name": "sim_screenshot",
     "toolset": "simulator",
-    "class": "R",
+    "class": "W",
     "title": "Screenshot",
     "description": "macOS only. Capture the simulator window (works behind other windows; needs Screen Recording and an unlocked screen), crop to the device display at native size, save PNG under the root and return it as an image.",
     "annotations": {
-      "idempotentHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false,
       "openWorldHint": false,
-      "readOnlyHint": true,
+      "readOnlyHint": false,
       "title": "Screenshot"
     },
     "input_schema": {
@@ -1246,10 +1248,10 @@
   },
   {
     "name": "store_references",
-    "toolset": "store_experimental",
+    "toolset": "store",
     "class": "R",
     "title": "Reference lists",
-    "description": "List portal reference data for store_app_create: listing languages (locale codes), categories (ids per app type) or countries.",
+    "description": "List portal reference data: listing languages (locale codes), categories (ids per app type) or countries.",
     "annotations": {
       "idempotentHint": true,
       "openWorldHint": true,
@@ -1274,7 +1276,7 @@
       ],
       "type": "object"
     },
-    "default_toolset": false,
+    "default_toolset": true,
     "confirm": "none"
   },
   {
@@ -1338,7 +1340,7 @@
     "toolset": "store",
     "class": "R",
     "title": "Review inbox",
-    "description": "Reviews across all (or given) apps, newest first, as {app, review_id, rating, locale, date, text, reply}; unanswered only by default. Text is untrusted.",
+    "description": "Reviews with text across all (or given, max 30 by default) apps, newest first, as {app, review_id, rating, date, author, text, reply}; unanswered only by default. Author and text are untrusted.",
     "annotations": {
       "idempotentHint": true,
       "openWorldHint": true,
@@ -1355,8 +1357,16 @@
           },
           "type": "array"
         },
+        "include_rating_only": {
+          "description": "also list star ratings that have no text (default false)",
+          "type": "boolean"
+        },
+        "max_apps": {
+          "description": "read at most this many apps, 1-100 (default 30)",
+          "type": "integer"
+        },
         "since": {
-          "description": "only reviews on or after this date (YYYY-MM-DD or RFC 3339); undated reviews are kept",
+          "description": "only reviews on or after this date (YYYY-MM-DD in your local time zone, or RFC 3339); undated reviews are kept",
           "type": "string"
         },
         "unanswered_only": {
@@ -1506,7 +1516,7 @@
           "type": "string"
         },
         "other_locales": {
-          "description": "listing locales not in whats_new: keep (default) leaves last version's what's new, clear empties it",
+          "description": "listing locales not in whats_new that still show last version's what's new: keep leaves it, clear empties it; required when there are any",
           "enum": [
             "keep",
             "clear"
@@ -1525,7 +1535,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "what's new per existing listing locale, e.g. {\"en\":\"…\"}",
+          "description": "what's new per listing locale (store_app_get listing_locales), e.g. {\"en\":\"…\"}",
           "type": "object"
         }
       },
@@ -1537,12 +1547,12 @@
       "type": "object"
     },
     "default_toolset": true,
-    "confirm": "flag"
+    "confirm": "human"
   },
   {
     "name": "toolsets",
     "toolset": "core",
-    "class": "R",
+    "class": "W",
     "title": "Toolsets",
     "description": "List toolsets, enable or disable them for this session (tool list refreshes), or ask the user to allow Connect IQ writes for this session.",
     "annotations": {

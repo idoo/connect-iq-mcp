@@ -24,7 +24,22 @@ env:
   COSIGN_VERSION: "v3.1.4"
 
 jobs:
+  # The mcpb CLI comes from npm with a floating transitive tree and install
+  # scripts, so it runs here, with no write/OIDC permissions and no release
+  # environment, never in the job that signs and attests.
+  mcpb-validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate the .mcpb manifest
+        run: scripts/build-mcpb.sh --validate-manifest "${GITHUB_REF_NAME#v}"
+
   release:
+    needs: mcpb-validate
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -62,6 +77,8 @@ jobs:
 
       - name: Build .mcpb bundle
         id: mcpb
+        env:
+          MCPB_SKIP_VALIDATE: "1" # validated in mcpb-validate (unprivileged)
         run: |
           version="${GITHUB_REF_NAME#v}"
           mcpb=$(scripts/build-mcpb.sh "$version")

@@ -7,7 +7,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -113,32 +115,159 @@ func processName() string {
 	return "simulator"
 }
 
-// FindPID returns the simulator pid, or 0 when not running.
+// FindPID returns the pid of a Connect IQ SDK simulator run by this user
+// (see [IsSDKSimulator]), or 0 when none is running. Processes merely named
+// simulator, or another user's, are ignored.
 func FindPID(ctx context.Context) (int, error) {
-	if runtime.GOOS == "windows" {
-		out, err := exec.CommandContext(ctx, "tasklist", "/FI", "IMAGENAME eq simulator.exe", "/FO", "CSV", "/NH").Output()
-		if err != nil {
-			return 0, err
-		}
-		f := strings.Split(strings.TrimSpace(string(out)), ",")
-		if len(f) < 2 || !strings.Contains(strings.ToLower(f[0]), "simulator") {
-			return 0, nil
-		}
-		return strconv.Atoi(strings.Trim(f[1], `"`))
-	}
-	out, err := exec.CommandContext(ctx, "pgrep", "-x", processName()).Output() //nolint:gosec // G204: fixed program; processName() is a per-OS constant
-	var ee *exec.ExitError
-	if errors.As(err, &ee) && ee.ExitCode() == 1 {
-		return 0, nil
-	}
+	pids, err := candidatePIDs(ctx)
 	if err != nil {
 		return 0, err
 	}
-	first := strings.Fields(string(out))
-	if len(first) == 0 {
-		return 0, nil
+	for _, pid := range pids {
+		if IsSDKSimulator(executable(ctx, pid)) {
+			return pid, nil
+		}
 	}
-	return strconv.Atoi(first[0])
+	return 0, nil
+}
+
+// candidatePIDs lists this user's processes named like the simulator.
+func candidatePIDs(ctx context.Context) ([]int, error) {
+	if runtime.GOOS == "windows" {
+		args := []string{"/FI", "IMAGENAME eq simulator.exe", "/FO", "CSV", "/NH"}
+		if u, err := user.Current(); err == nil {
+			args = append(args, "/FI", "USERNAME eq "+u.Username)
+		}
+		out, err := exec.CommandContext(ctx, "tasklist", args...).Output() //nolint:gosec // G204: fixed program; filters are a constant image name and the current user's name
+		if err != nil {
+			return nil, err
+		}
+		var pids []int
+		for _, line := range strings.Split(string(out), "\n") {
+			f := strings.Split(strings.TrimSpace(line), ",")
+			if len(f) < 2 || !strings.EqualFold(strings.Trim(f[0], `"`), "simulator.exe") {
+				continue
+			}
+			if pid, err := strconv.Atoi(strings.Trim(f[1], `"`)); err == nil {
+				pids = append(pids, pid)
+			}
+		}
+		return pids, nil
+	}
+	out, err := exec.CommandContext(ctx, "pgrep", "-U", strconv.Itoa(os.Getuid()), "-x", processName()).Output() //nolint:gosec // G204: fixed program; integer uid and a per-OS constant name
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 1 {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var pids []int
+	for _, f := range strings.Fields(string(out)) {
+		if pid, err := strconv.Atoi(f); err == nil {
+			pids = append(pids, pid)
+		}
+	}
+	return pids, nil
+}
+
+// ErrPortNotOurs means 127.0.0.1:1234 is held by a process other than the
+// verified simulator; nothing is pushed to it.
+var ErrPortNotOurs = errors.New("port 1234 is held by a process other than the Connect IQ simulator")
+
+// verifyListener checks that every listener on port 1234 is pid.
+func verifyListener(ctx context.Context, pid int) error {
+	pids, err := listenerPIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: cannot identify the listener: %v", ErrPortNotOurs, err)
+	}
+	if pid <= 0 || len(pids) == 0 {
+		return fmt.Errorf("%w (listener pid unknown, simulator pid %d)", ErrPortNotOurs, pid)
+	}
+	for _, p := range pids {
+		if p != pid {
+			return fmt.Errorf("%w (listener pid %d, simulator pid %d)", ErrPortNotOurs, p, pid)
+		}
+	}
+	return nil
+}
+
+// listenerPIDs returns the pids listening on TCP port 1234.
+func listenerPIDs(ctx context.Context) ([]int, error) {
+	if runtime.GOOS == "windows" {
+		out, err := exec.CommandContext(ctx, "netstat", "-ano", "-p", "TCP").Output()
+		if err != nil {
+			return nil, err
+		}
+		return parseNetstatPIDs(string(out), "1234"), nil
+	}
+	out, err := exec.CommandContext(ctx, "lsof", "-nP", "-iTCP:1234", "-sTCP:LISTEN", "-Fp").Output()
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return parseLsofPIDs(string(out)), nil
+	case errors.As(err, &ee) && ee.ExitCode() == 1:
+		return nil, nil
+	case runtime.GOOS == "linux" && errors.Is(err, exec.ErrNotFound):
+		out, err := exec.CommandContext(ctx, "ss", "-Hltnp", "sport = :1234").Output()
+		if err != nil {
+			return nil, err
+		}
+		return parseSSPIDs(string(out)), nil
+	}
+	return nil, err
+}
+
+// parseLsofPIDs reads `lsof -Fp` output (lines "p<pid>").
+func parseLsofPIDs(out string) []int {
+	var pids []int
+	for _, line := range strings.Split(out, "\n") {
+		l := strings.TrimSpace(line)
+		if !strings.HasPrefix(l, "p") {
+			continue
+		}
+		if pid, err := strconv.Atoi(l[1:]); err == nil {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+var ssPIDRe = regexp.MustCompile(`pid=(\d+)`)
+
+// parseSSPIDs reads `ss -Hltnp` output. A listener whose process is not
+// shown (another user's) yields pid 0, which never matches.
+func parseSSPIDs(out string) []int {
+	var pids []int
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		m := ssPIDRe.FindAllStringSubmatch(line, -1)
+		if len(m) == 0 {
+			pids = append(pids, 0)
+		}
+		for _, g := range m {
+			pid, _ := strconv.Atoi(g[1])
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// parseNetstatPIDs reads `netstat -ano` output for LISTENING sockets on port.
+func parseNetstatPIDs(out, port string) []int {
+	var pids []int
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 5 || !strings.EqualFold(f[0], "TCP") || f[3] != "LISTENING" || !strings.HasSuffix(f[1], ":"+port) {
+			continue
+		}
+		if pid, err := strconv.Atoi(f[4]); err == nil {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
 }
 
 // executable returns the binary path of pid (best effort).
@@ -209,6 +338,9 @@ func Start(ctx context.Context, clk Clock, sdk ciqsdk.SDK) (st Status, already b
 		return st, false, fmt.Errorf("%w: running %s, requested %s (sim_stop first)", ErrSDKMismatch, st.SDKPath, sdk.Path)
 	}
 	if st.Ready {
+		if err := verifyListener(ctx, st.PID); err != nil {
+			return st, false, err
+		}
 		return st, true, nil
 	}
 	bin := sdk.Bin()
@@ -233,7 +365,10 @@ func Start(ctx context.Context, clk Clock, sdk ciqsdk.SDK) (st Status, already b
 		return st, false, err
 	}
 	st, err = GetStatus(ctx)
-	return st, false, err
+	if err != nil {
+		return st, false, err
+	}
+	return st, false, verifyListener(ctx, st.PID)
 }
 
 // Stop kills monkeydo clients, then the simulator, and waits for the port

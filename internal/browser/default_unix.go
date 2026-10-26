@@ -22,7 +22,7 @@ var detectDefault = func() defaultBrowser {
 	}
 	d := defaultBrowser{Name: kb.name, Chromium: kb.chromium}
 	for _, b := range bins {
-		if p, err := exec.LookPath(b); err == nil {
+		if p, err := exec.LookPath(b); err == nil && !isSnap(p) {
 			d.Exe = p
 			break
 		}

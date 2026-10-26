@@ -192,3 +192,45 @@ func TestUnsafeRootRefusesHomeAncestors(t *testing.T) {
 		t.Errorf("client root inside home: %v", err)
 	}
 }
+
+// On a case-insensitive filesystem (macOS default) a differently cased
+// spelling of home or its parent names the same directory and must be
+// refused (HA-5: `cd /users/ivan` keeps the typed case in $PWD).
+func TestUnsafeRootRefusesCaseVariantOfHome(t *testing.T) {
+	base := t.TempDir()
+	home := mkdir(t, base, "Users", "Ivan")
+	proj := mkdir(t, home, "Proj")
+	variant := filepath.Join(base, "users", "ivan")
+	if _, err := os.Stat(variant); err != nil {
+		t.Skip("case-sensitive filesystem")
+	}
+	pf := newProjectFiles(t, "", proj, home)
+	for _, dir := range []string{variant, filepath.Join(base, "USERS")} {
+		if !unsafeRoot(dir, home) {
+			t.Errorf("unsafeRoot(%q) = false, want refused", dir)
+		}
+		if _, err := pf.ForRoots([]string{fileURI(dir)}); !errors.Is(err, tool.ErrUnavailable) {
+			t.Errorf("client root %s: err = %v, want unavailable", dir, err)
+		}
+	}
+	if unsafeRoot(filepath.Join(variant, "proj"), home) {
+		t.Error("a case-variant folder inside home must stay allowed")
+	}
+}
+
+// A path outside the root is an argument error with a hint (M8).
+func TestOutsideRootIsInvalidArguments(t *testing.T) {
+	base := t.TempDir()
+	home := mkdir(t, base, "home")
+	proj := mkdir(t, home, "proj")
+	pf := newProjectFiles(t, "", proj, home)
+	f, err := pf.ForRoots(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.ReadFile(filepath.Join(base, "x"))
+	b := tool.BodyFor(err)
+	if !errors.Is(err, ErrOutsideRoot) || b.Error != "invalid_arguments" || !strings.Contains(b.Hint, "workspace root") {
+		t.Fatalf("err = %v, body = %+v", err, b)
+	}
+}

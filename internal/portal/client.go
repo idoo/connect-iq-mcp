@@ -247,11 +247,9 @@ func (c *Client) do(ctx context.Context, r request, out any) error {
 		return fmt.Errorf("portal %s %s: %w", r.method, r.path, err)
 	}
 	defer res.Body.Close()
-	if sc := res.Header.Values("Set-Cookie"); len(sc) > 0 {
-		if merged := MergeSetCookie(cookie, sc); merged != cookie {
-			if err := c.creds.SavePortalCookies(ctx, merged); err != nil {
-				return fmt.Errorf("saving rotated portal cookies: %w", err)
-			}
+	if sc := res.Header.Values("Set-Cookie"); len(sc) > 0 && MergeSetCookie(cookie, sc) != cookie {
+		if err := c.creds.SavePortalCookies(ctx, cookie, sc); err != nil {
+			return fmt.Errorf("saving rotated portal cookies: %w", err)
 		}
 	}
 	data, err := io.ReadAll(io.LimitReader(res.Body, maxBody))

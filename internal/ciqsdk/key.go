@@ -9,11 +9,31 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 )
 
 // KeyBits is the developer key size Connect IQ expects.
 const KeyBits = 4096
+
+// EnvKeyVar names the environment variable holding the human-chosen
+// developer key path. It is the only key path allowed outside the project
+// root, and it is only ever read, never written.
+const EnvKeyVar = "GARMIN_MCP_KEY"
+
+// EnvKey returns the developer key path from GARMIN_MCP_KEY when it is set to
+// an absolute path naming an existing regular file.
+func EnvKey() (path string, ok bool) {
+	p := os.Getenv(EnvKeyVar)
+	if p == "" || !filepath.IsAbs(p) {
+		return "", false
+	}
+	st, err := os.Stat(p) //nolint:gosec // G703: the human sets this path on purpose; it is only stat'ed and read
+	if err != nil || !st.Mode().IsRegular() {
+		return "", false
+	}
+	return filepath.Clean(p), true
+}
 
 // KeyInfo describes a developer key (never the key bytes).
 type KeyInfo struct {

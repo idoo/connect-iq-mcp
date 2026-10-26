@@ -131,8 +131,10 @@ func (s *Store) portalDead(p *portalCred) bool {
 	return err == nil && !exp.After(s.now())
 }
 
-// SavePortalCookies persists a rotated Cookie header under the profile lock.
-func (s *Store) SavePortalCookies(ctx context.Context, header string) error {
+// SavePortalCookies applies setCookie to the header stored now, under the
+// profile lock, only if that header is still sent (what the request carried).
+// A header renewed or removed by another process meanwhile is left alone.
+func (s *Store) SavePortalCookies(ctx context.Context, sent string, setCookie []string) error {
 	unlock, err := lockPath(ctx, s.lockFile())
 	if err != nil {
 		return fmt.Errorf("lock credentials: %w", err)
@@ -142,14 +144,17 @@ func (s *Store) SavePortalCookies(ctx context.Context, header string) error {
 	if err != nil {
 		return err
 	}
-	p := &portalCred{}
-	if b.Portal != nil {
-		cp := *b.Portal
-		p = &cp
+	if b.Portal == nil || b.Portal.Cookies != sent {
+		return nil // no longer derives from the request's cookie
 	}
-	p.Cookies = header
+	merged := portal.MergeSetCookie(sent, setCookie)
+	if merged == sent {
+		return nil
+	}
+	p := *b.Portal
+	p.Cookies = merged
 	p.SavedAt = s.now().Unix()
-	return s.savePortal(p)
+	return s.savePortal(&p)
 }
 
 // ConnectToken returns a DI OAuth2 access token, refreshing it within 15

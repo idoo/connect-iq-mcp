@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // KeyCodes maps simulator buttons to macOS virtual key codes.
@@ -35,25 +36,68 @@ func mapAXError(out []byte, err error) error {
 	return fmt.Errorf("%v: %s", err, strings.TrimSpace(s))
 }
 
-// pressJXA re-checks that the simulator is frontmost immediately before every
-// posted key event, so keys never land in whatever app took focus.
-const pressJXA = `ObjC.import('CoreGraphics'); ObjC.import('ApplicationServices');
+// MaxHoldMS bounds a press hold so a key is never held for long.
+const MaxHoldMS = 5000
+
+// pressPrelude binds the simulator process by pid and defines the
+// primitives used by pressCore: front(), post(code, down), pause(seconds).
+const pressPrelude = `ObjC.import('CoreGraphics'); ObjC.import('ApplicationServices');
 if (!$.AXIsProcessTrusted()) { throw new Error('accessibility_denied'); }
 var se = Application('System Events');
-var p = se.processes.whose({name: 'simulator'});
+var p = se.processes.whose({unixId: %d});
 if (p.length === 0) { throw new Error('simulator process not found'); }
 p[0].frontmost = true; delay(0.3);
-function key(code, down) {
-  if (!p[0].frontmost()) { throw new Error('focus_lost'); }
-  var e = $.CGEventCreateKeyboardEvent($(), code, down); $.CGEventPost(0, e);
-}
-if (%t) { key(56, true); delay(0.06); key(56, false); delay(0.15); }
-key(%d, true); delay(%s); key(%d, false); 'ok';`
+function front() { return p[0].frontmost(); }
+function post(code, down) { $.CGEventPost(0, $.CGEventCreateKeyboardEvent($(), code, down)); }
+function pause(s) { delay(s); }
+`
 
-// Press sends button with a hold of holdMS to the frontmost simulator
-// (macOS; steals focus). warmup sends an inert Shift first (the first key
-// after an app launch is swallowed).
-func Press(ctx context.Context, button string, holdMS int, warmup bool) error {
+// pressCore checks focus before every key-down and posts the key-up in a
+// finally block, so no key (Shift included) is left held when the hold is
+// interrupted.
+const pressCore = `function press(code, hold) {
+  if (!front()) { throw new Error('focus_lost'); }
+  post(code, true);
+  try { pause(hold); } finally { post(code, false); }
+}
+if (%t) { press(56, 0.06); pause(0.15); }
+press(%d, %s); 'ok';`
+
+// pressScriptCore returns the focus-checked press logic for code held
+// holdMS, with an optional Shift warmup.
+func pressScriptCore(code, holdMS int, warmup bool) string {
+	return fmt.Sprintf(pressCore, warmup, code, strconv.FormatFloat(float64(holdMS)/1000, 'f', 3, 64))
+}
+
+// PressHold returns the effective hold of a press of button: menu is held at
+// least [MenuHoldMS], every press at least 50 ms, 0 means 100 ms.
+func PressHold(button string, holdMS int) int {
+	if holdMS == 0 {
+		holdMS = 100
+	}
+	if button == "menu" && holdMS < MenuHoldMS {
+		holdMS = MenuHoldMS
+	}
+	return max(holdMS, 50)
+}
+
+// runScript runs osascript without killing it on ctx cancel (a kill
+// mid-hold would skip the key-up); the script is bounded by limit instead,
+// and ctx's error is reported after it ends.
+func runScript(ctx context.Context, limit time.Duration, args ...string) ([]byte, error) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limit)
+	defer cancel()
+	out, err := exec.CommandContext(rctx, "osascript", args...).CombinedOutput() //nolint:gosec // G204: fixed program; scripts are constant templates filled with integers and numbers
+	if err != nil {
+		return out, err
+	}
+	return out, ctx.Err()
+}
+
+// Press sends button with a hold of holdMS (at most [MaxHoldMS]) to the
+// simulator pid (macOS; steals focus). warmup sends an inert Shift first
+// (the first key after an app launch is swallowed).
+func Press(ctx context.Context, pid int, button string, holdMS int, warmup bool) error {
 	if runtime.GOOS != "darwin" {
 		return ErrUnsupported()
 	}
@@ -61,21 +105,19 @@ func Press(ctx context.Context, button string, holdMS int, warmup bool) error {
 	if !ok {
 		return fmt.Errorf("unknown button %q", button)
 	}
-	if button == "menu" && holdMS < MenuHoldMS {
-		holdMS = MenuHoldMS
+	if holdMS > MaxHoldMS {
+		return fmt.Errorf("hold_ms %d exceeds %d", holdMS, MaxHoldMS)
 	}
-	if holdMS < 50 {
-		holdMS = 50
-	}
-	script := fmt.Sprintf(pressJXA, warmup, code, strconv.FormatFloat(float64(holdMS)/1000, 'f', 3, 64), code)
-	out, err := exec.CommandContext(ctx, "osascript", "-l", "JavaScript", "-e", script).CombinedOutput() //nolint:gosec // G204: fixed program; script is a constant template filled with integer key codes and a number
+	holdMS = PressHold(button, holdMS)
+	script := fmt.Sprintf(pressPrelude, pid) + pressScriptCore(code, holdMS, warmup)
+	out, err := runScript(ctx, time.Duration(holdMS)*time.Millisecond+20*time.Second, "-l", "JavaScript", "-e", script)
 	if err != nil {
 		return mapAXError(out, err)
 	}
 	return nil
 }
 
-const positionAS = `tell application "System Events" to tell process "simulator"
+const positionAS = `tell application "System Events" to tell (first process whose unix id is %d)
 	set frontmost to true
 	delay 0.3
 	click (first menu item of menu 1 of menu bar item "Settings" of menu bar 1 whose name starts with "Set Position")
@@ -88,9 +130,9 @@ const positionAS = `tell application "System Events" to tell process "simulator"
 	key code 36
 end tell`
 
-// SetPosition sets the simulated GPS position via Settings → Set Position
-// (macOS Accessibility UI scripting; steals focus).
-func SetPosition(ctx context.Context, lat, lon float64) error {
+// SetPosition sets the simulated GPS position of the simulator pid via
+// Settings → Set Position (macOS Accessibility UI scripting; steals focus).
+func SetPosition(ctx context.Context, pid int, lat, lon float64) error {
 	if runtime.GOOS != "darwin" {
 		return ErrUnsupported()
 	}
@@ -98,7 +140,7 @@ func SetPosition(ctx context.Context, lat, lon float64) error {
 		return fmt.Errorf("lat/lon out of range")
 	}
 	v := strconv.FormatFloat(lat, 'f', -1, 64) + ", " + strconv.FormatFloat(lon, 'f', -1, 64)
-	out, err := exec.CommandContext(ctx, "osascript", "-e", fmt.Sprintf(positionAS, v)).CombinedOutput() //nolint:gosec // G204: fixed program; v is two formatted floats, quoted with %q
+	out, err := exec.CommandContext(ctx, "osascript", "-e", fmt.Sprintf(positionAS, pid, v)).CombinedOutput() //nolint:gosec // G204: fixed program; integer pid and two formatted floats, quoted with %q
 	if err != nil {
 		return mapAXError(out, err)
 	}
@@ -106,17 +148,17 @@ func SetPosition(ctx context.Context, lat, lon float64) error {
 }
 
 const frontmostAS = `tell application "System Events"
-	if not (exists process "simulator") then error "simulator process not found"
-	return frontmost of process "simulator"
+	if not (exists (first process whose unix id is %d)) then error "simulator process not found"
+	return frontmost of (first process whose unix id is %d)
 end tell`
 
-// Frontmost reports whether the simulator is the frontmost app, without
-// raising it (macOS).
-func Frontmost(ctx context.Context) (bool, error) {
+// Frontmost reports whether the simulator pid is the frontmost app,
+// without raising it (macOS).
+func Frontmost(ctx context.Context, pid int) (bool, error) {
 	if runtime.GOOS != "darwin" {
 		return false, ErrUnsupported()
 	}
-	out, err := exec.CommandContext(ctx, "osascript", "-e", frontmostAS).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "osascript", "-e", fmt.Sprintf(frontmostAS, pid, pid)).CombinedOutput() //nolint:gosec // G204: fixed program; integer pid
 	if err != nil {
 		return false, mapAXError(out, err)
 	}

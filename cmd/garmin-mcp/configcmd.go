@@ -37,7 +37,7 @@ var sessionTools = []string{"toolsets"}
 var configUsage = "usage: garmin-mcp config <snippet|install> <client> [--profile NAME]\nclients: " + strings.Join(clients, ", ")
 
 // credentialsNote reminds that credentials come from `garmin-mcp auth`.
-const credentialsNote = "credentials: run `garmin-mcp auth login` once in a terminal; the server reads them from the OS keychain"
+const credentialsNote = "credentials: run `garmin-mcp auth login` once in a terminal; the server reads them from the OS keychain, or a 0600 file when there is none (`garmin-mcp auth status` says which)"
 
 func runConfig(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
@@ -352,11 +352,19 @@ type mergeResult struct {
 	unchanged bool   // the file already had this content; nothing written
 }
 
-// mergeFile rewrites path with merge(old). An existing file is first copied
-// to path.garmin-mcp-backup-<timestamp>. The new content is written atomically,
-// keeping the old file mode (0600 for new files). Identical content is left
-// alone: no backup, no write.
+// mergeFile rewrites path with merge(old). A symlinked path (dotfiles) is
+// resolved first, so the link stays and its target is updated. An existing
+// file is first copied to <target>.garmin-mcp-backup-<timestamp>. The new
+// content is written atomically, keeping the old file mode (0600 for new
+// files). Identical content is left alone: no backup, no write.
 func mergeFile(path string, merge func(old []byte) ([]byte, error)) (mergeResult, error) {
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		target, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return mergeResult{}, fmt.Errorf("%s is a symlink whose target can't be resolved (fix or remove the link): %w", path, err)
+		}
+		path = target
+	}
 	old, err := os.ReadFile(path) //nolint:gosec // client config path we chose.
 	mode := os.FileMode(0o600)
 	exists := err == nil
@@ -412,7 +420,14 @@ func mergeFile(path string, merge func(old []byte) ([]byte, error)) (mergeResult
 func mergeJSONServer(old []byte, key, name string, entry map[string]any) ([]byte, error) {
 	doc := map[string]any{}
 	if len(bytes.TrimSpace(old)) > 0 {
-		if err := json.Unmarshal(old, &doc); err != nil {
+		// UseNumber keeps numbers exactly as written (no float64 round trip).
+		dec := json.NewDecoder(bytes.NewReader(old))
+		dec.UseNumber()
+		err := dec.Decode(&doc)
+		if err == nil && dec.More() {
+			err = errors.New("unexpected data after the top-level object")
+		}
+		if err != nil {
 			return nil, fmt.Errorf("parse JSON (edit it by hand or fix it first): %w", err)
 		}
 	}

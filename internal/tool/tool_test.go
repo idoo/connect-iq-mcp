@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -229,6 +230,34 @@ func TestApprovalPromptEscapesHiddenChars(t *testing.T) {
 	p = tool.PlanPreview{Summary: strings.Repeat("\u200B", tool.MaxApprovalPrompt/3-100)}
 	if _, err := tool.ApprovalPrompt("reviews_reply", p); !errors.Is(err, tool.ErrInvalidArgs) {
 		t.Errorf("escaped oversized prompt err = %v", err)
+	}
+}
+
+// HA-2: invisible characters that round 1 missed are escaped by category;
+// \n, \t, CJK and plain emoji pass through untouched.
+func TestEscapeHiddenByCategory(t *testing.T) {
+	for _, r := range []rune{0xE0041, 0xE0001, 0x061C, 0xFE0F, 0xE0100, 0x180E, 0x180B, 0xFFFB, 0x034F, 0x115F, 0x3164, 0xFFA0, 0xE000, 0x0378} {
+		got := tool.EscapeHidden("Thanks!" + string(r))
+		want := fmt.Sprintf(`Thanks!\u{%04X}`, r)
+		if !strings.HasPrefix(got, "WARNING: contains hidden characters") || !strings.HasSuffix(got, want) || strings.ContainsRune(got, r) {
+			t.Errorf("%U: got %q, want warning + %q", r, got, want)
+		}
+	}
+	for _, s := range []string{"line\n\tnext", "你好，世界 こんにちは 안녕", "great app 😀🚀👍", "Привет & <b>"} {
+		if got := tool.EscapeHidden(s); got != s {
+			t.Errorf("EscapeHidden(%q) = %q, want unchanged", s, got)
+		}
+	}
+}
+
+// HA-11: the approval prompt shows payload text as posted, without HTML escaping.
+func TestApprovalPromptKeepsAmpersand(t *testing.T) {
+	got, err := tool.ApprovalPrompt("reviews_reply", tool.PlanPreview{Summary: "reply", Intended: map[string]string{"reply": "see https://x.com/?a=1&b=2 <b>"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `"see https://x.com/?a=1&b=2 <b>"`) || strings.Contains(got, `\u0026`) {
+		t.Errorf("prompt = %q", got)
 	}
 }
 

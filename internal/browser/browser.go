@@ -99,12 +99,6 @@ const stateJS = `(() => {
 
 const pollEvery = 700 * time.Millisecond
 
-// raiseEvery and raiseFor bound keepFront's retries.
-const (
-	raiseEvery = 4 * time.Second
-	raiseFor   = 2 * time.Minute
-)
-
 // Login launches the browser with the dedicated profile and captures what r
 // asks for. One launch handles the portal first, then Connect.
 func Login(ctx context.Context, o Options, r Request) (Result, error) {
@@ -127,6 +121,9 @@ func Login(ctx context.Context, o Options, r Request) (Result, error) {
 	if logw == nil {
 		logw = io.Discard
 	}
+	if !o.Headless && !HasDisplay() {
+		return Result{}, errors.New("browser: no display (DISPLAY and WAYLAND_DISPLAY are unset); sign in on a desktop session, or run `garmin-mcp auth login` on a machine with a screen and copy the profile")
+	}
 	if o.BinDir == "" {
 		o.BinDir = defaultBinDir()
 	}
@@ -141,6 +138,12 @@ func Login(ctx context.Context, o Options, r Request) (Result, error) {
 		return Result{}, fmt.Errorf("browser: create profile dir: %w", err)
 	}
 	_ = os.Chmod(o.ProfileDir, 0o700) //nolint:gosec // G302: a directory needs the x bit; 0700 is owner-only
+	if err := writePreferences(o.ProfileDir); err != nil {
+		return Result{}, err
+	}
+	excludeFromBackup(o.ProfileDir)
+	// A headless renew orphaned by a killed server would hold the profile lock.
+	killOrphans(o.ProfileDir)
 
 	bctx, cleanup, err := start(ctx, o, exe)
 	defer cleanup()
@@ -159,7 +162,7 @@ func Login(ctx context.Context, o Options, r Request) (Result, error) {
 
 	wctx, cancelW := context.WithTimeout(bctx, o.Timeout)
 	defer cancelW()
-	s := &session{ctx: wctx, parent: ctx, headless: o.Headless, log: logw, name: name, raise: !o.Headless && canLaunchApp}
+	s := &session{ctx: wctx, parent: ctx, headless: o.Headless, log: logw, name: name}
 	if t := chromedp.FromContext(bctx).Target; t != nil {
 		s.targetID = t.TargetID
 	}
@@ -191,38 +194,6 @@ type session struct {
 	targetID target.ID
 	hinted   bool
 	name     string // browser display name for progress lines
-
-	raise      bool // keep raising the window until it has had focus once
-	focused    bool
-	raiseSince time.Time
-	lastRaise  time.Time
-}
-
-// keepFront re-raises the interactive window until it has had focus once.
-// macOS cooperative activation refuses to activate another app while the user
-// is typing in the active one, so the raise at launch can land behind; a later
-// attempt succeeds once the user pauses. Gives up after raiseFor.
-func (s *session) keepFront() {
-	if !s.raise || s.focused {
-		return
-	}
-	now := time.Now()
-	if s.raiseSince.IsZero() {
-		s.raiseSince = now
-	}
-	if now.Sub(s.raiseSince) > raiseFor {
-		s.raise = false
-		return
-	}
-	if has, err := chromedp.Run(s.ctx, chromedp.Evaluate[bool](`document.hasFocus()`)); err == nil && has {
-		s.focused = true
-		return
-	}
-	if now.Sub(s.lastRaise) < raiseEvery {
-		return
-	}
-	s.lastRaise = now
-	raiseWindow(s.ctx)
 }
 
 func (s *session) hint() {
@@ -321,7 +292,6 @@ func (s *session) interaction(st pageState) error {
 }
 
 func (s *session) sleep() error {
-	s.keepFront()
 	t := time.NewTimer(pollEvery)
 	defer t.Stop()
 	select {
@@ -491,7 +461,6 @@ func (s *session) connect() (string, error) {
 		fmt.Fprintln(s.log, "Waiting for the Garmin Connect sign-in to finish…")
 	}
 	for {
-		s.keepFront()
 		select {
 		case t := <-tickets:
 			_, _ = chromedp.Call(s.ctx, fetch.Disable, cdp.Empty{})

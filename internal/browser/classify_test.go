@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -112,8 +113,13 @@ func TestCandidates(t *testing.T) {
 	if mac[0] != "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" || mac[1] != "/Users/u/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" {
 		t.Errorf("darwin candidates: %v", mac[:2])
 	}
-	if len(mac) != 8 {
+	if len(mac) != 6 {
 		t.Errorf("darwin: %d candidates", len(mac))
+	}
+	for _, c := range mac {
+		if strings.Contains(c, "Chromium") {
+			t.Errorf("darwin auto-detects unsigned Chromium: %s", c)
+		}
 	}
 	win := candidates("windows", "", func(k string) string {
 		if k == "ProgramFiles" {

@@ -3,6 +3,8 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,7 +21,7 @@ func testHTTPHandler(t *testing.T) http.Handler {
 	t.Helper()
 	srv := mcp.NewServer(&mcp.Implementation{Name: "garmin-mcp", Version: "test"}, nil)
 	h, err := HTTPHandler(HTTPOptions{
-		Token:          "s3cret",
+		Token:          testToken,
 		AllowedOrigins: []string{"https://app.example"},
 		NewServer:      func(*http.Request) *mcp.Server { return srv },
 	})
@@ -28,6 +30,9 @@ func testHTTPHandler(t *testing.T) http.Handler {
 	}
 	return h
 }
+
+// testToken is a bearer token long enough for HTTPHandler.
+var testToken = strings.Repeat("t", 32)
 
 const initBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}`
 
@@ -55,15 +60,15 @@ func TestHTTPAuthAndOrigin(t *testing.T) {
 	}{
 		{"no token", "", "", http.StatusUnauthorized},
 		{"wrong token", "Bearer nope", "", http.StatusUnauthorized},
-		{"basic scheme", "Basic s3cret", "", http.StatusUnauthorized},
-		{"token prefix", "Bearer s3cre", "", http.StatusUnauthorized},
-		{"bad origin", "Bearer s3cret", "https://evil.example", http.StatusForbidden},
+		{"basic scheme", "Basic " + testToken, "", http.StatusUnauthorized},
+		{"token prefix", "Bearer " + testToken[:len(testToken)-1], "", http.StatusUnauthorized},
+		{"bad origin", "Bearer " + testToken, "https://evil.example", http.StatusForbidden},
 		{"bad origin no token", "", "http://attacker.test", http.StatusForbidden},
-		{"localhost lookalike", "Bearer s3cret", "http://localhost.evil.test", http.StatusForbidden},
-		{"ok", "Bearer s3cret", "", http.StatusOK},
-		{"ok loopback origin", "Bearer s3cret", "http://127.0.0.1:3000", http.StatusOK},
-		{"ok localhost origin", "Bearer s3cret", "http://localhost:5173", http.StatusOK},
-		{"ok configured origin", "Bearer s3cret", "https://app.example", http.StatusOK},
+		{"localhost lookalike", "Bearer " + testToken, "http://localhost.evil.test", http.StatusForbidden},
+		{"ok", "Bearer " + testToken, "", http.StatusOK},
+		{"ok loopback origin", "Bearer " + testToken, "http://127.0.0.1:3000", http.StatusOK},
+		{"ok localhost origin", "Bearer " + testToken, "http://localhost:5173", http.StatusOK},
+		{"ok configured origin", "Bearer " + testToken, "https://app.example", http.StatusOK},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -119,7 +124,7 @@ func TestCheckListenAddr(t *testing.T) {
 func TestServeHTTPRefusals(t *testing.T) {
 	ctx := context.Background()
 	newSrv := func(*http.Request) *mcp.Server { return nil }
-	if err := ServeHTTP(ctx, "0.0.0.0:0", HTTPOptions{Token: "t", NewServer: newSrv}); err == nil {
+	if err := ServeHTTP(ctx, "0.0.0.0:0", HTTPOptions{Token: testToken, NewServer: newSrv}); err == nil {
 		t.Error("non-loopback without AllowRemote accepted")
 	}
 	no := false
@@ -147,7 +152,7 @@ func TestServeHTTPShutsDownOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
 	go func() {
-		errc <- ServeHTTP(ctx, "127.0.0.1:0", HTTPOptions{Token: "t", NewServer: func(*http.Request) *mcp.Server { return nil }})
+		errc <- ServeHTTP(ctx, "127.0.0.1:0", HTTPOptions{Token: testToken, NewServer: func(*http.Request) *mcp.Server { return nil }})
 	}()
 	cancel()
 	if err := <-errc; err != nil {
@@ -156,11 +161,11 @@ func TestServeHTTPShutsDownOnCancel(t *testing.T) {
 }
 
 func TestSessionFactoryServesInitialize(t *testing.T) {
-	h, err := HTTPHandler(HTTPOptions{Token: "t", NewServer: SessionFactory(Deps{Tools: []tool.Tool{}, Version: "test"})})
+	h, err := HTTPHandler(HTTPOptions{Token: testToken, NewServer: SessionFactory(Deps{Tools: []tool.Tool{}, Version: "test"})})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := doHTTP(t, h, "/mcp", "Bearer t", "")
+	rec := doHTTP(t, h, "/mcp", "Bearer "+testToken, "")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"garmin-mcp"`) {
 		t.Errorf("initialize = %d %q", rec.Code, rec.Body.String())
 	}
@@ -222,7 +227,7 @@ func TestHTTPBuildsOneServerPerSession(t *testing.T) {
 	factory := SessionFactory(Deps{Tools: []tool.Tool{}, Version: "test"})
 	var mu sync.Mutex
 	seen := map[*mcp.Server]bool{}
-	h, err := HTTPHandler(HTTPOptions{Token: "t", NewServer: func(r *http.Request) *mcp.Server {
+	h, err := HTTPHandler(HTTPOptions{Token: testToken, NewServer: func(r *http.Request) *mcp.Server {
 		s := factory(r)
 		mu.Lock()
 		seen[s] = true
@@ -235,7 +240,7 @@ func TestHTTPBuildsOneServerPerSession(t *testing.T) {
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 	ctx := context.Background()
-	tr := &mcp.StreamableClientTransport{Endpoint: ts.URL, HTTPClient: &http.Client{Transport: authTransport{"t"}}}
+	tr := &mcp.StreamableClientTransport{Endpoint: ts.URL, HTTPClient: &http.Client{Transport: authTransport{testToken}}}
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "c", Version: "1"}, nil).Connect(ctx, tr, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -264,21 +269,21 @@ func TestHTTPBuildsOneServerPerSession(t *testing.T) {
 
 func TestHTTPSessionCapAndIdleTimeout(t *testing.T) {
 	h, err := HTTPHandler(HTTPOptions{
-		Token: "t", SessionTimeout: 100 * time.Millisecond, MaxSessions: 1,
+		Token: testToken, SessionTimeout: 100 * time.Millisecond, MaxSessions: 1,
 		NewServer: SessionFactory(Deps{Tools: []tool.Tool{}, Version: "test"}),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec := doHTTP(t, h, "/mcp", "Bearer t", ""); rec.Code != http.StatusOK || rec.Header().Get(sessionIDHeader) == "" {
+	if rec := doHTTP(t, h, "/mcp", "Bearer "+testToken, ""); rec.Code != http.StatusOK || rec.Header().Get(sessionIDHeader) == "" {
 		t.Fatalf("first session = %d", rec.Code)
 	}
-	if rec := doHTTP(t, h, "/mcp", "Bearer t", ""); rec.Code != http.StatusServiceUnavailable {
+	if rec := doHTTP(t, h, "/mcp", "Bearer "+testToken, ""); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("second session over cap = %d, want 503", rec.Code)
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		rec := doHTTP(t, h, "/mcp", "Bearer t", "")
+		rec := doHTTP(t, h, "/mcp", "Bearer "+testToken, "")
 		if rec.Code == http.StatusOK {
 			break
 		}
@@ -304,5 +309,154 @@ func TestSessionLimitsFromEnv(t *testing.T) {
 	t.Setenv(EnvHTTPSessionTimeout, "soon")
 	if _, _, err := sessionLimits(HTTPOptions{}); err == nil {
 		t.Fatal("bad duration accepted")
+	}
+}
+
+// HA-10: a short (guessable) token is refused at startup.
+func TestHTTPRejectsShortToken(t *testing.T) {
+	newSrv := func(*http.Request) *mcp.Server { return nil }
+	if _, err := HTTPHandler(HTTPOptions{Token: "1", NewServer: newSrv}); !errors.Is(err, ErrTokenTooShort) {
+		t.Fatalf("token \"1\": err = %v, want ErrTokenTooShort", err)
+	}
+	short := testToken[:MinTokenLength-1]
+	if err := ServeHTTP(context.Background(), "127.0.0.1:0", HTTPOptions{Token: short, NewServer: newSrv}); !errors.Is(err, ErrTokenTooShort) {
+		t.Fatalf("31-char token: err = %v, want ErrTokenTooShort", err)
+	}
+}
+
+// HA-10: repeated wrong tokens from one IP get locked out, even when the
+// next guess is right; other IPs are unaffected.
+func TestHTTPThrottlesFailedAuth(t *testing.T) {
+	h := testHTTPHandler(t)
+	for i := range authFreeFailures {
+		if rec := doHTTP(t, h, "/mcp", "Bearer guess", ""); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("miss %d = %d, want 401", i, rec.Code)
+		}
+	}
+	if rec := doHTTP(t, h, "/mcp", "Bearer guess", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("lockout-triggering miss = %d, want 401", rec.Code)
+	}
+	rec := doHTTP(t, h, "/mcp", "Bearer "+testToken, "")
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("right token during lockout = %d, want 429 with Retry-After", rec.Code)
+	}
+	other := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(initBody))
+	other.RemoteAddr = "198.51.100.7:4000"
+	other.Header.Set("Content-Type", "application/json")
+	other.Header.Set("Accept", "application/json, text/event-stream")
+	other.Header.Set("Authorization", "Bearer "+testToken)
+	orec := httptest.NewRecorder()
+	h.ServeHTTP(orec, other)
+	if orec.Code != http.StatusOK {
+		t.Fatalf("other IP = %d, want 200", orec.Code)
+	}
+}
+
+func TestAuthThrottleBackoffAndReset(t *testing.T) {
+	now := time.Unix(0, 0)
+	a := newAuthThrottle(func() time.Time { return now })
+	for range authFreeFailures {
+		a.fail("ip")
+	}
+	if a.blocked("ip") != 0 {
+		t.Fatal("free failures must not lock out")
+	}
+	a.fail("ip")
+	if d := a.blocked("ip"); d != authBaseLockout {
+		t.Fatalf("first lockout = %v", d)
+	}
+	a.fail("ip")
+	if d := a.blocked("ip"); d != 2*authBaseLockout {
+		t.Fatalf("second lockout = %v, want doubled", d)
+	}
+	for range 20 {
+		a.fail("ip")
+	}
+	if d := a.blocked("ip"); d != authMaxLockout {
+		t.Fatalf("capped lockout = %v", d)
+	}
+	now = now.Add(authMaxLockout)
+	if a.blocked("ip") != 0 {
+		t.Fatal("lockout must expire")
+	}
+	a.ok("ip")
+	a.fail("ip")
+	if a.blocked("ip") != 0 {
+		t.Fatal("success must reset the count")
+	}
+}
+
+// G8: an open standalone SSE GET stream must not hold shutdown for the 5 s
+// timeout; ServeHTTP returns nil promptly on cancel (SIGINT).
+func TestServeHTTPShutdownWithOpenSSEStream(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errc := make(chan error, 1)
+	go func() {
+		errc <- ServeHTTP(ctx, addr, HTTPOptions{Token: testToken, NewServer: SessionFactory(Deps{Tools: []tool.Tool{}, Version: "test"})})
+	}()
+	base := "http://" + addr + "/mcp"
+	post := func(body, sid string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, base, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		if sid != "" {
+			req.Header.Set(sessionIDHeader, sid)
+		}
+		var res *http.Response
+		for range 50 { // wait for the listener
+			if res, err = http.DefaultClient.Do(req); err == nil {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+			req.Body = io.NopCloser(strings.NewReader(body))
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	res := post(initBody, "")
+	sid := res.Header.Get(sessionIDHeader)
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
+	if sid == "" {
+		t.Fatalf("initialize = %d, no session id", res.StatusCode)
+	}
+	res = post(`{"jsonrpc":"2.0","method":"notifications/initialized"}`, sid)
+	_ = res.Body.Close()
+
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, base, nil)
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	req.Header.Set(sessionIDHeader, sid)
+	stream, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.Body.Close() }()
+	if stream.StatusCode != http.StatusOK {
+		t.Fatalf("GET stream = %d", stream.StatusCode)
+	}
+	start := time.Now()
+	cancel()
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("ServeHTTP = %v, want nil", err)
+		}
+		if el := time.Since(start); el > 3*time.Second {
+			t.Fatalf("shutdown took %v; the SSE stream held it open", el)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ServeHTTP did not return")
 	}
 }

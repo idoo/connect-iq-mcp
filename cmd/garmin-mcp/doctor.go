@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/ciqsdk"
 	"github.com/idoo/garmin-mcp/internal/config"
+	"github.com/idoo/garmin-mcp/internal/credstore"
 	"github.com/idoo/garmin-mcp/internal/portal"
 )
 
@@ -29,6 +31,7 @@ var (
 	}
 	findJava    = func(ctx context.Context) (ciqsdk.Java, error) { return ciqsdk.FindJava(ctx, nil) }
 	findBrowser = func() (string, error) { return browser.Find("") }
+	hasDisplay  = browser.HasDisplay
 	// probePortal asks the portal who is signed in (GET /developers).
 	probePortal = func(ctx context.Context, store auth.Store) (string, error) {
 		d, err := portal.New(&http.Client{Timeout: 15 * time.Second}, store).Developer(ctx)
@@ -96,10 +99,11 @@ func doctor(ctx context.Context, rep *report, profile string, probe bool) {
 		portalProbe(ctx, rep, store)
 	}
 	localChecks(ctx, rep)
+	keyCheck(rep)
 	if p.AllowWrites {
 		rep.ok("mode: writes enabled")
 	} else {
-		rep.ok("mode: read-only (use --allow-writes or allow_writes=true)")
+		rep.ok("mode: read-only (ask the agent to enable writes, or set GARMIN_MCP_ALLOW_WRITES=1)")
 	}
 	names := make([]string, len(r.Toolsets))
 	for i, ts := range r.Toolsets {
@@ -115,17 +119,9 @@ func doctor(ctx context.Context, rep *report, profile string, probe bool) {
 // credentialChecks reports each credential's state without secrets. It
 // returns the store when portal cookies are present, else nil.
 func credentialChecks(ctx context.Context, rep *report, profile string) auth.Store {
-	if auth.Open == nil {
-		rep.warn("credentials: no credential store in this build")
-		return nil
-	}
-	store, err := auth.Open(ctx, profile)
+	store, err := credstore.Open(ctx, profile)
 	if err != nil {
 		rep.fail("credentials: %v", err)
-		return nil
-	}
-	if store == nil {
-		rep.warn("credentials: none configured; run `garmin-mcp auth login`")
 		return nil
 	}
 	st := store.Status(ctx)
@@ -175,6 +171,35 @@ func localChecks(ctx context.Context, rep *report) {
 	} else {
 		rep.ok("browser: %s", b)
 	}
+	if !hasDisplay() {
+		rep.warn("display: DISPLAY and WAYLAND_DISPLAY are unset, so `garmin-mcp auth login` can't open a window; sign in on a machine with a screen, or use GARMIN_MCP_PORTAL_COOKIES")
+	}
+}
+
+// keyCheck reports the GARMIN_MCP_KEY signing key: set, present, and its
+// public key SHA-256. It never prints key bytes.
+func keyCheck(rep *report) {
+	raw := os.Getenv(ciqsdk.EnvKeyVar)
+	if raw == "" {
+		rep.ok("developer key: %s not set (builds need a key argument inside the root)", ciqsdk.EnvKeyVar)
+		return
+	}
+	p, ok := ciqsdk.EnvKey()
+	if !ok {
+		rep.warn("developer key: %s=%s is not an absolute path to an existing file", ciqsdk.EnvKeyVar, raw)
+		return
+	}
+	ki, err := ciqsdk.CheckKey(p)
+	if err != nil {
+		rep.warn("developer key: %v", err)
+		return
+	}
+	line := fmt.Sprintf("developer key %s: RSA-%d, public key SHA-256 %s", ki.Path, ki.Bits, ki.Fingerprint)
+	if len(ki.Warnings) > 0 {
+		rep.warn("%s (%s)", line, strings.Join(ki.Warnings, "; "))
+		return
+	}
+	rep.ok("%s", line)
 }
 
 func credLine(rep *report, name string, c auth.CredStatus) {

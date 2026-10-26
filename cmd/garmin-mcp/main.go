@@ -14,11 +14,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	_ "github.com/idoo/garmin-mcp/internal/credstore" // sets auth.Open and auth.CLI
+	"github.com/idoo/garmin-mcp/internal/credstore"
 )
 
-const usage = `garmin-mcp — Garmin Connect IQ MCP server
+const usage = `garmin-mcp: MCP server for Garmin Connect IQ developers
 
 Usage:
   garmin-mcp [serve] [flags]          serve MCP over stdio (or --http ADDR); garmin-mcp serve --help lists flags
@@ -93,7 +92,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		return runServe(ctx, rest, stderr)
 	case "auth":
-		if code := auth.CLI(rest, stdout, stderr); code != 0 {
+		if code := credstore.CLI(rest, stdout, stderr); code != 0 {
 			return exitError(code)
 		}
 		return nil

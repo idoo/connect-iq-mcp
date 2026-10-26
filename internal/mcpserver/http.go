@@ -47,6 +47,14 @@ const sessionIDHeader = "Mcp-Session-Id"
 // one because stderr is not a terminal.
 var ErrTokenRequired = errors.New("mcpserver: http: set " + EnvHTTPToken + " (a token is generated only when stderr is a terminal)")
 
+// MinTokenLength is the shortest accepted bearer token: 32 characters (128
+// bits as hex). Shorter tokens fail at startup.
+const MinTokenLength = 32
+
+// ErrTokenTooShort means the configured bearer token is shorter than
+// [MinTokenLength].
+var ErrTokenTooShort = fmt.Errorf("mcpserver: http: %s must be at least %d characters (try `openssl rand -hex 32`)", EnvHTTPToken, MinTokenLength)
+
 // HTTPOptions configures [ServeHTTP].
 type HTTPOptions struct {
 	// Token is the required bearer token; empty generates one (TTY only).
@@ -97,7 +105,13 @@ func ServeHTTP(ctx context.Context, addr string, opts HTTPOptions) error {
 	if err != nil {
 		return fmt.Errorf("mcpserver: http: listen %s: %w", addr, err)
 	}
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	// BaseContext ties every request (including open SSE GET streams) to
+	// ctx, so streams end on shutdown instead of holding Shutdown open.
+	srv := &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
+	}
 	errc := make(chan error, 1)
 	go func() {
 		if opts.TLSCert != "" {
@@ -113,7 +127,9 @@ func ServeHTTP(ctx context.Context, addr string, opts HTTPOptions) error {
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("mcpserver: http: shutdown: %w", err)
+			// A handler ignored cancellation: force-close what is left.
+			// Exiting is still the requested, clean outcome.
+			_ = srv.Close()
 		}
 		return nil
 	}
@@ -146,6 +162,9 @@ func HTTPHandler(opts HTTPOptions) (http.Handler, error) {
 	if opts.Token == "" {
 		return nil, ErrTokenRequired
 	}
+	if len(opts.Token) < MinTokenLength {
+		return nil, ErrTokenTooShort
+	}
 	if opts.NewServer == nil {
 		return nil, errors.New("mcpserver: http: NewServer is required")
 	}
@@ -156,6 +175,7 @@ func HTTPHandler(opts HTTPOptions) (http.Handler, error) {
 	}
 	mcpHandler := mcp.NewStreamableHTTPHandler(opts.NewServer, &mcp.StreamableHTTPOptions{Logger: opts.Logger, SessionTimeout: timeout})
 	limit := &sessionLimiter{max: maxSessions}
+	throttle := newAuthThrottle(time.Now)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -165,13 +185,21 @@ func HTTPHandler(opts HTTPOptions) (http.Handler, error) {
 			http.Error(w, "forbidden origin", http.StatusForbidden)
 			return
 		}
+		ip := clientIP(r)
+		if wait := throttle.blocked(ip); wait > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(int(wait.Round(time.Second)/time.Second)+1))
+			http.Error(w, "too many failed authentication attempts", http.StatusTooManyRequests)
+			return
+		}
 		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		sum := sha256.Sum256([]byte(got))
 		if !ok || subtle.ConstantTimeCompare(sum[:], want[:]) != 1 {
+			throttle.fail(ip)
 			w.Header().Set("WWW-Authenticate", `Bearer realm="garmin-mcp"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		throttle.ok(ip)
 		if r.Header.Get(sessionIDHeader) != "" {
 			mcpHandler.ServeHTTP(w, r)
 			return
@@ -186,6 +214,83 @@ func HTTPHandler(opts HTTPOptions) (http.Handler, error) {
 		limit.release(slot.srv)
 	}))
 	return mux, nil
+}
+
+// Failed-auth backoff: authFreeFailures misses per client IP are free, then
+// each further miss locks that IP out for authBaseLockout doubling up to
+// authMaxLockout. A success or authForget of quiet resets the IP.
+const (
+	authFreeFailures = 5
+	authBaseLockout  = time.Second
+	authMaxLockout   = time.Minute
+	authForget       = 10 * time.Minute
+	authMaxTracked   = 4096
+)
+
+type authFailures struct {
+	n     int
+	last  time.Time
+	until time.Time
+}
+
+// authThrottle slows bearer-token guessing per client IP.
+type authThrottle struct {
+	now func() time.Time
+	mu  sync.Mutex
+	ips map[string]*authFailures
+}
+
+func newAuthThrottle(now func() time.Time) *authThrottle {
+	return &authThrottle{now: now, ips: map[string]*authFailures{}}
+}
+
+// blocked returns how long ip must still wait, or 0.
+func (a *authThrottle) blocked(ip string) time.Duration {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	f := a.ips[ip]
+	if f == nil {
+		return 0
+	}
+	return max(f.until.Sub(a.now()), 0)
+}
+
+func (a *authThrottle) fail(ip string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.now()
+	if len(a.ips) >= authMaxTracked {
+		for k, f := range a.ips {
+			if now.Sub(f.last) > authForget {
+				delete(a.ips, k)
+			}
+		}
+	}
+	f := a.ips[ip]
+	if f == nil || now.Sub(f.last) > authForget {
+		f = &authFailures{}
+		a.ips[ip] = f
+	}
+	f.n++
+	f.last = now
+	if extra := f.n - authFreeFailures; extra > 0 {
+		d := authBaseLockout << min(extra-1, 6)
+		f.until = now.Add(min(d, authMaxLockout))
+	}
+}
+
+func (a *authThrottle) ok(ip string) {
+	a.mu.Lock()
+	delete(a.ips, ip)
+	a.mu.Unlock()
+}
+
+// clientIP is the remote host of r without the port.
+func clientIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 // sessionLimits resolves the idle timeout (0 = never, for the SDK) and the

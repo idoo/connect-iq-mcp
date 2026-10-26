@@ -4,6 +4,7 @@ package sim
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -191,23 +192,73 @@ func (m *Manager) Start(argv []string, prg, device string, tests bool) (*Session
 		s.exitCode.Store(int64(code))
 		close(s.done)
 	}()
-	m.mu.Lock()
-	m.sessions[id] = s
-	m.mu.Unlock()
+	m.add(s)
 	return s, nil
 }
 
+// MaxFinishedSessions is how many exited sessions a [Manager] keeps.
+const MaxFinishedSessions = 20
+
+// add registers s and forgets all but the newest [MaxFinishedSessions]
+// exited sessions; running sessions are always kept.
+func (m *Manager) add(s *Session) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessions[s.ID] = s
+	var done []*Session
+	for _, x := range m.sessions {
+		if x.Exited() {
+			done = append(done, x)
+		}
+	}
+	if len(done) <= MaxFinishedSessions {
+		return
+	}
+	sort.Slice(done, func(i, j int) bool { return done[i].Started.Before(done[j].Started) })
+	for _, x := range done[:len(done)-MaxFinishedSessions] {
+		delete(m.sessions, x.ID)
+	}
+}
+
+// MaxLineBytes is the longest output line kept; the rest of a longer line
+// is read and discarded so the client never blocks on a full pipe.
+const MaxLineBytes = 1024 * 1024
+
 func (s *Session) pump(wg *sync.WaitGroup, stream string, r io.Reader) {
 	defer wg.Done()
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
-		t := strings.TrimRight(sc.Text(), "\r")
-		if strings.Contains(t, CrashMarker) {
-			s.crashed.Store(true)
+	br := bufio.NewReaderSize(r, 64*1024)
+	for {
+		line, truncated, err := readLine(br, MaxLineBytes)
+		if err == nil || len(line) > 0 {
+			t := strings.TrimRight(string(line), "\r")
+			if truncated {
+				t += fmt.Sprintf(" [line truncated at %d bytes]", MaxLineBytes)
+			}
+			if strings.Contains(t, CrashMarker) {
+				s.crashed.Store(true)
+			}
+			s.ring.Append(stream, t)
+			s.firstOne.Do(func() { close(s.first) })
 		}
-		s.ring.Append(stream, t)
-		s.firstOne.Do(func() { close(s.first) })
+		if err != nil {
+			return
+		}
+	}
+}
+
+// readLine reads one line without its newline, keeping at most limit bytes
+// and discarding the rest of the line.
+func readLine(br *bufio.Reader, limit int) (line []byte, truncated bool, err error) {
+	for {
+		chunk, err := br.ReadSlice('\n')
+		body := bytes.TrimSuffix(chunk, []byte("\n"))
+		if room := limit - len(line); len(body) > room {
+			body, truncated = body[:max(room, 0)], true
+		}
+		line = append(line, body...)
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return line, truncated, err
+		}
 	}
 }
 

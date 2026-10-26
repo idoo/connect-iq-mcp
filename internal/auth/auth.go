@@ -13,8 +13,11 @@ import (
 type Store interface {
 	// PortalCookies returns a valid Cookie header for https://apps.garmin.com, renewing if needed.
 	PortalCookies(ctx context.Context) (string, error)
-	// SavePortalCookies persists rotated cookies (Set-Cookie applied by the caller).
-	SavePortalCookies(ctx context.Context, header string) error
+	// SavePortalCookies applies a response's Set-Cookie lines to the stored
+	// Cookie header, under the store's lock, only while the stored header is
+	// still sent (the header the request carried). If another process renewed
+	// or signed out meanwhile, the rotation is dropped.
+	SavePortalCookies(ctx context.Context, sent string, setCookie []string) error
 	// ConnectToken returns a valid DI OAuth2 access token, refreshing if needed.
 	ConnectToken(ctx context.Context) (string, error)
 	// Status reports per-credential state without secrets.

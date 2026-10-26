@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/idoo/garmin-mcp/internal/portal"
 	"github.com/idoo/garmin-mcp/internal/tool"
@@ -157,44 +158,34 @@ func applyEdits(md map[string]any, edits []localeEdit) ([]change, error) {
 }
 
 // fieldView is one changed listing text in an approval prompt: line hunks
-// (Diff), or, when the prompt would exceed tool.MaxApprovalPrompt, digests
-// of the old and new text. Every changed field always has a view.
+// (Diff) or, when the prompt would exceed tool.MaxApprovalPrompt, the full
+// new text with only the old text digested. The new text is never
+// shortened: what the human approves is exactly what goes public.
 type fieldView struct {
 	Locale string      `json:"locale"`
 	Field  string      `json:"field"`
 	Diff   string      `json:"diff,omitempty"`
 	Old    *textDigest `json:"old,omitempty"`
-	New    *textDigest `json:"new,omitempty"`
-	Note   string      `json:"note,omitempty"`
+	New    *string     `json:"new,omitempty"`
 }
 
+// textDigest stands for old text that is being replaced.
 type textDigest struct {
 	Chars  int    `json:"chars"`
 	SHA256 string `json:"sha256_prefix"`
-	Head   string `json:"first_200,omitempty"`
-	Tail   string `json:"last_200,omitempty"`
 }
 
-const digestEdge = 200
-
-func digestOf(s string, edges bool) *textDigest {
+func digestOf(s string) *textDigest {
 	sum := sha256.Sum256([]byte(s))
-	r := []rune(s)
-	d := &textDigest{Chars: len(r), SHA256: hex.EncodeToString(sum[:6])}
-	if edges {
-		if len(r) <= 2*digestEdge {
-			d.Head = s
-		} else {
-			d.Head, d.Tail = string(r[:digestEdge]), string(r[len(r)-digestEdge:])
-		}
-	}
-	return d
+	return &textDigest{Chars: utf8.RuneCountInString(s), SHA256: hex.EncodeToString(sum[:6])}
 }
 
 // fitFields returns p with Intended set to extra (if any) plus one view per
 // changed field: line hunks first; while the approval prompt is too large,
-// the largest remaining hunks are replaced by digests.
-func fitFields(toolName string, p tool.PlanPreview, extra map[string]any, diff []change) tool.PlanPreview {
+// the largest hunks become the full new text with the old text digested.
+// When even that does not fit it refuses (one locale/field per call), so no
+// new text is ever hidden from the human.
+func fitFields(toolName string, p tool.PlanPreview, extra map[string]any, diff []change) (tool.PlanPreview, error) {
 	views := make([]fieldView, len(diff))
 	for i, d := range diff {
 		views[i] = fieldView{Locale: d.Locale, Field: d.Field, Diff: lineDiff(d.From, d.To)}
@@ -206,25 +197,33 @@ func fitFields(toolName string, p tool.PlanPreview, extra map[string]any, diff [
 	}
 	set()
 	for {
-		if _, err := tool.ApprovalPrompt(toolName, p); err == nil {
-			return p
+		_, err := tool.ApprovalPrompt(toolName, p)
+		if err == nil {
+			return p, nil
 		}
 		big := -1
-		var d change
-		for i, c := range diff {
-			if v := views[i]; v.Diff != "" && (big < 0 || len(v.Diff) > len(views[big].Diff)) {
-				big, d = i, c
+		for i, v := range views {
+			// Only a swap that shrinks the view helps.
+			if v.Diff != "" && len(diff[i].To) < len(v.Diff) && (big < 0 || len(v.Diff) > len(views[big].Diff)) { //nolint:gosec // G602: views and diff have the same length
+				big = i
 			}
 		}
 		if big < 0 {
-			return p // all digests; the gate reports the remaining size
+			if len(diff) > 1 {
+				split := "send one locale and field per call"
+				if toolName == "store_app_create" {
+					split = "create the app with one locale and add the others with store_listing_update"
+				}
+				return p, tool.InvalidArgs("the %d listing texts are too long to show the human in one approval; %s", len(diff), split)
+			}
+			return p, tool.InvalidArgs("the new %s for locale %s cannot be shown in full in an approval prompt (%v); shorten it or remove hidden characters", diff[0].Field, diff[0].Locale, err)
 		}
-		views[big].Diff = ""
+		d := diff[big] //nolint:gosec // G602: big indexes views, which has len(diff) entries
+		to := d.To
+		views[big].Diff, views[big].New = "", &to
 		if d.From != "" {
-			views[big].Old = digestOf(d.From, false)
+			views[big].Old = digestOf(d.From)
 		}
-		views[big].New = digestOf(d.To, true)
-		views[big].Note = fmt.Sprintf("too long to show in full: the complete new %s for locale %s is in this call's arguments", d.Field, d.Locale)
 		set()
 	}
 }
@@ -317,10 +316,14 @@ func storeListingUpdate(ctx context.Context, env *tool.Env, in listingIn) (*tool
 		return tool.Already(map[string]any{"app": outApp(app), "changed": 0}), nil
 	}
 	summary := fmt.Sprintf("change %d listing field(s) of %s; public on the store page", len(diff), app.Name)
-	wctx, gate := tool.RequireConfirm(ctx, env, in.Confirm, fitFields("store_listing_update", tool.PlanPreview{
+	preview, err := fitFields("store_listing_update", tool.PlanPreview{
 		Summary:  summary,
 		Affected: []string{"PUT /api/ciq-developerservices/developers/{developerId}/apps/" + app.ID},
-	}, nil, diff))
+	}, nil, diff)
+	if err != nil {
+		return nil, err
+	}
+	wctx, gate := tool.RequireConfirm(ctx, env, in.Confirm, preview)
 	if gate != nil {
 		return gate, nil
 	}
@@ -509,11 +512,15 @@ func storeAppCreate(ctx context.Context, env *tool.Env, in createIn) (*tool.Resu
 		}
 	}
 	c := client(env)
-	wctx, gate := tool.RequireConfirm(ctx, env, in.Confirm, fitFields("store_app_create", tool.PlanPreview{
+	preview, err := fitFields("store_app_create", tool.PlanPreview{
 		Summary:      fmt.Sprintf("submit new app %q version %s for store review", textOf(model[0].(map[string]any), "appTitle"), in.Version),
 		Affected:     []string{"POST /api/ciq-developerservices/iqFiles/validate", "POST /api/ciq-developerservices/developers/{developerId}/apps"},
 		Irreversible: []string{"the app is submitted for review and goes public when approved"},
-	}, shown, fields))
+	}, shown, fields)
+	if err != nil {
+		return nil, err
+	}
+	wctx, gate := tool.RequireConfirm(ctx, env, in.Confirm, preview)
 	if gate != nil {
 		return gate, nil
 	}

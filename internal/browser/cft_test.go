@@ -219,14 +219,23 @@ func TestLocatePrecedence(t *testing.T) {
 			"Your default browser (Safari) can't be driven; using Chrome for Testing " + cftVersion + " in a separate profile.",
 		},
 	} {
-		p, _ := locate(c.path, c.env, c.def, c.cands, cft)
+		p, _ := locate(c.path, c.env, c.def, c.cands, nil, cft)
 		if p.exe != c.wantExe || p.cft != c.wantCfT || p.note != c.wantNote {
 			t.Errorf("%s: locate = %+v; want %q,%v,%q", name, p, c.wantExe, c.wantCfT, c.wantNote)
 		}
 	}
-	_, tried := locate(missing, "", none, []string{missing}, cft)
+	_, tried := locate(missing, "", none, []string{missing}, nil, cft)
 	if len(tried) != 2 {
 		t.Errorf("tried = %v", tried)
+	}
+	// A rejected candidate is skipped exactly like a missing one; explicit
+	// choices are never vetted.
+	reject := func(string) (string, bool) { return "", false }
+	if p, _ := locate("", "", none, []string{installed}, reject, cft); !p.cft {
+		t.Errorf("vetted-out candidate used: %+v", p)
+	}
+	if p, _ := locate(explicit, "", mustNotCall, []string{installed}, reject, cft); p.exe != explicit {
+		t.Errorf("explicit path vetted: %+v", p)
 	}
 }
 

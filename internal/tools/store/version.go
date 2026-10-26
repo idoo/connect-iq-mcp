@@ -17,8 +17,8 @@ type publishIn struct {
 	App          string            `json:"app" jsonschema:"store UUID, manifest id, or exact app title"`
 	Path         string            `json:"path" jsonschema:".iq file inside the project root"`
 	Version      string            `json:"version" jsonschema:"new external version, greater than the live one, e.g. 1.2.3 (max 20 chars)"`
-	WhatsNew     map[string]string `json:"whats_new,omitempty" jsonschema:"what's new per existing listing locale, e.g. {\"en\":\"…\"}"`
-	OtherLocales string            `json:"other_locales,omitempty" jsonschema:"listing locales not in whats_new: keep (default) leaves last version's what's new, clear empties it"`
+	WhatsNew     map[string]string `json:"whats_new,omitempty" jsonschema:"what's new per listing locale (store_app_get listing_locales), e.g. {\"en\":\"…\"}"`
+	OtherLocales string            `json:"other_locales,omitempty" jsonschema:"listing locales not in whats_new that still show last version's what's new: keep leaves it, clear empties it; required when there are any"`
 	IQSHA256     string            `json:"iq_sha256,omitempty" jsonschema:"required with confirm:true: the iq_sha256 from the preview; a file changed since the preview is refused"`
 }
 
@@ -26,7 +26,7 @@ type validationOut struct {
 	TempUpload      bool   `json:"temp_upload_only"`
 	ManifestID      string `json:"manifest_id"`
 	SignatureOK     bool   `json:"signature_check_ok"`
-	ManifestMatches *bool  `json:"manifest_matches_app,omitempty"`
+	ManifestMatches *bool  `json:"manifest_matches_app"`
 	DeviceCount     int    `json:"device_count"`
 	Devices         []any  `json:"devices,omitempty"`
 }
@@ -34,9 +34,12 @@ type validationOut struct {
 func init() {
 	// Not Meta.RequireHuman: the temp validate upload (nothing public) runs
 	// via tool.Unconfirmed so its result is in the preview; the publish
-	// itself is forced through tool.RequireHumanConfirm.
+	// itself is forced through tool.RequireHumanConfirm (HumanApproval
+	// documents that). iq_sha256 exists only on the confirm call and is
+	// checked against the file bytes below.
 	tool.Register(tool.New(tool.Meta{
 		Name: "store_version_publish", Toolset: Toolset, Class: tool.Destructive, Confirm: tool.ConfirmByFlag,
+		HumanApproval: true, ConfirmArgs: []string{"iq_sha256"},
 		Title: "Publish new app version",
 		Description: "Publish a .iq as a new public version, optionally with what's new per locale. The preview validates it " +
 			"(temp upload): signature, manifest id, devices added/removed. Confirm with the preview's iq_sha256; a human approves.",
@@ -99,9 +102,7 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 		return nil, err
 	}
 	switch in.OtherLocales {
-	case "":
-		in.OtherLocales = "keep"
-	case "keep", "clear":
+	case "", "keep", "clear":
 	default:
 		return nil, tool.InvalidArgs("other_locales must be keep or clear")
 	}
@@ -132,10 +133,11 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 		return nil, err
 	}
 	have := map[string]bool{}
-	var stale, cleared []string
+	var listing, stale, cleared []string
 	for _, l := range locales(md) {
 		loc := localeOf(l)
 		have[loc] = true
+		listing = append(listing, loc)
 		if _, ok := in.WhatsNew[loc]; !ok && textOf(l, "appWhatsNew") != "" {
 			if in.OtherLocales == "clear" {
 				cleared = append(cleared, loc)
@@ -146,8 +148,11 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 	}
 	for loc := range in.WhatsNew {
 		if !have[loc] {
-			return nil, tool.InvalidArgs("locale %q is not in the listing; add it with store_listing_update (title and description required)", loc)
+			return nil, tool.InvalidArgs("locale %q is not in the listing (listing locales: %v); add it with store_listing_update (title and description required)", loc, listing)
 		}
+	}
+	if len(stale) > 0 && in.OtherLocales == "" {
+		return nil, tool.InvalidArgs("locales %v would keep last version's what's new under version %s: pass whats_new for them, or other_locales \"keep\" or \"clear\"", stale, in.Version)
 	}
 	manifest := portal.ManifestID(md)
 	sum := sha256.Sum256(iq.Data)
@@ -178,16 +183,19 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 
 	validation := map[string]any{
 		"signature_check_ok":   report.SignatureOK,
-		"manifest_matches_app": report.ManifestMatches == nil || *report.ManifestMatches,
+		"manifest_matches_app": report.ManifestMatches, // null: not checked
 		"device_count":         report.DeviceCount,
 		"devices_added":        added,
 		"devices_removed":      removed,
 	}
 	intended := map[string]any{
 		"version": in.Version, "file": iq.Name, "bytes": len(iq.Data), "iq_sha256": digest,
-		"validation": validation, "whats_new": in.WhatsNew,
+		"validation": validation, "whats_new": in.WhatsNew, "listing_locales": listing,
 	}
 	var warnings []string
+	if report.ManifestMatches == nil {
+		warnings = append(warnings, fmt.Sprintf("the portal metadata names no manifest id for %s, so the .iq (manifest %s) was NOT checked against the app", app.Name, report.ManifestID))
+	}
 	for _, loc := range stale {
 		warnings = append(warnings, fmt.Sprintf("locale %s keeps last version's what's new (not in whats_new; pass other_locales:\"clear\" to empty it)", loc))
 	}

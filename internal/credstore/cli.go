@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -20,11 +21,6 @@ import (
 	"github.com/idoo/garmin-mcp/internal/portal"
 	"github.com/idoo/garmin-mcp/internal/state"
 )
-
-func init() {
-	auth.Open = Open
-	auth.CLI = CLI
-}
 
 // stdin is read by `auth login --paste` and the logout confirmation.
 var stdin io.Reader = os.Stdin
@@ -60,7 +56,9 @@ func CLI(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, cliUsage)
 		return 2
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	// The LaunchServices browser is not our child: cancel (and clean up) on
+	// every terminating signal, not just Ctrl-C.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	cmd, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("auth "+cmd, flag.ContinueOnError)

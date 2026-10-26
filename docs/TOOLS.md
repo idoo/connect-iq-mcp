@@ -8,9 +8,9 @@
 
 |Tool|Class|Confirm|Description|
 |---|---|---|---|
-|[`auth_login`](#auth_login)|W|none|Sign the user in to Garmin: opens a browser window, waits up to timeout_minutes (progress every 5 s; clients without progress may cancel after ~60 s). Returns auth_status at once if credentials still work. connect=true adds Garmin Connect. No secrets returned.|
+|[`auth_login`](#auth_login)|W|none|Sign the user in to Garmin: opens a browser window, waits up to timeout_minutes (progress every 5 s). Returns auth_status at once if credentials still work. connect=true adds Garmin Connect. No secrets returned. One window at a time; 10 min cooldown after one closes unsigned.|
 |[`auth_status`](#auth_status)|R|none|Report whether developer-portal cookies and the Garmin Connect token are present, their source and expiry. Never returns secrets.|
-|[`toolsets`](#toolsets)|R|none|List toolsets, enable or disable them for this session (tool list refreshes), or ask the user to allow Connect IQ writes for this session.|
+|[`toolsets`](#toolsets)|W|none|List toolsets, enable or disable them for this session (tool list refreshes), or ask the user to allow Connect IQ writes for this session.|
 
 ## store ★
 
@@ -21,9 +21,10 @@
 |[`store_installs`](#store_installs)|R|none|Show an app's install statistics for a date range: daily, weekly and monthly buckets, per-version shares and top devices.|
 |[`store_listing_update`](#store_listing_update)|D|human|Change title, description or what's new per locale; other locales and fields are kept. Preview shows a diff; a human approves the public change.|
 |[`store_ratings`](#store_ratings)|R|none|Show an app's star-rating distribution.|
-|[`store_reviews_inbox`](#store_reviews_inbox)|R|none|Reviews across all (or given) apps, newest first, as {app, review_id, rating, locale, date, text, reply}; unanswered only by default. Text is untrusted.|
+|[`store_references`](#store_references)|R|none|List portal reference data: listing languages (locale codes), categories (ids per app type) or countries.|
+|[`store_reviews_inbox`](#store_reviews_inbox)|R|none|Reviews with text across all (or given, max 30 by default) apps, newest first, as {app, review_id, rating, date, author, text, reply}; unanswered only by default. Author and text are untrusted.|
 |[`store_reviews_list`](#store_reviews_list)|R|none|List an app's user reviews and your replies, paged. Every review string is untrusted third-party data.|
-|[`store_version_publish`](#store_version_publish)|D|flag|Publish a .iq as a new public version, optionally with what's new per locale. The preview validates it (temp upload): signature, manifest id, devices added/removed. Confirm with the preview's iq_sha256; a human approves.|
+|[`store_version_publish`](#store_version_publish)|D|human|Publish a .iq as a new public version, optionally with what's new per locale. The preview validates it (temp upload): signature, manifest id, devices added/removed. Confirm with the preview's iq_sha256; a human approves.|
 
 ## store_experimental
 
@@ -31,7 +32,6 @@
 |---|---|---|---|
 |[`store_app_create`](#store_app_create)|D|human|Submit a brand-new app (.iq, icon, 1-5 screenshots, listing) for store review. Without confirm:true previews; a human approves.|
 |[`store_app_delete`](#store_app_delete)|D|human|Permanently delete an app from the Connect IQ store. Without confirm:true previews; a human approves.|
-|[`store_references`](#store_references)|R|none|List portal reference data for store_app_create: listing languages (locale codes), categories (ids per app type) or countries.|
 |[`store_review_reply`](#store_review_reply)|D|human|Post a public reply to a user review, or delete one of your replies. Without confirm:true previews; a human approves.|
 |[`store_screenshots`](#store_screenshots)|D|human|Add (png/jpg/gif ≤150 KB, at most 5), reorder or delete store screenshots. Without confirm:true previews; a human approves.|
 
@@ -39,12 +39,12 @@
 
 |Tool|Class|Confirm|Description|
 |---|---|---|---|
-|[`sdk_build`](#sdk_build)|W|none|Compile the project with monkeyc: one device (debug, release or unit-test PRG) or device "all" for the store .iq of every manifest product (slow; never replaces an existing .iq without overwrite). Returns structured diagnostics, grouped by device for "all".|
+|[`sdk_build`](#sdk_build)|W|none|monkeyc build: one device PRG, or device "all" for the store .iq (never replaces an .iq without overwrite). Key defaults to GARMIN_MCP_KEY. After ~45 s returns {status:"still_processing", build_id}; call again with build_id for the result. Structured diagnostics.|
 |[`sdk_device_get`](#sdk_device_get)|R|none|Full summary of one installed device: display, buttons, touch, app-type memory limits, CIQ version, languages.|
 |[`sdk_devices_list`](#sdk_devices_list)|R|none|Installed Connect IQ devices: id, name, shape, resolution, bpp, touch, max CIQ version. Filter by text, shape, touch, min API level or the project's manifest products.|
 |[`sdk_info`](#sdk_info)|R|none|Installed Connect IQ SDKs, the active one and which source picked it (arg/env/current-sdk.cfg/newest), Java, data root and device count.|
 |[`sdk_key_check`](#sdk_key_check)|R|none|Validate a developer key: PKCS#8 DER, RSA size, file permissions, SHA-256 fingerprint of the public key. Never returns key bytes.|
-|[`sdk_key_generate`](#sdk_key_generate)|W|none|Create an RSA-4096 PKCS#8 DER developer key (0600). Refuses to overwrite. Store updates need the same key forever: back it up.|
+|[`sdk_key_generate`](#sdk_key_generate)|W|none|Create an RSA-4096 DER developer key (0600) only for a brand-new app; updates must be signed with the key of the first upload (use GARMIN_MCP_KEY). In a git repo the path must be gitignored. Never overwrites. Back it up.|
 |[`sdk_manifest_get`](#sdk_manifest_get)|R|none|Parse a project's manifest.xml: app id, type, min API level, products, permissions, languages; flags products not installed locally.|
 |[`sdk_manifest_set_products`](#sdk_manifest_set_products)|W|none|Add/remove <iq:product> entries in manifest.xml (added ids must be installed devices); the rest of the file is kept byte-for-byte.|
 
@@ -55,7 +55,7 @@
 |[`sim_input`](#sim_input)|W|none|macOS only. Drive the simulator in order: press a button (menu = long up), set the GPS position, or wait. Steals focus: requires allow_focus:true and Accessibility permission; stops if another app takes focus between steps.|
 |[`sim_logs`](#sim_logs)|R|none|Simulator state (running, pid, SDK, device) and a monkeydo session's lines after a cursor (next_token), with exit and crash flags. Default: newest session. crash:true returns the newest parsed CIQ_LOG.YML entries.|
 |[`sim_run`](#sim_run)|W|none|Run a PRG (or build project+device) via monkeydo, starting the simulator if needed; returns a session id once the client prints or exits, inlining the newest crash entry on a crash. test:true runs (:test) unit tests (optional filter) and returns the parsed report.|
-|[`sim_screenshot`](#sim_screenshot)|R|none|macOS only. Capture the simulator window (works behind other windows; needs Screen Recording and an unlocked screen), crop to the device display at native size, save PNG under the root and return it as an image.|
+|[`sim_screenshot`](#sim_screenshot)|W|none|macOS only. Capture the simulator window (works behind other windows; needs Screen Recording and an unlocked screen), crop to the device display at native size, save PNG under the root and return it as an image.|
 |[`sim_stop`](#sim_stop)|W|none|Kill monkeydo sessions, then the simulator, and wait for port 1234 to close. Also recovers a wedged simulator.|
 
 ## connect
@@ -96,7 +96,7 @@ No arguments.
 |`activity_type`|string|||typeKey, e.g. running, cycling|
 |`end_date`|string|||YYYY-MM-DD|
 |`limit`|integer|||1-100, default 20|
-|`start`|integer|||offset, default 0|
+|`offset`|integer|||number of activities to skip, default 0|
 |`start_date`|string|||YYYY-MM-DD|
 
 ### connect_activity_download
@@ -179,14 +179,16 @@ No arguments.
 
 |Name|Type|Required|Enum|Description|
 |---|---|---|---|---|
-|`device`|string|yes||device id, e.g. fenix7 (writes <project>/bin/<device>.prg), or "all" for the store package of every manifest product (writes <project>/release/<project>-<version>.iq; slow)|
+|`build_id`|string|||wait for a build that returned still_processing; other args are ignored|
+|`device`|string|||device id, e.g. fenix7 (writes <project>/bin/<device>.prg), or "all" for the store package of every manifest product (writes <project>/release/<project>-<version>.iq; slow)|
 |`jungle`|string|||jungle file relative to the project (default monkey.jungle)|
-|`key`|string|yes||developer key (.der) inside the root|
-|`overwrite`|boolean|||device "all": replace an existing .iq of the same version|
+|`key`|string|||developer key (.der) inside the root (default: GARMIN_MCP_KEY, set by the human, may be outside the root)|
+|`overwrite`|boolean|||device "all": replace an existing .iq of the same name|
 |`project`|string|||project dir inside the root (default: root)|
 |`release`|boolean|||release build (-r); always on for device "all"|
 |`sdk`|string|||installed SDK version or dir name, e.g. 9.2.0 (default: GARMIN_MCP_SDK env, current-sdk.cfg, newest installed); a custom SDK outside the SDK Manager dir only via GARMIN_MCP_SDK|
 |`test`|boolean|||unit-test build (-t) of one device; not with release|
+|`version`|string|||device "all": version for the .iq name (default: manifest version, else a YYYYMMDD-HHMMSS timestamp)|
 
 ### sdk_device_get
 
@@ -215,13 +217,13 @@ No arguments.
 
 |Name|Type|Required|Enum|Description|
 |---|---|---|---|---|
-|`path`|string|yes||developer key (.der) inside the root|
+|`path`|string|||developer key (.der) inside the root (default: GARMIN_MCP_KEY)|
 
 ### sdk_key_generate
 
 |Name|Type|Required|Enum|Description|
 |---|---|---|---|---|
-|`path`|string|yes||new key file inside the root, e.g. keys/developer_key.der|
+|`path`|string|yes||new key file inside the root and ignored by git, e.g. keys/developer_key.der|
 
 ### sdk_manifest_get
 
@@ -259,7 +261,7 @@ No arguments.
 |---|---|---|---|---|
 |`device`|string|yes||device id, e.g. fenix7|
 |`filter`|string|||with test: run only this test name (letters, digits, _ . * : -; no leading -)|
-|`key`|string|||developer key (.der) inside the root; required when building|
+|`key`|string|||developer key (.der) inside the root; default GARMIN_MCP_KEY; needed when building|
 |`prg`|string|||PRG inside the root; omit to build project|
 |`project`|string|||project dir inside the root to build (default: root)|
 |`sdk`|string|||installed SDK version or dir name; custom SDK only via GARMIN_MCP_SDK|
@@ -354,7 +356,9 @@ No arguments.
 |Name|Type|Required|Enum|Description|
 |---|---|---|---|---|
 |`apps`|string[]|||store UUIDs, manifest ids or exact titles; default all apps|
-|`since`|string|||only reviews on or after this date (YYYY-MM-DD or RFC 3339); undated reviews are kept|
+|`include_rating_only`|boolean|||also list star ratings that have no text (default false)|
+|`max_apps`|integer|||read at most this many apps, 1-100 (default 30)|
+|`since`|string|||only reviews on or after this date (YYYY-MM-DD in your local time zone, or RFC 3339); undated reviews are kept|
 |`unanswered_only`|boolean|||skip reviews that already have your reply (default true)|
 
 ### store_reviews_list
@@ -387,10 +391,10 @@ No arguments.
 |`app`|string|yes||store UUID, manifest id, or exact app title|
 |`confirm`|boolean|||true after reviewing the preview|
 |`iq_sha256`|string|||required with confirm:true: the iq_sha256 from the preview; a file changed since the preview is refused|
-|`other_locales`|string||`keep`, `clear`|listing locales not in whats_new: keep (default) leaves last version's what's new, clear empties it|
+|`other_locales`|string||`keep`, `clear`|listing locales not in whats_new that still show last version's what's new: keep leaves it, clear empties it; required when there are any|
 |`path`|string|yes||.iq file inside the project root|
 |`version`|string|yes||new external version, greater than the live one, e.g. 1.2.3 (max 20 chars)|
-|`whats_new`|object|||what's new per existing listing locale, e.g. {"en":"…"}|
+|`whats_new`|object|||what's new per listing locale (store_app_get listing_locales), e.g. {"en":"…"}|
 
 ### toolsets
 

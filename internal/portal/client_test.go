@@ -14,10 +14,10 @@ import (
 
 type fakeCreds struct{}
 
-func (fakeCreds) PortalCookies(context.Context) (string, error)   { return "session=S", nil }
-func (fakeCreds) SavePortalCookies(context.Context, string) error { return nil }
-func (fakeCreds) ConnectToken(context.Context) (string, error)    { return "", nil }
-func (fakeCreds) Status(context.Context) auth.Status              { return auth.Status{} }
+func (fakeCreds) PortalCookies(context.Context) (string, error)             { return "session=S", nil }
+func (fakeCreds) SavePortalCookies(context.Context, string, []string) error { return nil }
+func (fakeCreds) ConnectToken(context.Context) (string, error)              { return "", nil }
+func (fakeCreds) Status(context.Context) auth.Status                        { return auth.Status{} }
 
 func fakeServer(t *testing.T, h http.HandlerFunc) (*Client, *atomic.Int32) {
 	t.Helper()

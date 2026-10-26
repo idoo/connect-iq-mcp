@@ -48,6 +48,15 @@ type Meta struct {
 	// elicitation the call is refused with [ErrHumanRequired] unless the
 	// profile sets AllowNoElicit. Requires a Confirm mode.
 	RequireHuman bool
+	// HumanApproval documents that the tool forces human approval on its
+	// public branch via [RequireHumanConfirm] (docs and tools.json say
+	// "human"). It does not change the gate. Requires a Confirm mode.
+	HumanApproval bool
+	// ConfirmArgs are top-level input keys that only a confirm call carries
+	// (e.g. the preview's file digest). They are left out of the arguments a
+	// preview is bound to, so the confirm still matches its preview; the
+	// handler must verify them itself. Requires a Confirm mode.
+	ConfirmArgs []string
 	// Enums adds enum constraints to input properties; keys are property paths
 	// with "." between levels (array items are traversed implicitly).
 	Enums map[string][]any
@@ -147,8 +156,8 @@ func (m Meta) check() error {
 		return fmt.Errorf("read tools cannot require confirmation")
 	case m.Class == Destructive && m.Confirm == ConfirmNone && !m.AvailableReadOnly:
 		return fmt.Errorf("destructive tools must use ConfirmByFlag")
-	case m.RequireHuman && m.Confirm == ConfirmNone:
-		return fmt.Errorf("RequireHuman needs ConfirmByFlag")
+	case (m.RequireHuman || m.HumanApproval || len(m.ConfirmArgs) > 0) && m.Confirm == ConfirmNone:
+		return fmt.Errorf("RequireHuman, HumanApproval and ConfirmArgs need ConfirmByFlag")
 	}
 	return nil
 }

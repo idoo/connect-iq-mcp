@@ -533,6 +533,10 @@ func TestHiddenToolCall(t *testing.T) {
 		if calls.Load() != 0 {
 			t.Fatal("hidden tool handler ran")
 		}
+		garmin, _ := body["_meta"].(map[string]any)["garmin"].(map[string]any)
+		if garmin["profile"] != "work" || garmin["approved_by"] != tool.ApprovedNone {
+			t.Fatalf("_meta.garmin = %v, want the session profile", garmin)
+		}
 	})
 	t.Run("unknown", func(t *testing.T) {
 		h := connect(t, Deps{Tools: tools, Profile: team(false)}, "test", nil)

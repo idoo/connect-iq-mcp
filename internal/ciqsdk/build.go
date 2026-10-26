@@ -61,6 +61,9 @@ type BuildOpts struct {
 	Warnings   bool          // -w
 	TypeCheck  *int          // -l 0..3
 	Timeout    time.Duration // default 2 min (Build) / 30 min (Export)
+	// NoClobber installs Output with a hard link that fails if the file
+	// already exists, so a concurrent build never replaces it.
+	NoClobber bool
 }
 
 // BuildResult is the outcome of a monkeyc run.
@@ -197,7 +200,11 @@ func run(ctx context.Context, o BuildOpts, export bool) (BuildResult, error) {
 	}
 	r.OK = r.ExitCode == 0
 	if r.OK {
-		if err := moveArtefacts(tmp, filepath.Dir(o.Output)); err != nil {
+		noClobber := ""
+		if o.NoClobber {
+			noClobber = filepath.Base(o.Output)
+		}
+		if err := moveArtefacts(tmp, filepath.Dir(o.Output), noClobber); err != nil {
 			return r, fmt.Errorf("install build output: %w", err)
 		}
 	}
@@ -240,8 +247,9 @@ func checkOutputDest(out string) error {
 // moveArtefacts moves the regular files at the top of src (the .prg/.iq,
 // .debug.xml, settings json) into dst. Subdirectories (gen/, mir/) are
 // dropped. Each file is staged in dst and renamed over its target, so an
-// existing symlink at the target is replaced, never followed.
-func moveArtefacts(src, dst string) error {
+// existing symlink at the target is replaced, never followed. The file named
+// noClobber (if any) is moved first and linked instead, failing if it exists.
+func moveArtefacts(src, dst, noClobber string) error {
 	if st, err := os.Lstat(dst); err != nil {
 		return err
 	} else if st.Mode()&os.ModeSymlink != 0 || !st.IsDir() {
@@ -251,18 +259,26 @@ func moveArtefacts(src, dst string) error {
 	if err != nil {
 		return err
 	}
+	if noClobber != "" {
+		if err := moveFile(filepath.Join(src, noClobber), dst, noClobber, true); err != nil {
+			return err
+		}
+	}
 	for _, e := range ents {
-		if !e.Type().IsRegular() {
+		if !e.Type().IsRegular() || e.Name() == noClobber {
 			continue
 		}
-		if err := moveFile(filepath.Join(src, e.Name()), dst, e.Name()); err != nil {
+		if err := moveFile(filepath.Join(src, e.Name()), dst, e.Name(), false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func moveFile(from, dir, name string) error {
+// moveFile copies from into a staged temp file in dir, then installs it as
+// name: renamed over the target, or with link true hard-linked so an
+// existing target makes it fail with os.ErrExist.
+func moveFile(from, dir, name string, link bool) error {
 	in, err := os.Open(from) //nolint:gosec // G304: from is a regular file in our own temp build dir
 	if err != nil {
 		return err
@@ -277,6 +293,14 @@ func moveFile(from, dir, name string) error {
 		err = cerr
 	}
 	if err == nil {
+		if link {
+			err = os.Link(f.Name(), filepath.Join(dir, name))
+			if errors.Is(err, os.ErrExist) {
+				err = fmt.Errorf("%s already exists (written concurrently?); refusing to replace it", filepath.Join(dir, name))
+			}
+			os.Remove(f.Name())
+			return err
+		}
 		err = os.Rename(f.Name(), filepath.Join(dir, name))
 	}
 	if err != nil {

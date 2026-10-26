@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,43 +23,17 @@ import (
 )
 
 const (
-	keyringService = "garmin-mcp"
-	// Windows Credential Manager caps blobs at 2560 bytes; elsewhere the
-	// keyring reports its own limit through Set errors.
-	windowsKeyringMax = 2500
-
 	srcKeychain = "keychain"
 	srcFile     = "file"
 	srcEnv      = "env"
 )
 
-// keyringMu serializes keychain access within the process: the backends are
-// not documented as goroutine-safe (go-keyring's mock provider is a bare map),
-// and readers such as view run outside the profile file lock.
-var keyringMu sync.Mutex
-
-func keyringGet(user string) (string, error) {
-	keyringMu.Lock()
-	defer keyringMu.Unlock()
-	return keyring.Get(keyringService, user)
-}
-
-func keyringSet(user, data string) error {
-	keyringMu.Lock()
-	defer keyringMu.Unlock()
-	return keyring.Set(keyringService, user, data)
-}
-
-func keyringDelete(user string) error {
-	keyringMu.Lock()
-	defer keyringMu.Unlock()
-	return keyring.Delete(keyringService, user)
-}
-
-// blob is the stored JSON credential document.
+// blob is the stored JSON credential document. SavedAt (Unix nanoseconds)
+// decides between a keychain and a file copy: the newer one wins.
 type blob struct {
 	Portal  *portalCred  `json:"portal,omitempty"`
 	Connect *connectCred `json:"connect,omitempty"`
+	SavedAt int64        `json:"saved_at,omitempty"`
 }
 
 type portalCred struct {
@@ -143,48 +117,103 @@ func (s *Store) browserDir() string {
 	return filepath.Join(s.dir, "browser", s.profile)
 }
 
-// readStored returns the persisted blob and where it came from ("" if none).
-func (s *Store) readStored() (blob, string, error) {
-	var b blob
-	data, kerr := keyringGet(s.profile)
-	if kerr == nil {
-		if err := json.Unmarshal([]byte(data), &b); err != nil {
-			return blob{}, "", fmt.Errorf("credentials in keychain are unreadable: %w", err)
-		}
-		return b, srcKeychain, nil
+// keyringOff reports why configuration disables the keychain ("" = use it).
+func (s *Store) keyringOff() string {
+	if strings.EqualFold(strings.TrimSpace(s.getenv("GARMIN_MCP_KEYRING")), "off") {
+		return "GARMIN_MCP_KEYRING=off"
 	}
-	raw, err := os.ReadFile(s.credFile())
-	if errors.Is(err, os.ErrNotExist) {
-		return blob{}, "", nil
-	}
-	if err != nil {
-		return blob{}, "", fmt.Errorf("read credentials file: %w", err)
-	}
-	if err := json.Unmarshal(raw, &b); err != nil {
-		return blob{}, "", fmt.Errorf("credentials file %s is unreadable: %w", s.credFile(), err)
-	}
-	return b, srcFile, nil
+	return ""
 }
 
-// writeStored persists b in the keychain, falling back to a 0600 file when the
-// keychain fails or the blob is too large.
+// readStored returns the persisted blob and where it came from: "" if none,
+// "keychain", or "file (reason)". When both the keychain and the file hold a
+// copy, the newer saved_at wins. A keychain error other than "unavailable"
+// is returned rather than silently reading the file.
+func (s *Store) readStored() (blob, string, error) {
+	var kb blob
+	inKeychain := false
+	reason := s.keyringOff()
+	if reason == "" {
+		data, err := keychainRead(s.profile)
+		switch {
+		case errors.Is(err, errKeyringUnavailable):
+			reason = err.Error()
+		case err != nil:
+			return blob{}, "", fmt.Errorf("read keychain: %w", err)
+		case data != "":
+			if err := json.Unmarshal([]byte(data), &kb); err != nil {
+				return blob{}, "", fmt.Errorf("credentials in keychain are unreadable: %w", err)
+			}
+			inKeychain = true
+		}
+	}
+	fb, inFile, err := s.readFile()
+	if err != nil {
+		return blob{}, "", err
+	}
+	switch {
+	case inKeychain && (!inFile || kb.SavedAt >= fb.SavedAt):
+		return kb, srcKeychain, nil
+	case inFile:
+		switch {
+		case reason != "":
+		case inKeychain:
+			reason = "newer than the keychain copy"
+		default:
+			reason = "moves to the keychain on next save"
+		}
+		return fb, srcFile + " (" + reason + ")", nil
+	}
+	return blob{}, "", nil
+}
+
+// readFile reads the fallback credentials file (DPAPI-protected on Windows).
+func (s *Store) readFile() (blob, bool, error) {
+	raw, err := os.ReadFile(s.credFile())
+	if errors.Is(err, os.ErrNotExist) {
+		return blob{}, false, nil
+	}
+	if err != nil {
+		return blob{}, false, fmt.Errorf("read credentials file: %w", err)
+	}
+	if raw, err = unprotectFile(raw); err != nil {
+		return blob{}, false, fmt.Errorf("credentials file %s: %w", s.credFile(), err)
+	}
+	var b blob
+	if err := json.Unmarshal(raw, &b); err != nil {
+		return blob{}, false, fmt.Errorf("credentials file %s is unreadable: %w", s.credFile(), err)
+	}
+	return b, true, nil
+}
+
+// writeStored persists b in the keychain (in chunks). Only an unavailable
+// keychain (no backend, no D-Bus, timeout, GARMIN_MCP_KEYRING=off) falls back
+// to the 0600 file; any other keychain error is returned.
 func (s *Store) writeStored(b blob) error {
+	b.SavedAt = s.now().UnixNano()
 	data, err := json.Marshal(b)
 	if err != nil {
 		return err
 	}
-	if runtime.GOOS != "windows" || len(data) <= windowsKeyringMax {
-		if err := keyringSet(s.profile, string(data)); err == nil {
+	if s.keyringOff() == "" {
+		err := keychainWrite(s.profile, string(data))
+		if err == nil {
 			if err := os.Remove(s.credFile()); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("remove stale credentials file: %w", err)
 			}
 			return nil
 		}
+		if !errors.Is(err, errKeyringUnavailable) {
+			return fmt.Errorf("save credentials to keychain: %w", err)
+		}
 	}
-	if err := writeFile0600(s.credFile(), data); err != nil {
+	enc, err := protectFile(data)
+	if err != nil {
 		return fmt.Errorf("save credentials: %w", err)
 	}
-	_ = keyringDelete(s.profile) // drop a stale keychain copy
+	if err := writeFile0600(s.credFile(), enc); err != nil {
+		return fmt.Errorf("save credentials: %w", err)
+	}
 	return nil
 }
 
@@ -263,18 +292,21 @@ func (s *Store) logout(ctx context.Context) error {
 	return s.deleteAll()
 }
 
-// deleteAll removes the keychain item, the credentials file, the renewal
-// stamp and the browser profile.
+// deleteAll removes the keychain items, the credentials file, the renewal
+// stamp and the browser profile (after closing any browser still using it).
 func (s *Store) deleteAll() error {
 	var errs []error
-	if err := keyringDelete(s.profile); err != nil && !errors.Is(err, keyring.ErrNotFound) {
-		errs = append(errs, fmt.Errorf("keychain: %w", err))
+	if s.keyringOff() == "" {
+		if err := keychainDelete(s.profile); err != nil && !errors.Is(err, keyring.ErrUnsupportedPlatform) {
+			errs = append(errs, fmt.Errorf("keychain: %w", err))
+		}
 	}
 	for _, p := range []string{s.credFile(), s.stampFile()} {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
 		}
 	}
+	browser.CloseProfile(s.browserDir())
 	if err := os.RemoveAll(s.browserDir()); err != nil {
 		errs = append(errs, err)
 	}

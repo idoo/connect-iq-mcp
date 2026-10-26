@@ -39,6 +39,84 @@ func setEnv(t *testing.T, vars map[string]string) {
 	old := getenv
 	getenv = func(k string) string { return vars[k] }
 	t.Cleanup(func() { getenv = old })
+	resetLoginGate(t)
+}
+
+// resetLoginGate clears the process-wide window slot and cooldown.
+func resetLoginGate(t *testing.T) {
+	t.Helper()
+	reset := func() {
+		loginGate.mu.Lock()
+		loginGate.busy, loginGate.failedAt = false, time.Time{}
+		loginGate.mu.Unlock()
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
+// TestAuthLoginCooldownAndSingleWindow: an agent can't loop sign-in windows.
+// A second call while a window is open, or within 10 minutes of a window
+// closing without sign-in, is refused without calling Login.
+func TestAuthLoginCooldownAndSingleWindow(t *testing.T) {
+	setEnv(t, nil)
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	oldNow := loginNow
+	loginNow = func() time.Time { return now }
+	t.Cleanup(func() { loginNow = oldNow })
+
+	k := tooltest.New(t)
+	k.Creds.Cookie, k.Creds.Token = "", ""
+	var progress []float64
+	var totals []float64
+	k.Env.Progress = func(done, total float64, _ string) {
+		progress = append(progress, done)
+		totals = append(totals, total)
+	}
+	inside := make(chan struct{})
+	release := make(chan struct{})
+	lc := &loginCreds{FakeCredentials: k.Creds, login: func(o auth.LoginOptions) (auth.LoginResult, error) {
+		_, _ = o.Log.Write([]byte("opened\nstill waiting\n"))
+		close(inside)
+		<-release
+		return auth.LoginResult{}, errors.New("browser closed before sign-in finished")
+	}}
+	k.Env.Credentials = lc
+	first := make(chan *tool.Result, 1)
+	tl := authLoginTool(t)
+	go func() { first <- tooltest.Call(t, tl, k.Env, `{}`) }()
+	<-inside
+	// Second window while the first is open.
+	body := tooltest.MustFail(t, tooltest.Call(t, authLoginTool(t), k.Env, `{}`), "login_unavailable")
+	if !strings.Contains(body.Message, "already open") {
+		t.Fatalf("concurrent: %+v", body)
+	}
+	close(release)
+	<-first
+	if lc.calls != 1 {
+		t.Fatalf("Login called %d times", lc.calls)
+	}
+	for i, p := range progress {
+		if totals[i] != 0 || (i > 0 && p <= progress[i-1]) {
+			t.Fatalf("progress not strictly increasing without total: %v / %v", progress, totals)
+		}
+	}
+	if len(progress) < 2 {
+		t.Fatalf("progress = %v", progress)
+	}
+
+	// Window ended without sign-in: cooldown.
+	now = now.Add(9 * time.Minute)
+	body = tooltest.MustFail(t, tooltest.Call(t, authLoginTool(t), k.Env, `{}`), "login_unavailable")
+	if !strings.Contains(body.Message, "1m0s") || lc.calls != 1 {
+		t.Fatalf("cooldown: %+v calls %d", body, lc.calls)
+	}
+	// After the cooldown a new window may open.
+	now = now.Add(time.Minute)
+	lc.login = func(auth.LoginOptions) (auth.LoginResult, error) { return auth.LoginResult{AlreadyValid: true}, nil }
+	tooltest.MustOK(t, tooltest.Call(t, authLoginTool(t), k.Env, `{}`))
+	if lc.calls != 2 {
+		t.Fatalf("calls = %d", lc.calls)
+	}
 }
 
 func TestAuthLoginAlreadySignedIn(t *testing.T) {

@@ -141,7 +141,9 @@ func rootPath(uri string) (string, bool) {
 // unsafeRoot reports whether dir is the filesystem root, a top-level folder
 // (fewer than 2 path components, e.g. /Users, before or after resolving
 // symlinks: macOS /home is an automount link), the home directory or any
-// ancestor of it (symlinks resolved).
+// ancestor of it (symlinks resolved). Home and its ancestors are compared by
+// file identity, so a differently cased spelling on a case-insensitive
+// filesystem (/users/ivan on macOS) is refused too.
 func unsafeRoot(dir, home string) bool {
 	d := canonical(dir)
 	lexical := dir
@@ -151,7 +153,25 @@ func unsafeRoot(dir, home string) bool {
 	if filepath.Dir(d) == d || pathDepth(d) < 2 || pathDepth(filepath.Clean(lexical)) < 2 {
 		return true
 	}
-	return home != "" && within(d, canonical(home))
+	if home == "" {
+		return false
+	}
+	h := canonical(home)
+	if within(d, h) {
+		return true
+	}
+	di, err := os.Stat(d)
+	if err != nil {
+		return false
+	}
+	for a := h; ; a = filepath.Dir(a) {
+		if ai, err := os.Stat(a); err == nil && os.SameFile(di, ai) {
+			return true
+		}
+		if filepath.Dir(a) == a {
+			return false
+		}
+	}
 }
 
 // pathDepth counts the components of a clean absolute path below its volume.

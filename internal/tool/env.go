@@ -21,23 +21,6 @@ type ProfileInfo struct {
 	AllowNoElicit bool `json:"allow_no_elicit,omitempty"`
 }
 
-// PreviewTTL is how long a preview can be claimed by a confirm:true call.
-// Planner implementations expire previews at exactly this age.
-const PreviewTTL = 15 * time.Minute
-
-// Planner records the previews of [ConfirmByFlag] tools (in memory, per
-// session) so an agent-only confirm can prove a preview came first.
-type Planner interface {
-	// Propose records a preview for tool+args at the given fingerprint and
-	// returns its id. args are canonicalized with [CanonicalArgs].
-	Propose(ctx context.Context, toolName string, args any, fingerprint string, preview PlanPreview) (string, error)
-	// Claim consumes the newest unexpired plan for toolName proposed at
-	// [FlagFingerprint] whose canonical args equal args'. It is how a
-	// [ConfirmByFlag] confirm proves a preview of the same call came first.
-	// Failures wrap [ErrPreviewRequired].
-	Claim(ctx context.Context, toolName string, args any) error
-}
-
 // StateStore is persistent local state (XDG state dir).
 type StateStore interface {
 	// Cursor returns the stored "since" cursor for profile/app/name, or "".
@@ -112,10 +95,11 @@ func (SystemClock) Sleep(ctx context.Context, d time.Duration) error {
 }
 
 // Env is everything a tool handler may use. The server builds one per
-// session; tests use tooltest.New. Inside a handler every member is non-nil:
-// [Tool.Call] substitutes stand-ins that fail with [ErrUnavailable] (and a
-// no-op Progress, an Elicit returning [ErrElicitationUnavailable], the
-// system clock).
+// session; tests use tooltest.New. Inside a handler every member except
+// Plans is non-nil: [Tool.Call] substitutes stand-ins that fail with
+// [ErrUnavailable] (and a no-op Progress, an Elicit returning
+// [ErrElicitationUnavailable], the system clock). A nil Plans fails every
+// agent-only confirm closed.
 type Env struct {
 	// Credentials provides portal cookies and the Connect token; nil means
 	// none configured (tools report auth_required).
@@ -123,7 +107,7 @@ type Env struct {
 	// HTTP is the outbound client. Its transport is wrapped by [GuardWrites]
 	// so non-GET requests fail unless the context carries write capability.
 	HTTP     *http.Client
-	Plans    Planner
+	Plans    *Planner
 	State    StateStore
 	Toolsets Toolsets
 	// Root is the confined project file root (os.Root based).
@@ -166,9 +150,6 @@ func (e *Env) complete() *Env {
 	c := *e
 	if c.HTTP == nil {
 		c.HTTP = &http.Client{Transport: GuardWrites(nil), Timeout: 60 * time.Second}
-	}
-	if c.Plans == nil {
-		c.Plans = noPlanner{}
 	}
 	if c.State == nil {
 		c.State = noStore{}

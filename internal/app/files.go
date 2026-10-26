@@ -3,7 +3,6 @@ package app
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -15,8 +14,8 @@ import (
 )
 
 // ErrOutsideRoot is returned for paths that resolve outside the confined root,
-// including through symlinks.
-var ErrOutsideRoot = errors.New("path is outside the allowed root")
+// including through symlinks. It reports as invalid_arguments with a hint.
+var ErrOutsideRoot = tool.ErrOutsideRoot
 
 // Files is the confined [tool.Files]. Every access goes through an [os.Root],
 // so the kernel-level lookup cannot escape Root even through symlinks or a

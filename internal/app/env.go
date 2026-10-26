@@ -9,8 +9,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
 	"github.com/idoo/garmin-mcp/internal/config"
+	"github.com/idoo/garmin-mcp/internal/credstore"
 	"github.com/idoo/garmin-mcp/internal/state"
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
@@ -55,15 +55,11 @@ func newEnv(ctx context.Context, r *config.Resolved, version, root string) (*too
 		Version:   version,
 		NoConfirm: r.NoConfirm && r.CI,
 	}
-	if auth.Open != nil {
-		creds, err := auth.Open(ctx, r.Profile.Name)
-		if err != nil {
-			return nil, fmt.Errorf("app: credentials: %w", err)
-		}
-		if creds != nil {
-			env.Credentials = creds
-		}
+	creds, err := credstore.Open(ctx, r.Profile.Name)
+	if err != nil {
+		return nil, fmt.Errorf("app: credentials: %w", err)
 	}
+	env.Credentials = creds
 	return env, nil
 }
 

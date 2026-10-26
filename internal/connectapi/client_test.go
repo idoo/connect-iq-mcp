@@ -21,8 +21,9 @@ type countingCreds struct {
 func (c *countingCreds) PortalCookies(context.Context) (string, error) {
 	return "", auth.ErrAuthRequired
 }
-func (c *countingCreds) SavePortalCookies(context.Context, string) error { return nil }
-func (c *countingCreds) Status(context.Context) auth.Status              { return auth.Status{} }
+func (c *countingCreds) SavePortalCookies(context.Context, string, []string) error { return nil }
+func (c *countingCreds) Status(context.Context) auth.Status                        { return auth.Status{} }
+
 func (c *countingCreds) ConnectToken(context.Context) (string, error) {
 	n := int(c.calls.Add(1)) - 1
 	if n >= len(c.tokens) {

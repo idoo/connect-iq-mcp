@@ -11,7 +11,11 @@
 # toolsets, tools listed in read-only mode).
 #
 # Usage: scripts/build-mcpb.sh [version]   (default: dist/metadata.json)
-# Needs: jq, zip. Validates with the pinned mcpb CLI when npx exists.
+#        scripts/build-mcpb.sh --validate-manifest <version>
+# Needs: jq, zip. Validates the manifest with the pinned mcpb CLI when npx
+# exists, unless MCPB_SKIP_VALIDATE=1. The release workflow skips it in the
+# privileged job and runs --validate-manifest (manifest only, no dist/, no
+# secrets) in a separate unprivileged job: npx runs a floating npm tree.
 set -eu
 
 mcpb_cli_version=2.1.2
@@ -19,8 +23,38 @@ default_toolsets='["core","store","sdk","simulator"]'
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 dist="$root/dist"
-[ -d "$dist" ] || { echo "build-mcpb: $dist missing; run goreleaser first" >&2; exit 1; }
 [ -f "$root/docs/tools.json" ] || { echo "build-mcpb: docs/tools.json missing" >&2; exit 1; }
+
+# make_manifest <version> <out>: the bundle manifest with the default
+# toolsets' read-only tools.
+make_manifest() {
+	jq --arg v "$1" --argjson ts "$default_toolsets" --slurpfile tools "$root/docs/tools.json" '
+  .version = $v
+  | .tools = [ $tools[0][]
+      | select(.toolset as $t | $ts | index($t))
+      | select(.class == "R")
+      | {name, description} ]' \
+		"$root/packaging/mcpb/manifest.json" >"$2"
+}
+
+validate_manifest() {
+	if command -v npx >/dev/null 2>&1; then
+		npx -y "@anthropic-ai/mcpb@$mcpb_cli_version" validate "$1" >&2
+	else
+		echo "build-mcpb: npx not found, skipping manifest validation" >&2
+	fi
+}
+
+if [ "${1:-}" = "--validate-manifest" ]; then
+	[ -n "${2:-}" ] || { echo "build-mcpb: --validate-manifest needs a version" >&2; exit 2; }
+	tmp=$(mktemp -d)
+	trap 'rm -rf "$tmp"' EXIT INT TERM
+	make_manifest "${2#v}" "$tmp/manifest.json"
+	validate_manifest "$tmp/manifest.json"
+	exit 0
+fi
+
+[ -d "$dist" ] || { echo "build-mcpb: $dist missing; run goreleaser first" >&2; exit 1; }
 
 version=${1:-}
 if [ -z "$version" ]; then
@@ -63,18 +97,10 @@ chmod 0755 "$stage/server/garmin-mcp-darwin" "$stage/server/garmin-mcp-linux" \
 	"$stage/server/garmin-mcp-linux-amd64" "$stage/server/garmin-mcp-linux-arm64"
 
 cp "$root/packaging/mcpb/icon.png" "$root/LICENSE" "$stage/"
-jq --arg v "$version" --argjson ts "$default_toolsets" --slurpfile tools "$root/docs/tools.json" '
-  .version = $v
-  | .tools = [ $tools[0][]
-      | select(.toolset as $t | $ts | index($t))
-      | select(.class == "R")
-      | {name, description} ]' \
-	"$root/packaging/mcpb/manifest.json" >"$stage/manifest.json"
+make_manifest "$version" "$stage/manifest.json"
 
-if command -v npx >/dev/null 2>&1; then
-	npx -y "@anthropic-ai/mcpb@$mcpb_cli_version" validate "$stage/manifest.json" >&2
-else
-	echo "build-mcpb: npx not found, skipping manifest validation" >&2
+if [ "${MCPB_SKIP_VALIDATE:-}" != 1 ]; then
+	validate_manifest "$stage/manifest.json"
 fi
 
 out="$dist/garmin-mcp-$version.mcpb"

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/idoo/garmin-mcp/internal/ciqsdk"
@@ -32,7 +33,9 @@ func init() {
 		"Run a PRG (or build project+device) via monkeydo, starting the simulator if needed; returns a session id once the client prints or exits, inlining the newest crash entry on a crash. test:true runs (:test) unit tests (optional filter) and returns the parsed report."), simRun))
 	tool.Register(tool.New(read("sim_logs", "Session logs",
 		"Simulator state (running, pid, SDK, device) and a monkeydo session's lines after a cursor (next_token), with exit and crash flags. Default: newest session. crash:true returns the newest parsed CIQ_LOG.YML entries."), simLogs))
-	shot := read("sim_screenshot", "Screenshot",
+	// Writes a PNG under the root (and may replace one with overwrite), so it
+	// is a Write tool; it stays usable in read-only mode like the others.
+	shot := write("sim_screenshot", "Screenshot",
 		"macOS only. Capture the simulator window (works behind other windows; needs Screen Recording and an unlocked screen), crop to the device display at native size, save PNG under the root and return it as an image.")
 	shot.OS = []string{"darwin"}
 	tool.Register(tool.New(shot, simScreenshot))
@@ -85,6 +88,8 @@ func simErr(err error) error {
 	switch {
 	case errors.Is(err, sim.ErrSDKMismatch):
 		return &tool.Error{Code: "sdk_mismatch", Message: err.Error(), Hint: "call sim_stop, then sim_run with the wanted sdk"}
+	case errors.Is(err, sim.ErrPortNotOurs):
+		return &tool.Error{Code: "port_in_use", Message: err.Error(), Hint: "stop whatever holds 127.0.0.1:1234 (or sim_stop), then retry"}
 	case errors.Is(err, sim.ErrFocusLost):
 		return &tool.Error{Code: "focus_lost", Message: err.Error(), Hint: "keep the simulator frontmost and retry sim_input"}
 	case errors.Is(err, sim.ErrAccessibility):
@@ -133,9 +138,40 @@ type runIn struct {
 	Device  string `json:"device" jsonschema:"device id, e.g. fenix7"`
 	PRG     string `json:"prg,omitempty" jsonschema:"PRG inside the root; omit to build project"`
 	Project string `json:"project,omitempty" jsonschema:"project dir inside the root to build (default: root)"`
-	Key     string `json:"key,omitempty" jsonschema:"developer key (.der) inside the root; required when building"`
+	Key     string `json:"key,omitempty" jsonschema:"developer key (.der) inside the root; default GARMIN_MCP_KEY; needed when building"`
 	Test    bool   `json:"test,omitempty" jsonschema:"run (:test) unit tests: build with -t or take a test PRG, run monkeydo -t, return the parsed report (exit code ignored)"`
 	Filter  string `json:"filter,omitempty" jsonschema:"with test: run only this test name (letters, digits, _ . * : -; no leading -)"`
+}
+
+// checkPRG accepts only a regular file named *.prg, so no other file (a
+// key, a directory, a FIFO) is ever pushed to the simulator.
+func checkPRG(p string) error {
+	if !strings.EqualFold(filepath.Ext(p), ".prg") {
+		return tool.InvalidArgs("prg must be a .prg file")
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		return tool.InvalidArgs("prg: %v", err)
+	}
+	if !fi.Mode().IsRegular() {
+		return tool.InvalidArgs("prg must be a regular file")
+	}
+	return nil
+}
+
+// simKey returns the build key: an agent-supplied key confined to the root,
+// else the human-set GARMIN_MCP_KEY (read only, may be outside the root).
+func simKey(env *tool.Env, key string) (string, error) {
+	if key != "" {
+		return env.Root.Resolve(key)
+	}
+	if p, ok := ciqsdk.EnvKey(); ok {
+		return p, nil
+	}
+	if v := os.Getenv(ciqsdk.EnvKeyVar); v != "" {
+		return "", tool.InvalidArgs("%s=%q is not an absolute path to an existing key file; ask the human to fix it", ciqsdk.EnvKeyVar, v)
+	}
+	return "", tool.InvalidArgs("give prg, or build one: ask the human to set %s to the app's developer key, or pass key inside the root", ciqsdk.EnvKeyVar)
 }
 
 // prgFor returns a PRG: the given one, or a fresh build of project.
@@ -145,23 +181,20 @@ func prgFor(ctx context.Context, env *tool.Env, r ciqsdk.Resolved, in runIn, tes
 		if err != nil {
 			return "", nil, err
 		}
-		if _, err := os.Stat(p); err != nil {
-			return "", nil, tool.InvalidArgs("prg: %v", err)
+		if err := checkPRG(p); err != nil {
+			return "", nil, err
 		}
 		return p, nil, nil
 	}
-	if in.Key == "" {
-		return "", nil, tool.InvalidArgs("give prg, or key (+ project) to build one")
+	kabs, err := simKey(env, in.Key)
+	if err != nil {
+		return "", nil, err
 	}
 	proj := in.Project
 	if proj == "" {
 		proj = "."
 	}
 	pdir, err := env.Root.Resolve(proj)
-	if err != nil {
-		return "", nil, err
-	}
-	kabs, err := env.Root.Resolve(in.Key)
 	if err != nil {
 		return "", nil, err
 	}
@@ -542,7 +575,7 @@ type position struct {
 
 type inputStep struct {
 	Press    string    `json:"press,omitempty" jsonschema:"simulator button to press"`
-	HoldMS   int       `json:"hold_ms,omitempty" jsonschema:"with press: hold time, default 100 (min 50; menu >= 1100)"`
+	HoldMS   int       `json:"hold_ms,omitempty" jsonschema:"with press: hold time, default 100 (min 50; menu >= 1100; max 5000)"`
 	Position *position `json:"position,omitempty" jsonschema:"set the simulated GPS position via Settings → Set Position"`
 	WaitMS   int       `json:"wait_ms,omitempty" jsonschema:"pause in milliseconds"`
 }
@@ -556,7 +589,7 @@ const maxInputSteps = 50
 
 var errFocus = &tool.Error{Code: "focus_required", Message: "this tool steals keyboard focus", Hint: "ask the user, then call again with allow_focus:true"}
 
-// checkSteps validates steps and returns their total wait.
+// checkSteps validates steps and returns their total wait, holds included.
 func checkSteps(steps []inputStep) (time.Duration, error) {
 	if len(steps) == 0 || len(steps) > maxInputSteps {
 		return 0, tool.InvalidArgs("steps: give 1-%d", maxInputSteps)
@@ -589,6 +622,12 @@ func checkSteps(steps []inputStep) (time.Duration, error) {
 		if st.HoldMS != 0 && st.Press == "" {
 			return 0, tool.InvalidArgs("steps[%d]: hold_ms needs press", i)
 		}
+		if st.HoldMS < 0 || st.HoldMS > sim.MaxHoldMS {
+			return 0, tool.InvalidArgs("steps[%d]: hold_ms must be 0-%d", i, sim.MaxHoldMS)
+		}
+		if st.Press != "" {
+			total += time.Duration(sim.PressHold(st.Press, st.HoldMS)) * time.Millisecond
+		}
 	}
 	return total, nil
 }
@@ -602,19 +641,26 @@ func simInput(ctx context.Context, env *tool.Env, in inputIn) (*tool.Result, err
 		return nil, err
 	}
 	if c := waitCap(env, time.Minute); total > c {
-		return nil, tool.InvalidArgs("total wait_ms %s exceeds %s; split the steps across calls", total, c)
+		return nil, tool.InvalidArgs("total wait_ms + hold_ms %s exceeds %s; split the steps across calls", total, c)
 	}
 	rel, err := lease(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer rel()
+	pid, err := sim.FindPID(ctx)
+	if err != nil {
+		return nil, simErr(err)
+	}
+	if pid == 0 {
+		return nil, &tool.Error{Code: "not_running", Message: "no Connect IQ SDK simulator of this user is running", Hint: "start one with sim_run"}
+	}
 	warmed := false
 	for i, st := range in.Steps {
 		// Every press/position raises the simulator again; refuse if the
 		// user took focus since the previous step rather than steal it back.
 		if i > 0 && st.WaitMS == 0 {
-			front, err := sim.Frontmost(ctx)
+			front, err := sim.Frontmost(ctx, pid)
 			if err != nil {
 				return nil, simErr(err)
 			}
@@ -624,16 +670,13 @@ func simInput(ctx context.Context, env *tool.Env, in inputIn) (*tool.Result, err
 		}
 		switch {
 		case st.Press != "":
-			hold := st.HoldMS
-			if hold == 0 {
-				hold = 100
-			}
 			// The first key after an app launch is swallowed: send an inert
-			// Shift before the first press of each call.
-			err = sim.Press(ctx, st.Press, hold, !warmed)
+			// Shift before the first press of each call. sim.Press applies
+			// the default and minimum hold.
+			err = sim.Press(ctx, pid, st.Press, st.HoldMS, !warmed)
 			warmed = true
 		case st.Position != nil:
-			err = sim.SetPosition(ctx, st.Position.Lat, st.Position.Lon)
+			err = sim.SetPosition(ctx, pid, st.Position.Lat, st.Position.Lon)
 		default:
 			select {
 			case <-ctx.Done():

@@ -57,10 +57,14 @@
 //   - ConfirmByFlag tools embed [ConfirmFlag] and call [RequireConfirm].
 //     Without confirm:true the call returns a preview and changes nothing;
 //     with it the human is asked via elicitation; without a human answer it
-//     is accepted only after a preview of the same args ([Planner.Claim]).
+//     is accepted only after a preview of the same args ([Planner.Claim]);
+//     keys in Meta.ConfirmArgs (e.g. the preview's file digest) are left out
+//     of that match and must be checked by the handler.
 //   - Meta.RequireHuman makes the elicitation accept
 //     mandatory; without elicitation the call is refused unless the profile
-//     sets AllowNoElicit. Results report _meta.garmin.approved_by.
+//     sets AllowNoElicit. [RequireHumanConfirm] forces the same for one
+//     branch; Meta.HumanApproval documents that. Results report
+//     _meta.garmin.approved_by.
 //   - [Unconfirmed] lets a ConfirmByFlag tool write on a branch it has determined
 //     is purely additive.
 //

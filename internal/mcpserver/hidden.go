@@ -31,6 +31,12 @@ func (s *session) hiddenToolMiddleware(next mcp.MethodHandler) mcp.MethodHandler
 			return next(ctx, method, req)
 		}
 		if res := s.hiddenResult(r.Params.Name); res != nil {
+			// Same _meta.garmin as a real call: the agent still learns which
+			// profile it is acting on.
+			p := s.profile()
+			res.Meta.Profile = p.Name
+			res.Meta.PinSource = p.PinSource
+			res.Meta.ApprovedBy = tool.ApprovedNone
 			return s.render(res), nil
 		}
 		return next(ctx, method, req)

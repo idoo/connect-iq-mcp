@@ -23,7 +23,8 @@ type Config struct {
 	// AllowProfileSwitch exposes a per-call profile argument on tools.
 	AllowProfileSwitch bool `toml:"allow_profile_switch,omitempty"`
 	// Profiles maps profile names to settings. Credentials live in the OS
-	// keychain (see internal/auth), never here.
+	// keychain, or a 0600 state file when no keychain is available (see
+	// internal/credstore), never here.
 	Profiles map[string]Profile `toml:"profiles,omitempty"`
 }
 

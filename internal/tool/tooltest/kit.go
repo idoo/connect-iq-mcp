@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/portal"
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
@@ -27,7 +28,7 @@ type Kit struct {
 	Env      *tool.Env
 	Creds    *FakeCredentials
 	HTTP     *FakeHTTP
-	Plans    *FakePlanner
+	Plans    *tool.Planner
 	State    *FakeStore
 	Files    *FakeFiles
 	Toolsets *FakeToolsets
@@ -43,7 +44,7 @@ func New(t testing.TB) *Kit {
 	k := &Kit{
 		Creds:    &FakeCredentials{Cookie: "SESSION=test", Token: "test-token"},
 		HTTP:     &FakeHTTP{},
-		Plans:    NewFakePlanner(clock.Now),
+		Plans:    tool.NewPlanner(clock.Now),
 		State:    NewFakeStore(),
 		Files:    NewFakeFiles(t),
 		Toolsets: NewFakeToolsets(),
@@ -150,12 +151,16 @@ func (c *FakeCredentials) PortalCookies(context.Context) (string, error) {
 	return c.Cookie, nil
 }
 
-// SavePortalCookies implements auth.Store.
-func (c *FakeCredentials) SavePortalCookies(_ context.Context, header string) error {
+// SavePortalCookies implements auth.Store: like the real store it applies
+// setCookie only while Cookie still equals sent.
+func (c *FakeCredentials) SavePortalCookies(_ context.Context, sent string, setCookie []string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.Cookie = header
-	c.Saved = append(c.Saved, header)
+	if c.Cookie != sent {
+		return nil
+	}
+	c.Cookie = portal.MergeSetCookie(sent, setCookie)
+	c.Saved = append(c.Saved, c.Cookie)
 	return nil
 }
 

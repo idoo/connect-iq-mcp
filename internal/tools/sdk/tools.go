@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -47,12 +48,12 @@ func init() {
 	tool.Register(tool.New(tool.Meta{
 		Name: "sdk_build", Toolset: Toolset, Class: tool.Write, Local: true, AvailableReadOnly: true,
 		Title:       "Build with monkeyc",
-		Description: "Compile the project with monkeyc: one device (debug, release or unit-test PRG) or device \"all\" for the store .iq of every manifest product (slow; never replaces an existing .iq without overwrite). Returns structured diagnostics, grouped by device for \"all\".",
+		Description: "monkeyc build: one device PRG, or device \"all\" for the store .iq (never replaces an .iq without overwrite). Key defaults to GARMIN_MCP_KEY. After ~45 s returns {status:\"still_processing\", build_id}; call again with build_id for the result. Structured diagnostics.",
 	}, sdkBuild))
 	tool.Register(tool.New(tool.Meta{
 		Name: "sdk_key_generate", Toolset: Toolset, Class: tool.Write, Local: true, AvailableReadOnly: true,
 		Title:       "Generate developer key",
-		Description: "Create an RSA-4096 PKCS#8 DER developer key (0600). Refuses to overwrite. Store updates need the same key forever: back it up.",
+		Description: "Create an RSA-4096 DER developer key (0600) only for a brand-new app; updates must be signed with the key of the first upload (use GARMIN_MCP_KEY). In a git repo the path must be gitignored. Never overwrites. Back it up.",
 	}, sdkKeyGenerate))
 	tool.Register(tool.New(tool.Meta{
 		Name: "sdk_key_check", Toolset: Toolset, Class: tool.Read, Idempotent: true, Local: true,
@@ -157,7 +158,13 @@ type deviceRow struct {
 	CIQVersion   string            `json:"connect_iq_version,omitempty"`
 }
 
+// minAPIRE is the accepted min_api shape: 1 to 3 dot-separated numbers.
+var minAPIRE = regexp.MustCompile(`^[0-9]{1,3}(\.[0-9]{1,3}){0,2}$`)
+
 func sdkDevicesList(_ context.Context, env *tool.Env, in devicesIn) (*tool.Result, error) {
+	if in.MinAPI != "" && !minAPIRE.MatchString(in.MinAPI) {
+		return nil, tool.InvalidArgs("min_api %q must look like 4.2.0", in.MinAPI)
+	}
 	dr, err := dataRoot()
 	if err != nil {
 		return nil, err

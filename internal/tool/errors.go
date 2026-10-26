@@ -54,6 +54,13 @@ var (
 		Code:    "invalid_arguments",
 		Message: "invalid arguments",
 	}
+	// ErrOutsideRoot is a path argument that resolves outside the confined
+	// root. It is an argument error, so it shares the invalid_arguments code.
+	ErrOutsideRoot = &Error{
+		Code:    "invalid_arguments",
+		Message: "path is outside the allowed root",
+		Hint:    "paths are relative to the client's workspace root (or the directory garmin-mcp started in when the client has no roots); pass a path inside it, or open the project folder as a workspace root",
+	}
 	ErrRateLimited = &Error{
 		Code:    "rate_limited",
 		Message: "upstream rate limit reached",

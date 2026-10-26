@@ -8,6 +8,7 @@ import (
 
 	"github.com/idoo/garmin-mcp/internal/config"
 	"github.com/idoo/garmin-mcp/internal/mcpserver"
+	"github.com/idoo/garmin-mcp/internal/sim"
 )
 
 // ServeOptions configures [Serve].
@@ -30,6 +31,9 @@ type ServeOptions struct {
 // Serve builds the environment and runs the MCP server until ctx ends: one
 // server over stdio, or one server per HTTP session.
 func Serve(ctx context.Context, opts ServeOptions) error {
+	// monkeydo clients run in their own process group; never leave them
+	// running after the server (stdio or HTTP) returns.
+	defer sim.Sessions.KillAll()
 	r := opts.Resolved
 	logger := opts.Logger
 	if logger == nil {

@@ -60,7 +60,7 @@ func resolveBrowser(ctx context.Context, path, binDir string, log io.Writer) (ex
 
 func locateHere(path, binDir string) (pick, []string) {
 	home, _ := os.UserHomeDir()
-	return locate(path, os.Getenv(EnvBrowser), detectDefault, candidates(runtime.GOOS, home, os.Getenv), cftExe(binDir, cftPlatform(runtime.GOOS, runtime.GOARCH)))
+	return locate(path, os.Getenv(EnvBrowser), detectDefault, candidates(runtime.GOOS, home, os.Getenv), vetCandidate, cftExe(binDir, cftPlatform(runtime.GOOS, runtime.GOARCH)))
 }
 
 // pick is locate's answer. cft means exe is the Chrome for Testing path,
@@ -73,8 +73,9 @@ type pick struct {
 }
 
 // locate applies the precedence. def is only consulted when neither an
-// explicit path nor the environment chooses the browser.
-func locate(path, env string, def func() defaultBrowser, cands []string, cftPath string) (pick, []string) {
+// explicit path nor the environment chooses the browser. vet (nil = accept)
+// screens each auto-detected candidate; explicit choices skip it.
+func locate(path, env string, def func() defaultBrowser, cands []string, vet func(string) (string, bool), cftPath string) (pick, []string) {
 	var tried []string
 	for _, p := range []string{path, env} {
 		if p == "" {
@@ -105,7 +106,11 @@ func locate(path, env string, def func() defaultBrowser, cands []string, cftPath
 		return "Your default browser (" + d.Name + ") can't be driven; using " + using + " in a separate profile."
 	}
 	for _, c := range cands {
-		if r, ok := resolve(c); ok {
+		r, ok := resolve(c)
+		if ok && vet != nil {
+			r, ok = vet(r)
+		}
+		if ok {
 			return pick{exe: r, note: because(displayName(r))}, nil
 		}
 		tried = append(tried, c)
@@ -122,7 +127,7 @@ func noBrowser(tried []string, cftPath string) error {
 	if cftPath != "" {
 		msg = "Chrome for Testing " + cftVersion + " not downloaded yet (garmin-mcp auth login fetches it)"
 	}
-	return fmt.Errorf("%w (tried: %s; %s); install Chrome, Brave, Edge or Chromium, or set %s", ErrNoBrowser, strings.Join(tried, ", "), msg, EnvBrowser)
+	return fmt.Errorf("%w (tried: %s; %s); install Chrome, Brave or Edge, or point %s at a browser (Chromium only this way)", ErrNoBrowser, strings.Join(tried, ", "), msg, EnvBrowser)
 }
 
 // defaultBinDir is <state dir>/browser-bin.
@@ -158,7 +163,8 @@ func resolve(p string) (string, bool) {
 }
 
 // candidates lists well-known browser executables for goos. Linux entries are
-// bare command names resolved on PATH.
+// bare command names resolved on PATH. macOS lists only vendor-signed
+// browsers (Chromium is unsigned; it is used only when named explicitly).
 func candidates(goos, home string, getenv func(string) string) []string {
 	switch goos {
 	case "darwin":
@@ -166,7 +172,6 @@ func candidates(goos, home string, getenv func(string) string) []string {
 			{"Google Chrome", "Google Chrome"},
 			{"Brave Browser", "Brave Browser"},
 			{"Microsoft Edge", "Microsoft Edge"},
-			{"Chromium", "Chromium"},
 		}
 		roots := []string{"/Applications"}
 		if home != "" {

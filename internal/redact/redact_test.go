@@ -35,6 +35,18 @@ func TestRedact(t *testing.T) {
 		},
 		{name: "token param", in: "https://x.example/p?id=1&token=s3cret", want: "https://x.example/p?<redacted>"},
 		{name: "loose signature param", in: "X-Amz-Signature=deadbeef&a=1", want: "X-Amz-Signature=<redacted>&a=1"},
+		{name: "session pair with iron seal", in: "session=Fe26.2**a*b*c*1*d*e", want: "session=<redacted>"},
+		{name: "bare iron seal", in: "value Fe26.2**abc*def*1*x end", want: "value <redacted> end"},
+		{name: "service ticket url", in: "go https://x.example/?ticket=ST-1-abc now", want: "go https://x.example/?<redacted> now"},
+		{name: "bare service ticket", in: "got ST-123456-AbCdEf-cas", want: "got <redacted>"},
+		{name: "json refresh token", in: `{"refresh_token":"rt-1"}`, want: `{"refresh_token":"<redacted>"}`},
+		{name: "json access token", in: `{"access_token": "at-1","x":1}`, want: `{"access_token": "<redacted>","x":1}`},
+		{name: "oauth_token query", in: "https://x.example/cb?oauth_token=abc&oauth_verifier=v", want: "https://x.example/cb?<redacted>"},
+		{name: "code query", in: "https://x.example/cb?code=abc123&state=s", want: "https://x.example/cb?<redacted>"},
+		{name: "kv refresh token", in: "refresh_token=rt-2 next", want: "refresh_token=<redacted> next"},
+		{name: "plain session word", in: "the sim session started", want: "the sim session started"},
+		{name: "plain ticket prose", in: "please open a ticket: support", want: "please open a ticket: support"},
+		{name: "json ticket value", in: `{"ticket":"ST-0123456-AbCdEfGh-cas"}`, want: `{"ticket":"<redacted>"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

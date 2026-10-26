@@ -2,13 +2,11 @@ package tooltest
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -16,81 +14,6 @@ import (
 
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
-
-// PlanCapacity is the number of pending previews kept per session (LRU).
-const PlanCapacity = 32
-
-// FakePlanner is an in-memory [tool.Planner] with the production semantics:
-// previews bound to tool, canonical args and fingerprint; they expire after
-// [tool.PreviewTTL]; each Claim consumes one; at most PlanCapacity pending
-// (oldest evicted); an empty fingerprint is refused (fail closed).
-type FakePlanner struct {
-	mu    sync.Mutex
-	now   func() time.Time
-	order []string
-	plans map[string]plan
-	// Proposed records every preview proposed, in order.
-	Proposed []tool.PlanPreview
-}
-
-type plan struct {
-	tool, args, fingerprint string
-	expires                 time.Time
-}
-
-// NewFakePlanner returns an empty FakePlanner reading time from now (nil
-// means time.Now); [New] passes the Kit's FakeClock.
-func NewFakePlanner(now func() time.Time) *FakePlanner {
-	if now == nil {
-		now = time.Now
-	}
-	return &FakePlanner{now: now, plans: map[string]plan{}}
-}
-
-// Propose implements tool.Planner.
-func (p *FakePlanner) Propose(_ context.Context, toolName string, args any, fingerprint string, preview tool.PlanPreview) (string, error) {
-	if fingerprint == "" {
-		return "", fmt.Errorf("%w: empty fingerprint", tool.ErrInternal)
-	}
-	canon, err := tool.CanonicalArgs(args)
-	if err != nil {
-		return "", err
-	}
-	id := "plan_" + rand.Text()
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.plans[id] = plan{tool: toolName, args: string(canon), fingerprint: fingerprint, expires: p.now().Add(tool.PreviewTTL)}
-	p.order = append(p.order, id)
-	for len(p.order) > PlanCapacity {
-		delete(p.plans, p.order[0])
-		p.order = p.order[1:]
-	}
-	p.Proposed = append(p.Proposed, preview)
-	return id, nil
-}
-
-// Claim implements tool.Planner: it consumes the newest unexpired
-// [tool.FlagFingerprint] plan for toolName with the same canonical args.
-func (p *FakePlanner) Claim(_ context.Context, toolName string, args any) error {
-	canon, err := tool.CanonicalArgs(args)
-	if err != nil {
-		return err
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	now := p.now()
-	for i := len(p.order) - 1; i >= 0; i-- {
-		id := p.order[i]
-		pl := p.plans[id]
-		if pl.tool != toolName || pl.args != string(canon) || pl.fingerprint != tool.FlagFingerprint || !now.Before(pl.expires) {
-			continue
-		}
-		delete(p.plans, id)
-		p.order = slices.Delete(p.order, i, i+1)
-		return nil
-	}
-	return fmt.Errorf("%w: no matching preview for %s", tool.ErrPreviewRequired, toolName)
-}
 
 // FakeStore is an in-memory [tool.StateStore].
 type FakeStore struct {

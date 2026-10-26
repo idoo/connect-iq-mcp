@@ -53,6 +53,11 @@ func startExec(ctx context.Context, o Options, exe string) (context.Context, fun
 		cancel()
 		cancelB()
 		cancelAlloc()
+		// Every exit path, including a cancelled caller ctx: no helper
+		// process may outlive us holding the profile.
+		if !waitProfileExit(o.ProfileDir, 2*time.Second) {
+			killProfile(o.ProfileDir)
+		}
 	}
 	// First call starts the browser; it must not carry the overall timeout.
 	if err := chromedp.Do(bctx); err != nil {
