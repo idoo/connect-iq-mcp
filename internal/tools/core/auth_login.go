@@ -159,7 +159,7 @@ func authLogin(ctx context.Context, env *tool.Env, in authLoginIn) (*tool.Result
 			}
 		}
 	}()
-	_, err := lg.Login(ctx, auth.LoginOptions{
+	res, err := lg.Login(ctx, auth.LoginOptions{
 		Connect:     in.Connect,
 		Timeout:     time.Duration(timeout) * time.Minute,
 		SkipIfValid: true,
@@ -179,7 +179,11 @@ func authLogin(ctx context.Context, env *tool.Env, in authLoginIn) (*tool.Result
 			Hint:    "ask the user to run `garmin-mcp auth login` in a terminal; auth_login itself waits 10 minutes before opening another window",
 		}
 	}
-	return tool.OK(statusOut(ctx, env)), nil
+	out := tool.OK(statusOut(ctx, env))
+	for _, w := range res.Warnings {
+		out.Warn(w)
+	}
+	return out, nil
 }
 
 // connectConsentPrompt is the human question before Garmin Connect (health

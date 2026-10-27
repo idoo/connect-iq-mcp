@@ -158,7 +158,7 @@ func desktopBrowser(desktop string) (knownBrowser, []string, bool) {
 // binaryNames gives display names for non-bundle executables.
 var binaryNames = map[string]string{
 	"chrome": "Google Chrome", "google-chrome": "Google Chrome", "google-chrome-stable": "Google Chrome",
-	"brave": "Brave Browser", "brave-browser": "Brave Browser",
+	"brave": "Brave Browser", "brave-browser": "Brave Browser", "brave-browser-stable": "Brave Browser",
 	"msedge": "Microsoft Edge", "microsoft-edge": "Microsoft Edge", "microsoft-edge-stable": "Microsoft Edge",
 	"chromium": "Chromium", "chromium-browser": "Chromium",
 	"vivaldi": "Vivaldi", "vivaldi-stable": "Vivaldi", "opera": "Opera",

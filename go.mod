@@ -2,6 +2,8 @@ module github.com/idoo/garmin-mcp
 
 go 1.25.0
 
+toolchain go1.26.10
+
 require (
 	github.com/chromedp/cdproto v0.157.8
 	github.com/chromedp/chromedp v0.21.0

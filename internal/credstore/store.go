@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zalando/go-keyring"
-
+	"github.com/idoo/garmin-mcp/internal/auth"
 	"github.com/idoo/garmin-mcp/internal/browser"
+	"github.com/idoo/garmin-mcp/internal/config"
 	"github.com/idoo/garmin-mcp/internal/portal"
 )
 
@@ -71,9 +71,21 @@ type Store struct {
 	// Env overrides are read-only: rotations live here, in memory only.
 	envPortal  *portalCred
 	envConnect *connectCred
+	// saveWarnings collects notes from saves that replaced an unreadable
+	// stored blob; takeSaveWarnings drains them.
+	saveWarnings []string
+	// pendingConnect is a refreshed Connect credential whose save failed. It
+	// carries the rotated refresh token, so view() prefers it until a save
+	// succeeds (LC-6).
+	pendingConnect *connectCred
 }
 
-func newStore(profile, stateDir string, autoRenew bool) *Store {
+// newStore returns the store for profile. The name becomes a file name and a
+// keychain account, so it must pass config.ValidateProfileName.
+func newStore(profile, stateDir string, autoRenew bool) (*Store, error) {
+	if err := config.ValidateProfileName(profile); err != nil {
+		return nil, err
+	}
 	s := &Store{
 		profile:    profile,
 		dir:        stateDir,
@@ -88,7 +100,7 @@ func newStore(profile, stateDir string, autoRenew bool) *Store {
 		getenv:     os.Getenv,
 	}
 	s.loadEnv()
-	return s
+	return s, nil
 }
 
 func newHTTPClient() *http.Client {
@@ -111,8 +123,18 @@ func (s *Store) loadEnv() {
 func (s *Store) credFile() string {
 	return filepath.Join(s.dir, "credentials", s.profile+".json")
 }
-func (s *Store) lockFile() string  { return filepath.Join(s.dir, "locks", s.profile+".lock") }
-func (s *Store) stampFile() string { return filepath.Join(s.dir, "locks", s.profile+".renew") }
+func (s *Store) lockFile() string { return filepath.Join(s.dir, "locks", s.profile+".lock") }
+
+// loginLockFile serializes browser sign-ins on the profile's browser
+// directory; the profile lock (lockFile) only guards read-modify-writes.
+func (s *Store) loginLockFile() string { return filepath.Join(s.dir, "locks", s.profile+".login") }
+
+// stampFile is the renewal stamp of one credential kind (stampPortal or
+// stampConnect).
+func (s *Store) stampFile(kind string) string {
+	return filepath.Join(s.dir, "locks", s.profile+".renew-"+kind)
+}
+
 func (s *Store) browserDir() string {
 	return filepath.Join(s.dir, "browser", s.profile)
 }
@@ -127,8 +149,9 @@ func (s *Store) keyringOff() string {
 
 // readStored returns the persisted blob and where it came from: "" if none,
 // "keychain", or "file (reason)". When both the keychain and the file hold a
-// copy, the newer saved_at wins. A keychain error other than "unavailable"
-// is returned rather than silently reading the file.
+// copy, the newer saved_at wins. Only an unavailable keychain falls through to
+// the file; a locked keychain (errKeyringLocked) or a damaged blob
+// (errStoredUnreadable) is returned as an error.
 func (s *Store) readStored() (blob, string, error) {
 	var kb blob
 	inKeychain := false
@@ -142,7 +165,7 @@ func (s *Store) readStored() (blob, string, error) {
 			return blob{}, "", fmt.Errorf("read keychain: %w", err)
 		case data != "":
 			if err := json.Unmarshal([]byte(data), &kb); err != nil {
-				return blob{}, "", fmt.Errorf("credentials in keychain are unreadable: %w", err)
+				return blob{}, "", fmt.Errorf("%w: keychain copy: %w", errStoredUnreadable, err)
 			}
 			inKeychain = true
 		}
@@ -177,18 +200,67 @@ func (s *Store) readFile() (blob, bool, error) {
 		return blob{}, false, fmt.Errorf("read credentials file: %w", err)
 	}
 	if raw, err = unprotectFile(raw); err != nil {
-		return blob{}, false, fmt.Errorf("credentials file %s: %w", s.credFile(), err)
+		return blob{}, false, fmt.Errorf("%w: credentials file %s: %w", errStoredUnreadable, s.credFile(), err)
 	}
 	var b blob
 	if err := json.Unmarshal(raw, &b); err != nil {
-		return blob{}, false, fmt.Errorf("credentials file %s is unreadable: %w", s.credFile(), err)
+		return blob{}, false, fmt.Errorf("%w: credentials file %s: %w", errStoredUnreadable, s.credFile(), err)
 	}
 	return b, true, nil
 }
 
+// readForSave is readStored for a read-modify-write: a damaged stored blob
+// is replaced (with a warning) rather than blocking every future save.
+func (s *Store) readForSave() (blob, error) {
+	stored, _, err := s.readStored()
+	if errors.Is(err, errStoredUnreadable) {
+		s.mu.Lock()
+		s.saveWarnings = append(s.saveWarnings, "replaced unreadable stored credentials ("+err.Error()+"); anything else they held must be signed in again")
+		s.mu.Unlock()
+		return blob{}, nil
+	}
+	return stored, err
+}
+
+// takeSaveWarnings returns and clears the warnings of earlier saves.
+func (s *Store) takeSaveWarnings() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w := s.saveWarnings
+	s.saveWarnings = nil
+	return w
+}
+
+// Status note prefixes for credentials that exist but could not be read.
+const (
+	noteLocked     = "locked: "
+	noteUnreadable = "unreadable: "
+)
+
+// statusNote is the Status note for a failed credential read.
+func statusNote(err error) string {
+	if errors.Is(err, errKeyringLocked) {
+		return noteLocked + err.Error()
+	}
+	return noteUnreadable + err.Error()
+}
+
+// UnreadableState returns "locked" or "unreadable" when c reports stored
+// credentials that could not be read, else "". `auth status` and doctor show
+// it as the state and fail.
+func UnreadableState(c auth.CredStatus) string {
+	switch {
+	case strings.HasPrefix(c.Note, noteLocked):
+		return "locked"
+	case strings.HasPrefix(c.Note, noteUnreadable):
+		return "unreadable"
+	}
+	return ""
+}
+
 // writeStored persists b in the keychain (in chunks). Only an unavailable
-// keychain (no backend, no D-Bus, timeout, GARMIN_MCP_KEYRING=off) falls back
-// to the 0600 file; any other keychain error is returned.
+// keychain (no backend, no D-Bus session, GARMIN_MCP_KEYRING=off) falls back
+// to the 0600 file; a locked keychain or any other error is returned.
 func (s *Store) writeStored(b blob) error {
 	b.SavedAt = s.now().UnixNano()
 	data, err := json.Marshal(b)
@@ -239,6 +311,9 @@ func (s *Store) view() (b blob, portalSrc, connectSrc string, err error) {
 	if s.envConnect != nil {
 		c := *s.envConnect
 		b.Connect, connectSrc = &c, srcEnv
+	} else if s.pendingConnect != nil && b.Connect != nil {
+		c := *s.pendingConnect // unsaved rotation; consent still stored
+		b.Connect = &c
 	}
 	return b, portalSrc, connectSrc, nil
 }
@@ -254,7 +329,7 @@ func (s *Store) savePortal(p *portalCred) error {
 		return nil
 	}
 	s.mu.Unlock()
-	stored, _, err := s.readStored()
+	stored, err := s.readForSave()
 	if err != nil {
 		return err
 	}
@@ -294,42 +369,52 @@ func (s *Store) saveConnect(c *connectCred) error {
 		return nil
 	}
 	s.mu.Unlock()
-	stored, _, err := s.readStored()
+	stored, err := s.readForSave()
 	if err != nil {
 		return err
 	}
 	stored = withSessionOnly(stored)
 	stored.Connect = c
-	return s.writeStored(stored)
+	if err := s.writeStored(stored); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.pendingConnect = nil
+	s.mu.Unlock()
+	return nil
 }
 
-// logout deletes everything under the profile lock, so a concurrent login or
-// renewal cannot write the session back afterwards.
+// logout deletes everything under the profile lock, so a concurrent renewal
+// cannot write the session back afterwards. An interactive sign-in in
+// progress loses its window (deleteAll closes the browser) and saves nothing.
 func (s *Store) logout(ctx context.Context) error {
 	unlock, err := lockPath(ctx, s.lockFile())
 	if err != nil {
 		return fmt.Errorf("lock credentials: %w", err)
 	}
 	defer unlock()
+	s.mu.Lock()
+	s.pendingConnect = nil
+	s.mu.Unlock()
 	return s.deleteAll()
 }
 
 // deleteAll removes the keychain items, the credentials file, the renewal
 // stamp and the browser profile (after closing any browser still using it).
+// The keychain is cleared even with GARMIN_MCP_KEYRING=off, so an old copy
+// cannot come back once the variable is unset.
 func (s *Store) deleteAll() error {
 	var errs []error
-	if s.keyringOff() == "" {
-		if err := keychainDelete(s.profile); err != nil && !errors.Is(err, keyring.ErrUnsupportedPlatform) {
-			errs = append(errs, fmt.Errorf("keychain: %w", err))
-		}
+	if err := keychainDelete(s.profile); err != nil && !errors.Is(err, errKeyringUnavailable) {
+		errs = append(errs, fmt.Errorf("keychain: %w", err))
 	}
-	for _, p := range []string{s.credFile(), s.stampFile()} {
+	stamps := []string{s.stampFile(stampPortal), s.stampFile(stampConnect), filepath.Join(s.dir, "locks", s.profile+".renew")}
+	for _, p := range append([]string{s.credFile()}, stamps...) {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
 		}
 	}
-	browser.CloseProfile(s.browserDir())
-	if err := os.RemoveAll(s.browserDir()); err != nil {
+	if err := browser.RemoveProfile(s.browserDir()); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)

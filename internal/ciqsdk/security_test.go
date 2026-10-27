@@ -42,9 +42,10 @@ func TestResolveArgRejectsSDKOutsideDataRoot(t *testing.T) {
 	}
 }
 
-// fakeMonkeycSDK returns an SDK whose bin/monkeyc writes -o, its debug xml
-// and gen/ next to it, like the real compiler.
-func fakeMonkeycSDK(t *testing.T) SDK {
+// fakeMonkeycSDK returns an SDK with a bin/monkeybrains.jar and a fake
+// absolute java that, like the real compiler, writes -o, its debug xml and
+// gen/ next to it.
+func fakeMonkeycSDK(t *testing.T) (SDK, string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script compiler")
@@ -53,23 +54,58 @@ func fakeMonkeycSDK(t *testing.T) SDK {
 	if err := os.MkdirAll(filepath.Join(p, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = -o ]; then out=$2; fi; shift; done\n" +
-		"echo prg > \"$out\"; echo dbg > \"$out.debug.xml\"; mkdir -p \"$(dirname \"$out\")/gen\"; echo g > \"$(dirname \"$out\")/gen/x\"\n"
-	if err := os.WriteFile(filepath.Join(p, "bin", "monkeyc"), []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(p, "bin", "monkeybrains.jar"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return SDK{Path: p}
+	script := "#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = -o ]; then out=$2; fi; shift; done\n" +
+		"echo prg > \"$out\"; echo dbg > \"$out.debug.xml\"; mkdir -p \"$(dirname \"$out\")/gen\"; echo g > \"$(dirname \"$out\")/gen/x\"\n"
+	java := filepath.Join(t.TempDir(), "java")
+	if err := os.WriteFile(java, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return SDK{Path: p}, java
+}
+
+// SE-2: without java the build fails with the FindJava error; the SDK's
+// bin/monkeyc wrapper (which runs a bare `java`) never runs.
+func TestBuildWithoutJavaNeverRunsWrapper(t *testing.T) {
+	sdk, _ := fakeMonkeycSDK(t)
+	marker := filepath.Join(t.TempDir(), "ran")
+	if err := os.WriteFile(filepath.Join(sdk.Bin(), "monkeyc"), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	noJava := errors.New("no Java found (JAVA_HOME unset, no java on PATH); install Java 17+")
+	old := findJava
+	findJava = func(context.Context, func(string) string) (Java, error) { return Java{}, noJava }
+	t.Cleanup(func() { findJava = old })
+	proj := t.TempDir()
+	_, err := Build(context.Background(), BuildOpts{SDK: sdk, ProjectDir: proj, Device: "fenix7", Key: "/k", Output: filepath.Join(proj, "bin", "a.prg")})
+	if !errors.Is(err, noJava) {
+		t.Fatalf("err = %v, want the FindJava error", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("bin/monkeyc wrapper ran")
+	}
+	// A relative java is refused, and argv never names a wrapper.
+	if _, err := Build(context.Background(), BuildOpts{SDK: sdk, Java: "java", ProjectDir: proj, Device: "fenix7", Key: "/k", Output: filepath.Join(proj, "bin", "a.prg")}); err == nil {
+		t.Fatal("relative java accepted")
+	}
+	for _, argv := range [][]string{sdk.MonkeycArgv("", nil), sdk.MonkeydoArgv("", "/a.prg", "fenix7")} {
+		if argv[0] != javaExe() || filepath.Dir(argv[0]) == sdk.Bin() {
+			t.Errorf("argv without java = %v, want bare %s", argv, javaExe())
+		}
+	}
 }
 
 func TestBuildRefusesSymlinkedOutputDir(t *testing.T) {
-	sdk := fakeMonkeycSDK(t)
+	sdk, java := fakeMonkeycSDK(t)
 	proj := t.TempDir()
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(proj, "bin")); err != nil {
 		t.Fatal(err)
 	}
 	_, err := Build(context.Background(), BuildOpts{
-		SDK: sdk, ProjectDir: proj, Device: "fenix7", Key: "/k",
+		SDK: sdk, Java: java, ProjectDir: proj, Device: "fenix7", Key: "/k",
 		Output: filepath.Join(proj, "bin", "a.prg"),
 	})
 	if err == nil {
@@ -87,7 +123,7 @@ func TestBuildRefusesSymlinkedOutputDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := Build(context.Background(), BuildOpts{
-		SDK: sdk, ProjectDir: proj, Device: "fenix7", Key: "/k",
+		SDK: sdk, Java: java, ProjectDir: proj, Device: "fenix7", Key: "/k",
 		Output: filepath.Join(proj, "bin", "a.prg"),
 	}); err == nil {
 		t.Fatal("symlinked output file must be refused")
@@ -95,10 +131,10 @@ func TestBuildRefusesSymlinkedOutputDir(t *testing.T) {
 }
 
 func TestBuildMovesOnlyArtefacts(t *testing.T) {
-	sdk := fakeMonkeycSDK(t)
+	sdk, java := fakeMonkeycSDK(t)
 	proj := t.TempDir()
 	out := filepath.Join(proj, "bin", "a.prg")
-	r, err := Build(context.Background(), BuildOpts{SDK: sdk, ProjectDir: proj, Device: "fenix7", Key: "/k", Output: out})
+	r, err := Build(context.Background(), BuildOpts{SDK: sdk, Java: java, ProjectDir: proj, Device: "fenix7", Key: "/k", Output: out})
 	if err != nil || !r.OK {
 		t.Fatalf("%+v %v", r, err)
 	}

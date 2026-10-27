@@ -330,7 +330,7 @@ func storeListingUpdate(ctx context.Context, env *tool.Env, in listingIn) (*tool
 	if err := c.UpdateAppMetadata(wctx, app.ID, md); err != nil {
 		return nil, wrap(err)
 	}
-	return tool.OK(map[string]any{"app": outApp(app), "changed": len(diff), "changes": diff}), nil
+	return written(c, map[string]any{"app": outApp(app), "changed": len(diff), "changes": diff}), nil
 }
 
 func storeReviewReply(ctx context.Context, env *tool.Env, in replyIn) (*tool.Result, error) {
@@ -380,13 +380,13 @@ func storeReviewReply(ctx context.Context, env *tool.Env, in replyIn) (*tool.Res
 		if err := c.DeleteReply(wctx, app.ID, in.ReplyID); err != nil {
 			return nil, wrap(err)
 		}
-		return tool.OK(map[string]any{"app": outApp(app), "deleted": in.ReplyID}), nil
+		return written(c, map[string]any{"app": outApp(app), "deleted": in.ReplyID}), nil
 	}
 	out, err := c.CreateReply(wctx, app.ID, in.ReviewID, in.Text)
 	if err != nil {
 		return nil, wrap(err)
 	}
-	return tool.OK(map[string]any{"app": outApp(app), "review_id": in.ReviewID, "reply": tool.WrapUntrusted(out, nil, true)}), nil
+	return written(c, map[string]any{"app": outApp(app), "review_id": in.ReviewID, "reply": tool.WrapUntrusted(out, nil, true)}), nil
 }
 
 var imageExts = []string{".png", ".jpg", ".jpeg", ".gif"}
@@ -421,7 +421,7 @@ func storeScreenshots(ctx context.Context, env *tool.Env, in screenshotsIn) (*to
 	p := tool.PlanPreview{Summary: fmt.Sprintf("%s screenshot of %s (public on the store page)", in.Action, app.Name)}
 	switch in.Action {
 	case "add":
-		p.Intended = map[string]any{"file": f.Name, "bytes": len(f.Data), "order": in.Order}
+		p.Intended = map[string]any{"file": f.Path, "bytes": len(f.Data), "order": in.Order}
 		p.Affected = []string{"POST " + base}
 	case "reorder":
 		p.Intended = map[string]any{"screenshot_id": in.ScreenshotID, "order": in.Order}
@@ -450,7 +450,7 @@ func storeScreenshots(ctx context.Context, env *tool.Env, in screenshotsIn) (*to
 	if err != nil {
 		return nil, wrap(err)
 	}
-	return tool.OK(out), nil
+	return written(c, out), nil
 }
 
 func storeAppCreate(ctx context.Context, env *tool.Env, in createIn) (*tool.Result, error) {
@@ -491,7 +491,7 @@ func storeAppCreate(ctx context.Context, env *tool.Env, in createIn) (*tool.Resu
 		if shots[i], err = readFile(env, s, maxScreenshot, imageExts...); err != nil {
 			return nil, err
 		}
-		names[i] = shots[i].Name
+		names[i] = shots[i].Path
 	}
 	md := map[string]any{
 		"betaApp": in.Beta, "shadowApp": false, "category": in.Category, "devEmail": in.DevEmail,
@@ -502,7 +502,7 @@ func storeAppCreate(ctx context.Context, env *tool.Env, in createIn) (*tool.Resu
 		md["selectedCountries"] = in.Countries
 	}
 	// The listing texts go to the approval as per-field views (see fitFields).
-	shown := map[string]any{"file": iq.Name, "icon": icon.Name, "screenshots": names, "metadata": maps.Clone(md)}
+	shown := map[string]any{"file": iq.Path, "icon": icon.Path, "screenshots": names, "metadata": maps.Clone(md)}
 	md["localizedAppModel"] = model
 	var fields []change
 	for _, e := range in.Locales {
@@ -528,12 +528,32 @@ func storeAppCreate(ctx context.Context, env *tool.Env, in createIn) (*tool.Resu
 	if err != nil {
 		return nil, wrap(err)
 	}
+	// A confirm retried after a lost CreateApp response must not submit a
+	// second app: refuse when an app with this manifest id already exists.
+	if mid := portal.NormalizeID(v.ManifestAppID()); mid != "" {
+		apps, err := listApps(ctx, c)
+		if err != nil {
+			return nil, wrap(err)
+		}
+		m, err := manifestMap(ctx, c, apps)
+		if err != nil {
+			return nil, wrap(err)
+		}
+		if existing, ok := m[mid]; ok {
+			return nil, tool.WithNext(tool.InvalidArgs("app already exists: %s has manifest id %s; nothing was submitted. Publish updates with store_version_publish", existing, v.ManifestAppID()),
+				tool.NextStep{Tool: "store_app_get", Args: map[string]any{"app": existing}})
+		}
+	}
 	md["tempFileId"] = v.TempFileID
 	id, err := c.CreateApp(wctx, md, icon, shots)
 	if err != nil {
+		if outcomeUnknown(err) {
+			return nil, tool.WithNext(fmt.Errorf("%w: status unknown: the app submission got no response (%s); it may have been created. Check store_apps_list before retrying (a retry with the same .iq is refused if the app exists)", tool.ErrOutcomeUnknown, err.Error()),
+				tool.NextStep{Tool: "store_apps_list"})
+		}
 		return nil, wrap(err)
 	}
-	return tool.OK(map[string]any{"app_id": id, "version": in.Version, "validation": validationReport(v, "")}), nil
+	return written(c, map[string]any{"app_id": id, "version": in.Version, "validation": validationReport(v, "")}), nil
 }
 
 type deleteIn struct {
@@ -558,5 +578,5 @@ func storeAppDelete(ctx context.Context, env *tool.Env, in deleteIn) (*tool.Resu
 	if err := c.DeleteApp(wctx, app.ID); err != nil {
 		return nil, wrap(err)
 	}
-	return tool.OK(map[string]any{"deleted": outApp(app)}), nil
+	return written(c, map[string]any{"deleted": outApp(app)}), nil
 }

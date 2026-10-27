@@ -65,6 +65,9 @@ type LoginResult struct {
 	// Connect reports a Garmin Connect sign-in; ConnectName is its display name.
 	Connect     bool
 	ConnectName string
+	// Warnings are human-readable notes about the save (e.g. unreadable
+	// stored credentials that were replaced); never secrets.
+	Warnings []string
 }
 
 // Loginer is implemented by stores that can sign in through an interactive

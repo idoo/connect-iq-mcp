@@ -46,6 +46,14 @@ func (s *session) hiddenToolMiddleware(next mcp.MethodHandler) mcp.MethodHandler
 // hiddenResult returns the error result for a hidden tool, or nil when name
 // is listed, unknown or no longer hidden.
 func (s *session) hiddenResult(name string) *tool.Result {
+	if t, ok := s.offPlatform[name]; ok {
+		label := tool.PlatformLabel(t.Meta().Platforms)
+		return tool.Fail(&tool.Error{
+			Code:    tool.ErrUnavailable.Code,
+			Message: fmt.Sprintf("%s is %s; this server runs on %s", name, label, s.deps.Platform),
+			Hint:    "run garmin-mcp on a supported OS for this tool",
+		})
+	}
 	s.mu.Lock()
 	listed := s.listed[name]
 	s.mu.Unlock()

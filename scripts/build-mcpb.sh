@@ -6,7 +6,12 @@
 #   garmin-mcp-darwin               universal (arm64 + amd64)
 #   garmin-mcp-linux                sh dispatcher on `uname -m`
 #   garmin-mcp-linux-amd64, garmin-mcp-linux-arm64
-#   garmin-mcp-windows-amd64.exe    (Windows on Arm runs it under x64 emulation)
+#   garmin-mcp-windows-amd64.exe    win32 is amd64-only: mcpb's platform_overrides
+#                                   are per OS, not per arch, and win32 needs a real
+#                                   .exe (no sh dispatcher). Windows 11 on Arm runs it
+#                                   under x64 emulation; Windows 10 on Arm can't, so
+#                                   there use the windows_arm64 release archive and
+#                                   `garmin-mcp config install claude-desktop`.
 # The manifest's tool list is generated from docs/tools.json (default
 # toolsets, tools listed in read-only mode).
 #

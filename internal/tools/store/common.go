@@ -5,8 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
@@ -50,6 +53,9 @@ func wrap(err error) error {
 	if errors.Is(err, browser.ErrRateLimited) {
 		return fmt.Errorf("%w: %w", tool.ErrRateLimited, &tool.APIError{Code: "rate_limited", Detail: err.Error(), Hint: browser.ErrRateLimited.Error()})
 	}
+	if errors.Is(err, portal.ErrBlocked) {
+		return fmt.Errorf("%w: %w", tool.ErrRateLimited, &tool.APIError{Code: "blocked", Detail: err.Error(), Hint: "Cloudflare blocked the request; do not call auth_login (the session is valid). Wait a few minutes, then retry; if it persists, ask the user to open apps.garmin.com in their browser"})
+	}
 	if errors.Is(err, auth.ErrAuthRequired) {
 		return fmt.Errorf("%w: %s", tool.ErrAuthRequired, err.Error())
 	}
@@ -59,6 +65,9 @@ func wrap(err error) error {
 	var rl *portal.RateLimitError
 	if errors.As(err, &rl) {
 		hint := "wait before retrying; garmin-mcp does not retry by itself"
+		if rl.Cloudflare {
+			hint = "Cloudflare is rate-limiting requests to the portal (error 1015); wait several minutes before retrying and do not call auth_login"
+		}
 		if s := int(rl.RetryAfter.Seconds()); s > 0 {
 			hint = fmt.Sprintf("the portal asked to wait %d seconds (Retry-After) before retrying", s)
 		}
@@ -79,6 +88,8 @@ func hintFor(code string) string {
 		return "sign the .iq with the same developer key as the published version"
 	case "APP_NOT_FOUND":
 		return "call store_apps_list for the app ids and titles"
+	case "forbidden":
+		return "the session is valid (auth_status shows it), so do not call auth_login; the portal refused this action for this app or account. Check the app id with store_apps_list, or ask the user to try it on apps.garmin.com"
 	case "TITLE_TOO_LONG", "DESCRIPTION_TOO_LONG", "WHATS_NEW_TOO_LONG":
 		return "limits: title 50, description 4000, what's new 4000 UTF-16 units"
 	}
@@ -88,6 +99,26 @@ func hintFor(code string) string {
 func resolve(ctx context.Context, c *portal.Client, ref string) (portal.App, error) {
 	a, err := resolveApp(ctx, c, ref)
 	return a, wrap(err)
+}
+
+// written is the result of a successful write. It carries the client's
+// non-fatal warnings (a rotated cookie that could not be saved).
+func written(c *portal.Client, data any) *tool.Result {
+	return withWarnings(c, tool.OK(data))
+}
+
+func withWarnings(c *portal.Client, res *tool.Result) *tool.Result {
+	for _, w := range c.Warnings() {
+		res.Warn(w)
+	}
+	return res
+}
+
+// outcomeUnknown reports a write that got no HTTP response (timeout, reset,
+// cancelled): Garmin may or may not have applied it. A request refused by
+// the local write guard never left the process, so it is not unknown.
+func outcomeUnknown(err error) bool {
+	return errors.Is(err, portal.ErrNoResponse) && !errors.Is(err, tool.ErrWriteGuard)
 }
 
 func utf16Len(s string) int {
@@ -119,7 +150,10 @@ func checkNewerVersion(v, current string) error {
 	if strings.TrimSpace(current) == "" || !versionRE.MatchString(current) {
 		return nil
 	}
-	if compareVersions(v, current) <= 0 {
+	switch compareVersions(v, current) {
+	case 0:
+		return tool.InvalidArgs("version %s is already the live version: it may already be published by you (for example by an earlier call whose response was lost); check store_app_get before choosing a new version, and do not publish the same binary again under a bumped one", v)
+	case -1:
 		return tool.InvalidArgs("version %s must be greater than the live version %s; a published version string can never be reused", v, current)
 	}
 	return nil
@@ -164,7 +198,11 @@ func versionCore(v string) []string {
 	return parts
 }
 
-// readFile reads a project file through the confined root.
+// readFile reads a project file for upload through the confined root. Every
+// component below the root must be a real directory or regular file (no
+// symlinks, as for writes), and the content must start with the signature
+// of its extension, so a link or a renamed secret is never uploaded under an
+// image or .iq name. File.Path is the root-relative path for approvals.
 func readFile(env *tool.Env, path string, limit int64, exts ...string) (portal.File, error) {
 	if strings.TrimSpace(path) == "" {
 		return portal.File{}, tool.InvalidArgs("file path is empty")
@@ -173,18 +211,98 @@ func readFile(env *tool.Env, path string, limit int64, exts ...string) (portal.F
 	if len(exts) > 0 && !contains(exts, ext) {
 		return portal.File{}, tool.InvalidArgs("%s: expected %s", filepath.Base(path), strings.Join(exts, ", "))
 	}
+	rel, err := uploadPath(env.Root, path)
+	if err != nil {
+		return portal.File{}, err
+	}
 	st, err := env.Root.Stat(path)
 	if err != nil {
 		return portal.File{}, err
 	}
 	if st.Size() > limit {
-		return portal.File{}, tool.InvalidArgs("%s is %d bytes; the limit is %d", filepath.Base(path), st.Size(), limit)
+		return portal.File{}, tool.InvalidArgs("%s is %d bytes; the limit is %d", rel, st.Size(), limit)
 	}
 	data, err := env.Root.ReadFile(path)
 	if err != nil {
 		return portal.File{}, err
 	}
-	return portal.File{Name: filepath.Base(path), Data: data}, nil
+	if sigs, ok := fileMagic[ext]; ok && !slices.ContainsFunc(sigs, func(s string) bool { return strings.HasPrefix(string(data[:min(len(data), len(s))]), s) }) {
+		return portal.File{}, tool.InvalidArgs("%s is not a %s file (its content does not start with the %s signature); pass the real file", rel, strings.TrimPrefix(ext, "."), strings.TrimPrefix(ext, "."))
+	}
+	return portal.File{Name: filepath.Base(rel), Path: rel, Data: data}, nil
+}
+
+// fileMagic holds the accepted leading bytes per upload extension (.iq is a
+// ZIP container).
+var fileMagic = map[string][]string{
+	".png":  {"\x89PNG\r\n\x1a\n"},
+	".jpg":  {"\xff\xd8\xff"},
+	".jpeg": {"\xff\xd8\xff"},
+	".gif":  {"GIF87a", "GIF89a"},
+	".iq":   {"PK\x03\x04"},
+}
+
+// uploadPath returns path relative to the root (slash-separated) after
+// checking with Lstat that no component below the root is a symlink (or
+// junction) and that the last one is a regular file. Links above the root
+// (macOS /tmp → /private/tmp) are fine: the root is found as the shortest
+// lexical prefix of path that is the root directory.
+func uploadPath(files tool.Files, path string) (string, error) {
+	if _, err := files.Resolve(path); err != nil {
+		return "", err
+	}
+	root, err := files.Resolve(".")
+	if err != nil {
+		return "", err
+	}
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		return "", err
+	}
+	lex := path
+	if !filepath.IsAbs(lex) {
+		lex = filepath.Join(root, lex)
+	}
+	lex = filepath.Clean(lex)
+	var prefixes []string
+	for p := lex; ; p = filepath.Dir(p) {
+		prefixes = append(prefixes, p)
+		if filepath.Dir(p) == p {
+			break
+		}
+	}
+	rel := ""
+	for _, p := range slices.Backward(prefixes) {
+		if fi, err := os.Stat(p); err == nil && os.SameFile(fi, rootInfo) {
+			rel, err = filepath.Rel(p, lex)
+			if err != nil {
+				return "", err
+			}
+			break
+		}
+	}
+	if rel == "" || rel == "." {
+		return "", tool.InvalidArgs("%s reaches the project root only through a symlink; pass a path inside the root", path)
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	cur := root
+	for i, part := range parts {
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			return "", err
+		}
+		shown := filepath.ToSlash(filepath.Join(parts[:i+1]...))
+		switch {
+		case fi.Mode()&fs.ModeSymlink != 0:
+			return "", tool.InvalidArgs("%s is a symlink; uploads must be regular files inside the root, not links (pass the real file)", shown)
+		case i < len(parts)-1 && !fi.IsDir():
+			return "", tool.InvalidArgs("%s is not a directory", shown)
+		case i == len(parts)-1 && !fi.Mode().IsRegular():
+			return "", tool.InvalidArgs("%s is not a regular file", shown)
+		}
+	}
+	return filepath.ToSlash(rel), nil
 }
 
 func contains(xs []string, s string) bool {

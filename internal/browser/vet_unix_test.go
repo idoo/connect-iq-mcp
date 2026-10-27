@@ -15,11 +15,11 @@ func TestVetCandidateSkipsSnap(t *testing.T) {
 	launcher := filepath.Join(dir, "snap")
 	wrapper := filepath.Join(dir, "chromium-browser")
 	viaLink := filepath.Join(dir, "chromium")
-	real := filepath.Join(dir, "google-chrome")
+	chrome := filepath.Join(dir, "google-chrome")
 	for f, body := range map[string]string{
 		launcher: "\x7fELF",
 		wrapper:  "#!/bin/sh\nexec /snap/bin/chromium \"$@\"\n",
-		real:     "\x7fELF real chrome",
+		chrome:   "\x7fELF real chrome",
 	} {
 		if err := os.WriteFile(f, []byte(body), 0o700); err != nil { //nolint:gosec // test fixture
 			t.Fatal(err)
@@ -33,7 +33,7 @@ func TestVetCandidateSkipsSnap(t *testing.T) {
 			t.Errorf("snap target %s accepted", exe)
 		}
 	}
-	if r, ok := vetCandidate(real); !ok || r != real {
+	if r, ok := vetCandidate(chrome); !ok || r != chrome {
 		t.Errorf("regular browser rejected: %q %v", r, ok)
 	}
 	if p, _ := locate("", "", nil, []string{wrapper, viaLink}, vetCandidate, "/cft"); !p.cft {

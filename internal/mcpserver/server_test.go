@@ -552,3 +552,47 @@ func TestHiddenToolCall(t *testing.T) {
 		}
 	})
 }
+
+// A darwin-only tool is not listed (nor counted in toolsets) on another
+// GOOS, and calling it answers unavailable "macOS only" without running it.
+func TestPlatformOnlyToolHiddenOnOtherGOOS(t *testing.T) {
+	var calls atomic.Int32
+	mac := tool.New(tool.Meta{Name: "sim_input", Toolset: tool.Core, Title: "x", Description: "macOS only. x", Class: tool.Write, AvailableReadOnly: true, Platforms: []string{"darwin"}},
+		func(context.Context, *tool.Env, stubIn) (*tool.Result, error) {
+			calls.Add(1)
+			return tool.OK(nil), nil
+		})
+	tools := []tool.Tool{stub("apps_list", tool.Core, tool.Read, nil), mac}
+	for _, tc := range []struct {
+		platform string
+		listed   bool
+	}{{"linux", false}, {"windows", false}, {"darwin", true}, {tool.AnyPlatform, true}} {
+		t.Run(tc.platform, func(t *testing.T) {
+			h := connect(t, Deps{Tools: tools, Profile: team(true), Platform: tc.platform}, "test", nil)
+			if got := slices.Contains(h.names(t), "sim_input"); got != tc.listed {
+				t.Fatalf("listed = %v, want %v", got, tc.listed)
+			}
+			var core tool.ToolsetInfo
+			for _, info := range h.s.List() {
+				if info.Name == tool.Core {
+					core = info
+				}
+			}
+			if want := map[bool]int{true: 3, false: 2}[tc.listed]; core.Tools != want || core.Withheld != 0 {
+				t.Fatalf("core toolset counts %+v, want %d tools", core, want)
+			}
+			if tc.listed {
+				return
+			}
+			res, body := h.call(t, "sim_input", map[string]any{})
+			d := dataOf(body)
+			msg, _ := d["message"].(string)
+			if !res.IsError || d["error"] != "unavailable" || !strings.Contains(msg, "macOS only") {
+				t.Fatalf("result = %v", body)
+			}
+			if calls.Load() != 0 {
+				t.Fatal("off-platform handler ran")
+			}
+		})
+	}
+}

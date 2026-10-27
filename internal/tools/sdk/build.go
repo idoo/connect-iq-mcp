@@ -99,12 +99,21 @@ func prepare(ctx context.Context, env *tool.Env, sdkArg, project, jungle, key st
 	if jungle == "" {
 		jungle = "monkey.jungle"
 	}
+	if strings.Contains(jungle, ";") {
+		return prepared{}, tool.InvalidArgs("jungle %q: one jungle file only (';' would make monkeyc read a second one)", jungle)
+	}
 	jabs, err := env.Root.Resolve(filepath.Join(pdir, jungle))
 	if err != nil {
 		return prepared{}, err
 	}
+	if strings.Contains(jabs, ";") {
+		return prepared{}, tool.InvalidArgs("jungle path %s contains ';', which monkeyc reads as a list of jungle files; rename the folder", jabs)
+	}
 	if _, err := os.Stat(jabs); err != nil {
 		return prepared{}, tool.InvalidArgs("jungle %s: %v", jabs, err)
+	}
+	if err := checkJungle(env, jabs, 0); err != nil {
+		return prepared{}, err
 	}
 	kabs, err := resolveKey(env, key)
 	if err != nil {
@@ -113,11 +122,50 @@ func prepare(ctx context.Context, env *tool.Env, sdkArg, project, jungle, key st
 	if _, err := ciqsdk.CheckKey(kabs); err != nil {
 		return prepared{}, tool.InvalidArgs("key: %v", err)
 	}
-	var java string
-	if j, err := ciqsdk.FindJava(ctx, os.Getenv); err == nil {
-		java = j.Path
+	// No java means no build: the SDK's bin/monkeyc wrapper would run a bare
+	// `java` that the shell may find in the project directory.
+	j, err := ciqsdk.FindJava(ctx, os.Getenv)
+	if err != nil {
+		return prepared{}, fmt.Errorf("%w: java: %v; install a JDK 17+ and set JAVA_HOME to its absolute path (or put java on PATH), then retry", tool.ErrUnavailable, err)
 	}
-	return prepared{se: se, opts: ciqsdk.BuildOpts{SDK: se.Res.SDK, Java: java, ProjectDir: pdir, Jungle: jabs, Key: kabs, Warnings: true}}, nil
+	return prepared{se: se, opts: ciqsdk.BuildOpts{SDK: se.Res.SDK, Java: j.Path, ProjectDir: pdir, Jungle: jabs, Key: kabs, Warnings: true}}, nil
+}
+
+// checkJungle refuses a jungle whose path-valued keys (sourcePath,
+// resourcePath, barrelPath, manifest, ...) name anything outside the root:
+// monkeyc would compile it and echo it in diagnostics. Paths are relative to
+// the jungle's directory; a named .jungle file is checked the same way.
+func checkJungle(env *tool.Env, jabs string, depth int) error {
+	if depth > 4 {
+		return tool.InvalidArgs("jungle %s: jungle files nested too deep", jabs)
+	}
+	data, err := env.Root.ReadFile(jabs)
+	if err != nil {
+		return tool.InvalidArgs("jungle %s: %v", jabs, err)
+	}
+	paths, err := ciqsdk.JunglePaths(data)
+	if err != nil {
+		return tool.InvalidArgs("jungle %s: %v", jabs, err)
+	}
+	dir := filepath.Dir(jabs)
+	for _, jp := range paths {
+		p := jp.Path
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(dir, p)
+		}
+		abs, err := env.Root.Resolve(p)
+		if err != nil {
+			return tool.InvalidArgs("jungle %s: %s = %s is outside the project root (%v); monkeyc may only read files inside it, so move them in or drop the entry", jabs, jp.Key, jp.Path, err)
+		}
+		if strings.EqualFold(filepath.Ext(abs), ".jungle") {
+			if st, err := os.Stat(abs); err == nil && st.Mode().IsRegular() {
+				if err := checkJungle(env, abs, depth+1); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // resolveKey returns the developer key path: an agent-supplied key confined
@@ -202,49 +250,86 @@ func sdkBuild(ctx context.Context, env *tool.Env, in buildIn) (*tool.Result, err
 	if all {
 		p.opts.Timeout, what = exportTimeout, "monkeyc -e -r (all manifest products)"
 	}
-	// The build outlives this call if needed (a poll with build_id picks
-	// it up), so cancelling the request does not kill monkeyc.
-	return waitJob(ctx, env, startJob(context.WithoutCancel(ctx), p, all, what))
+	// The build outlives this call if needed (a poll with build_id, or the
+	// same build again, picks it up), so cancelling the request does not
+	// kill monkeyc; it runs until it finishes or the server stops.
+	return waitJob(ctx, env, startJob(env.Lifetime, p, all, what))
 }
 
 // buildJob is a build running independently of the tool call that started it.
 type buildJob struct {
-	id    string
-	what  string
-	start time.Time
-	done  chan struct{}
-	res   *tool.Result
-	err   error
+	id     string
+	what   string
+	output string
+	start  time.Time
+	done   chan struct{}
+	// res, err and end are written before done is closed.
+	res *tool.Result
+	err error
+	end time.Time
 }
+
+func (j *buildJob) finished() bool {
+	select {
+	case <-j.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// jobKeep is how long a finished, never-collected result is kept.
+const jobKeep = 30 * time.Minute
 
 var (
 	jobsMu sync.Mutex
 	jobs   = map[string]*buildJob{}
 )
 
-func startJob(ctx context.Context, p prepared, all bool, what string) *buildJob {
+// startJob starts p under the server lifetime, or returns the running job
+// that writes the same output (an agent re-calling instead of polling, or a
+// retry after a cancelled call, gets the same build_id).
+func startJob(life *tool.Lifetime, p prepared, all bool, what string) *buildJob {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+	sweepJobsLocked(time.Now())
+	for _, j := range jobs {
+		if j.output == p.opts.Output && !j.finished() {
+			return j
+		}
+	}
 	var b [8]byte
 	_, _ = rand.Read(b[:])
-	j := &buildJob{id: hex.EncodeToString(b[:]), what: what, start: time.Now(), done: make(chan struct{})}
-	jobsMu.Lock()
+	j := &buildJob{id: hex.EncodeToString(b[:]), what: what, output: p.opts.Output, start: time.Now(), done: make(chan struct{})}
 	jobs[j.id] = j
-	jobsMu.Unlock()
-	go func() {
+	life.Go(func(ctx context.Context) {
 		defer close(j.done)
 		j.res, j.err = runBuild(ctx, p, all)
-	}()
+		j.end = time.Now()
+	})
 	return j
+}
+
+// sweepJobsLocked drops finished jobs whose result nobody collected within jobKeep.
+func sweepJobsLocked(now time.Time) {
+	for id, j := range jobs {
+		if j.finished() && now.Sub(j.end) > jobKeep {
+			delete(jobs, id)
+		}
+	}
 }
 
 func lookupJob(id string) *buildJob {
 	jobsMu.Lock()
 	defer jobsMu.Unlock()
+	sweepJobsLocked(time.Now())
 	return jobs[id]
 }
 
 // waitJob waits up to buildWait for j, sending strictly increasing progress
 // (no total). A finished job is removed and its result returned; otherwise
-// the caller gets still_processing with the build_id to poll.
+// the caller gets still_processing with the build_id to poll. A cancelled
+// call leaves the job running: a poll or the same build again finds it.
 func waitJob(ctx context.Context, env *tool.Env, j *buildJob) (*tool.Result, error) {
 	timer := time.NewTimer(buildWait)
 	defer timer.Stop()
@@ -403,7 +488,7 @@ func gitIgnored(ctx context.Context, abs string) error {
 	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
 		dir = resolved
 	}
-	out, err := exec.CommandContext(ctx, git, "-C", dir, "rev-parse", "--show-toplevel").Output() //nolint:gosec // G204: git from PATH, fixed args
+	out, err := gitCmd(ctx, git, "-C", dir, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return nil //nolint:nilerr // not a git work tree
 	}
@@ -413,7 +498,7 @@ func gitIgnored(ctx context.Context, abs string) error {
 		return nil //nolint:nilerr // outside the work tree
 	}
 	rel = filepath.ToSlash(rel)
-	err = exec.CommandContext(ctx, git, "-C", top, "check-ignore", "-q", "--", rel).Run() //nolint:gosec // G204: git from PATH, rel is a confined path
+	err = gitCmd(ctx, git, "-C", top, "check-ignore", "--no-index", "-q", "--", rel).Run()
 	if err == nil {
 		return nil
 	}
@@ -423,6 +508,29 @@ func gitIgnored(ctx context.Context, abs string) error {
 			abs, top, rel, filepath.Join(top, ".gitignore"), ciqsdk.EnvKeyVar)
 	}
 	return fmt.Errorf("git check-ignore %s: %w", rel, err)
+}
+
+// gitCmd runs git with repo-controlled code execution switched off: no
+// fsmonitor or hooks from the project's .git/config, no system config, and
+// no inherited GIT_* variables (GIT_DIR, GIT_WORK_TREE, GIT_CONFIG_*...)
+// that could point the check at another repo. The user's global config stays,
+// since their ignore rules live there.
+func gitCmd(ctx context.Context, git string, args ...string) *exec.Cmd {
+	a := append([]string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull}, args...)
+	cmd := exec.CommandContext(ctx, git, a...) //nolint:gosec // G204: git from PATH, fixed flags, confined paths
+	cmd.Env = gitEnv(os.Environ())
+	return cmd
+}
+
+// gitEnv returns environ without GIT_* variables, plus GIT_CONFIG_NOSYSTEM=1.
+func gitEnv(environ []string) []string {
+	out := make([]string, 0, len(environ)+1)
+	for _, kv := range environ {
+		if !strings.HasPrefix(strings.ToUpper(kv), "GIT_") {
+			out = append(out, kv)
+		}
+	}
+	return append(out, "GIT_CONFIG_NOSYSTEM=1")
 }
 
 func sdkKeyCheck(_ context.Context, env *tool.Env, in keyCheckIn) (*tool.Result, error) {

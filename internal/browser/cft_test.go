@@ -135,7 +135,8 @@ func TestCftPlatformAndExe(t *testing.T) {
 	cases := map[[2]string]string{
 		{"darwin", "arm64"}: "mac-arm64", {"darwin", "amd64"}: "mac-x64",
 		{"linux", "amd64"}: "linux64", {"windows", "amd64"}: "win64",
-		{"linux", "arm64"}: "", {"freebsd", "amd64"}: "",
+		{"windows", "arm64"}: "win64", // x64 emulation on Windows 11 ARM
+		{"linux", "arm64"}:   "", {"freebsd", "amd64"}: "",
 	}
 	for in, want := range cases {
 		if got := cftPlatform(in[0], in[1]); got != want {
@@ -249,9 +250,13 @@ func TestResolveBrowserUsesExtractedCfT(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(exe, nil, 0o755); err != nil {
+	// A runnable stand-in, so the Linux `--version` probe passes.
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil { //nolint:gosec // test executable
 		t.Fatal(err)
 	}
+	orig := readSysctl
+	readSysctl = func(string) (string, error) { return "0\n", nil }
+	t.Cleanup(func() { readSysctl = orig })
 	t.Setenv(EnvBrowser, Bundled)
 	got, name, _, err := resolveBrowser(t.Context(), "", bin, nil)
 	if err != nil || got != exe || name != "Chrome for Testing" {

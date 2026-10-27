@@ -196,7 +196,7 @@ func TestWaitReadyFakeListener(t *testing.T) {
 	addr := ln.Addr().String()
 	ctx := context.Background()
 	clk := &fakeClock{t: time.Unix(0, 0)}
-	if err := WaitReady(ctx, clk, Dial, addr, nil, 100*time.Millisecond, 5*time.Second); err != nil {
+	if err := WaitReady(ctx, clk, Dial, addr, nil, nil, 100*time.Millisecond, 5*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if el := clk.t.Sub(time.Unix(0, 0)); el < 100*time.Millisecond {
@@ -204,7 +204,7 @@ func TestWaitReadyFakeListener(t *testing.T) {
 	}
 	// Process dead → never ready.
 	clk = &fakeClock{t: time.Unix(0, 0)}
-	err = WaitReady(ctx, clk, Dial, addr, func() bool { return false }, 100*time.Millisecond, time.Second)
+	err = WaitReady(ctx, clk, Dial, addr, func() bool { return false }, nil, 100*time.Millisecond, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "not ready") {
 		t.Fatalf("dead process: %v", err)
 	}

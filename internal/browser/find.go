@@ -36,7 +36,7 @@ func Find(path string) (string, error) {
 	if !p.cft || isFile(p.exe) {
 		return p.exe, nil
 	}
-	return "", noBrowser(tried, p.exe)
+	return "", noBrowser(tried, p.exe, runtime.GOOS, runtime.GOARCH)
 }
 
 // resolveBrowser is Find plus the Chrome for Testing download when needed. It
@@ -44,18 +44,26 @@ func Find(path string) (string, error) {
 // why it is not the user's default browser.
 func resolveBrowser(ctx context.Context, path, binDir string, log io.Writer) (exe, name, note string, err error) {
 	p, tried := locateHere(path, binDir)
-	if p.cft {
-		if !isFile(p.exe) {
-			if p.exe == "" {
-				return "", "", "", noBrowser(tried, p.exe)
-			}
-			if p.exe, err = ensureCfT(ctx, binDir, log); err != nil {
-				return "", "", "", err
-			}
-		}
-		return p.exe, "Chrome for Testing", p.note, nil
+	if !p.cft {
+		return p.exe, displayName(p.exe), p.note, nil
 	}
-	return p.exe, displayName(p.exe), p.note, nil
+	if p.exe == "" {
+		return "", "", "", noBrowser(tried, p.exe, runtime.GOOS, runtime.GOARCH)
+	}
+	if err := cftSandboxBlocked(runtime.GOOS, readSysctl); err != nil {
+		return "", "", "", err
+	}
+	if !isFile(p.exe) {
+		if p.exe, err = ensureCfT(ctx, binDir, log); err != nil {
+			return "", "", "", err
+		}
+	}
+	if runtime.GOOS == "linux" {
+		if err := cftRuns(ctx, p.exe); err != nil {
+			return "", "", "", err
+		}
+	}
+	return p.exe, "Chrome for Testing", p.note, nil
 }
 
 func locateHere(path, binDir string) (pick, []string) {
@@ -122,12 +130,22 @@ func locate(path, env string, def func() defaultBrowser, cands []string, vet fun
 	return pick{exe: cftPath, cft: true, note: note}, tried
 }
 
-func noBrowser(tried []string, cftPath string) error {
+func noBrowser(tried []string, cftPath, goos, goarch string) error {
 	msg := "no Chrome for Testing build for this platform"
 	if cftPath != "" {
 		msg = "Chrome for Testing " + cftVersion + " not downloaded yet (garmin-mcp auth login fetches it)"
 	}
-	return fmt.Errorf("%w (tried: %s; %s); install Chrome, Brave or Edge, or point %s at a browser (Chromium only this way)", ErrNoBrowser, strings.Join(tried, ", "), msg, EnvBrowser)
+	return fmt.Errorf("%w (tried: %s; %s); %s, or point %s at a browser (Chromium only this way)", ErrNoBrowser, strings.Join(tried, ", "), msg, installHint(goos, goarch), EnvBrowser)
+}
+
+// installHint names browsers that exist for the platform. Linux arm64 has no
+// Chrome, Edge or Chrome for Testing build, and Ubuntu's chromium is a snap
+// (which can't use our profile).
+func installHint(goos, goarch string) string {
+	if goos == "linux" && goarch == "arm64" {
+		return "install the Debian/Fedora `chromium` package (not the snap) or Brave"
+	}
+	return "install Chrome, Brave or Edge"
 }
 
 // defaultBinDir is <state dir>/browser-bin.
@@ -205,7 +223,7 @@ func candidates(goos, home string, getenv func(string) string) []string {
 		}
 		return out
 	default:
-		return []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "brave-browser", "microsoft-edge", "microsoft-edge-stable"}
+		return []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "brave-browser", "brave-browser-stable", "brave", "microsoft-edge", "microsoft-edge-stable", "vivaldi-stable"}
 	}
 }
 

@@ -74,6 +74,11 @@ func TestPortalJarTrimmedToSession(t *testing.T) {
 // profile, and a login that fails the test if called.
 func testStore(t *testing.T, env map[string]string) *Store {
 	t.Helper()
+	// Tests never reach a real keychain; skip the D-Bus session check so
+	// Linux CI without a bus behaves like the desktop.
+	precheck, delay := keyringPrecheck, keyringRetryDelay
+	keyringPrecheck, keyringRetryDelay = func() error { return nil }, time.Millisecond
+	t.Cleanup(func() { keyringPrecheck, keyringRetryDelay = precheck, delay })
 	s := &Store{
 		profile:    "test",
 		dir:        t.TempDir(),
@@ -330,13 +335,13 @@ func TestRenewalRateLimited(t *testing.T) {
 	}
 	check := func(what string, err error) {
 		t.Helper()
-		if !errors.Is(err, browser.ErrRateLimited) || errors.Is(err, auth.ErrAuthRequired) || strings.Contains(err.Error(), "auth_login") {
+		if !errors.Is(err, browser.ErrRateLimited) || errors.Is(err, auth.ErrAuthRequired) || strings.Contains(err.Error(), loginHint) {
 			t.Errorf("%s: err = %v", what, err)
 		}
 	}
 	_, err := s.PortalCookies(context.Background())
 	check("PortalCookies", err)
-	_ = os.Remove(s.stampFile()) // let ConnectToken try again inside the 10-minute window
+	// Connect has its own stamp: the portal's 1015 does not hold it back.
 	_, err = s.ConnectToken(context.Background())
 	check("ConnectToken", err)
 	check("auth renew", s.cliRenew(context.Background(), io.Discard))

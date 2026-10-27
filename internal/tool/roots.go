@@ -8,11 +8,12 @@ import (
 )
 
 // RootedFiles is a [Files] that can confine itself to the MCP client's roots.
-// ForRoots receives the client's root URIs (possibly empty) and returns the
-// Files to use for one call; it fails when no safe root is available.
+// ForRoots receives the client's root URIs (possibly empty) and the error of
+// listing them (nil on success), and returns the Files to use for one call;
+// it fails when no safe root is available.
 type RootedFiles interface {
 	Files
-	ForRoots(roots []string) (Files, error)
+	ForRoots(roots []string, listErr error) (Files, error)
 }
 
 // callFiles resolves a [RootedFiles] against the client's roots on the first
@@ -38,13 +39,10 @@ func withRoots(ctx context.Context, f Files, roots func(context.Context) ([]stri
 
 func (c *callFiles) get() (Files, error) {
 	c.once.Do(func() {
+		// A listing failure still goes through ForRoots: an explicit root
+		// wins, otherwise file access is unavailable (never the default).
 		uris, err := c.roots(c.ctx)
-		if err != nil {
-			// A client that advertised roots but cannot list them falls back
-			// to the default root, which ForRoots still checks for safety.
-			uris = nil
-		}
-		c.files, c.err = c.base.ForRoots(uris)
+		c.files, c.err = c.base.ForRoots(uris, err)
 	})
 	return c.files, c.err
 }

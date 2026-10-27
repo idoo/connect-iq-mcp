@@ -169,6 +169,14 @@ func Login(ctx context.Context, o Options, r Request) (Result, error) {
 
 	var res Result
 	if r.Portal {
+		if o.Headless {
+			// Silent renewal: drop the portal's own session first, so the
+			// dashboard must mint a fresh seal through Garmin SSO instead of
+			// re-verifying the one we already hold (which never extends it).
+			if err := s.clearPortalSession(); err != nil {
+				return Result{}, err
+			}
+		}
 		cs, err := s.portal(r.VerifyPortal)
 		if err != nil {
 			return Result{}, err
@@ -350,6 +358,22 @@ func (s *session) portal(verify func(context.Context, string) error) ([]Cookie, 
 			return nil, fmt.Errorf("%w (portal session not accepted)", ErrInteractionRequired)
 		}
 	}
+}
+
+// portalSessionCookie selects the apps.garmin.com `session` cookie (host-only
+// or domain) for Network.deleteCookies.
+func portalSessionCookie() network.DeleteCookiesParams {
+	return network.DeleteCookiesParams{Name: "session", URL: portalCookieURL}
+}
+
+// clearPortalSession deletes the profile's apps.garmin.com `session` cookie.
+// Garmin SSO cookies stay, so a signed-in profile gets a new seal on the
+// next dashboard load.
+func (s *session) clearPortalSession() error {
+	if _, err := chromedp.Call(s.ctx, network.DeleteCookies, portalSessionCookie()); err != nil {
+		return fmt.Errorf("browser: clear old portal session: %w", s.wrap(err))
+	}
+	return nil
 }
 
 func (s *session) portalCookies() ([]Cookie, error) {

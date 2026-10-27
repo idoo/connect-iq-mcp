@@ -57,12 +57,15 @@ func metaOf(name string) (tool.Meta, bool) {
 }
 
 // Entries lists every tool as advertised with writes enabled and all
-// toolsets on, sorted by name. The session-built toolsets tool is included.
+// toolsets on, sorted by name, on every platform (so the output does not
+// depend on the build host's GOOS). The session-built toolsets tool is
+// included.
 func Entries(ctx context.Context) ([]Entry, error) {
 	srv, err := mcpserver.Build(ctx, mcpserver.Deps{
 		Profile:  tool.ProfileInfo{Name: "docs", AllowWrites: true},
 		Toolsets: tool.AllToolsets,
 		Version:  "docs",
+		Platform: tool.AnyPlatform,
 	})
 	if err != nil {
 		return nil, err

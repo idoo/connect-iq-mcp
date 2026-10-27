@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/idoo/garmin-mcp/internal/config"
 	"github.com/idoo/garmin-mcp/internal/mcpserver"
 	"github.com/idoo/garmin-mcp/internal/sim"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // ServeOptions configures [Serve].
@@ -56,6 +58,12 @@ func Serve(ctx context.Context, opts ServeOptions) error {
 	if pf, ok := env.Root.(*ProjectFiles); ok {
 		defer func() { _ = pf.Close() }()
 	}
+	// Background builds end with the server (stdio EOF, HTTP shutdown,
+	// signal): cancel kills monkeyc's process group, and the short wait lets
+	// each build remove its temp dir.
+	life := tool.NewLifetime(ctx)
+	defer life.Close(5 * time.Second)
+	env.Lifetime = life
 	if env.Credentials == nil {
 		logger.Warn("no Connect IQ credentials configured; run `garmin-mcp auth login`")
 	}

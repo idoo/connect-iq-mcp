@@ -181,14 +181,16 @@ func TestMetaCheckPanics(t *testing.T) {
 // rootedFiles records the roots it was asked for.
 type rootedFiles struct {
 	tooltest.FakeFiles
-	got   [][]string
-	err   error
-	calls int
+	got     [][]string
+	listErr error
+	err     error
+	calls   int
 }
 
-func (r *rootedFiles) ForRoots(roots []string) (tool.Files, error) {
+func (r *rootedFiles) ForRoots(roots []string, listErr error) (tool.Files, error) {
 	r.calls++
 	r.got = append(r.got, roots)
+	r.listErr = listErr
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -229,12 +231,12 @@ func TestCallPassesClientRootsLazily(t *testing.T) {
 	if listed != 1 || rf.calls != 1 || rf.got[0][0] != "file:///proj" {
 		t.Fatalf("listed=%d calls=%d got=%v", listed, rf.calls, rf.got)
 	}
-	// A listing failure still goes through ForRoots (which applies the safety
-	// policy to the fallback root) rather than bypassing it.
+	// A listing failure still goes through ForRoots, with the error, so it
+	// can keep an explicit root or refuse (never use the default silently).
 	k.Env.Roots = func(context.Context) ([]string, error) { return nil, errors.New("no roots") }
 	rf.err = fmt.Errorf("%w: refused", tool.ErrUnavailable)
 	b := tooltest.MustFail(t, tooltest.Call(t, read, k.Env, `{"read":true}`), "unavailable")
-	if rf.got[len(rf.got)-1] != nil || !strings.Contains(b.Message, "refused") {
-		t.Fatalf("fallback roots = %v, %+v", rf.got, b)
+	if rf.got[len(rf.got)-1] != nil || rf.listErr == nil || !strings.Contains(b.Message, "refused") {
+		t.Fatalf("listing failure: roots=%v listErr=%v, %+v", rf.got, rf.listErr, b)
 	}
 }

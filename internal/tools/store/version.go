@@ -158,7 +158,7 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 	sum := sha256.Sum256(iq.Data)
 	digest := hex.EncodeToString(sum[:])
 	if in.Confirm && in.IQSHA256 != digest {
-		return nil, tool.InvalidArgs("iq_sha256 %q does not match %s (sha256 %s): pass the iq_sha256 from the preview; if the file changed, preview again", in.IQSHA256, iq.Name, digest)
+		return nil, tool.InvalidArgs("iq_sha256 %q does not match %s (sha256 %s): pass the iq_sha256 from the preview; if the file changed, preview again", in.IQSHA256, iq.Path, digest)
 	}
 
 	// Validate first (temporary upload, nothing public) so the human
@@ -189,7 +189,7 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 		"devices_removed":      removed,
 	}
 	intended := map[string]any{
-		"version": in.Version, "file": iq.Name, "bytes": len(iq.Data), "iq_sha256": digest,
+		"version": in.Version, "file": iq.Path, "bytes": len(iq.Data), "iq_sha256": digest,
 		"validation": validation, "whats_new": in.WhatsNew, "listing_locales": listing,
 	}
 	var warnings []string
@@ -209,7 +209,7 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 		intended["whats_new_cleared"] = cleared
 	}
 	wctx, gate := tool.RequireHumanConfirm(ctx, env, in.Confirm, tool.PlanPreview{
-		Summary:  fmt.Sprintf("publish %s as version %s of %s (live %s); it goes to store review/live", iq.Name, in.Version, app.Name, live),
+		Summary:  fmt.Sprintf("publish %s as version %s of %s (live %s); it goes to store review/live", iq.Path, in.Version, app.Name, live),
 		Current:  map[string]any{"version": live, "device_count": len(liveDevices)},
 		Intended: intended,
 		Affected: []string{
@@ -223,10 +223,22 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 	}
 	status := "published"
 	if err := c.PostVersion(wctx, app.ID, v.TempFileID, in.Version); err != nil {
-		if !portal.HasCode(err, "APP_VERSION_ALREADY_EXISTS") {
+		switch {
+		case portal.HasCode(err, "APP_VERSION_ALREADY_EXISTS"):
+			status = "already_exists"
+		case outcomeUnknown(err):
+			// The POST may have been committed before the response was
+			// lost: read the app back (on ctx, the write context may be
+			// dead) and continue only if it now carries this version.
+			after, gerr := c.AppMetadata(ctx, app.ID)
+			ai, _ := after["appIqFileInfoResult"].(map[string]any)
+			if got, _ := ai["newAppVersion"].(string); gerr != nil || got != in.Version {
+				return nil, tool.WithNext(fmt.Errorf("%w: status unknown: publishing %s got no response (%s) and the portal does not show it yet. Do NOT bump the version: call store_app_get first; if it shows %s, re-run store_version_publish with the same version to apply what's new, otherwise retry the same version", tool.ErrOutcomeUnknown, in.Version, err.Error(), in.Version),
+					tool.NextStep{Tool: "store_app_get", Args: map[string]any{"app": app.ID}})
+			}
+		default:
 			return nil, wrap(err)
 		}
-		status = "already_exists"
 	}
 	res := &tool.Result{}
 	out := map[string]any{
@@ -250,7 +262,7 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 			fresh["tempFileId"] = v.TempFileID
 		}
 		if err := c.UpdateAppMetadata(wctx, app.ID, fresh); err != nil {
-			res.Warn("version posted but what's new failed: " + wrap(err).Error() + "; retry with store_listing_update")
+			res.Warn("version posted but what's new and the external version were not saved: " + wrap(err).Error() + "; re-run store_version_publish with the same version and whats_new (it re-applies both); store_listing_update does not set the external version")
 		} else {
 			out["whats_new_updated"] = len(in.WhatsNew) + len(cleared)
 		}
@@ -266,5 +278,5 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 		res.Warn("the portal already has this version; nothing new was posted")
 	}
 	res.Data = out
-	return res, nil
+	return withWarnings(c, res), nil
 }

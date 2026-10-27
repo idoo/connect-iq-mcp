@@ -30,15 +30,16 @@ func TestLocalSDKToolsAvailableReadOnly(t *testing.T) {
 	}
 }
 
-// exportFixture sets up a fake SDK (via GARMIN_MCP_SDK) whose monkeyc records
-// its args and writes -o, and a project with manifest version 1.2.3 and a key.
+// exportFixture sets up a fake SDK (via GARMIN_MCP_SDK) and a fake java (via
+// JAVA_HOME) that records its args and writes -o, and a project with manifest
+// version 1.2.3 and a key.
 func exportFixture(t *testing.T) (k *tooltest.Kit, argsFile, iq string) {
 	t.Helper()
 	return exportFixtureWith(t, "", ` version="1.2.3"`)
 }
 
-// exportFixtureWith is exportFixture with extra shell run by monkeyc before it
-// writes -o (it may set $content) and the manifest version attribute.
+// exportFixtureWith is exportFixture with extra shell run by the fake
+// compiler before it writes -o (it may set $content) and the manifest version attribute.
 func exportFixtureWith(t *testing.T, pre, versionAttr string) (k *tooltest.Kit, argsFile, iq string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -49,16 +50,24 @@ func exportFixtureWith(t *testing.T, pre, versionAttr string) (k *tooltest.Kit, 
 	if err := os.MkdirAll(filepath.Join(sdk, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(sdk, "bin", "monkeybrains.jar"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	argsFile = filepath.Join(t.TempDir(), "args")
-	script := "#!/bin/sh\necho \"$@\" > '" + argsFile + "'\n" +
+	script := "#!/bin/sh\n[ \"$1\" = -version ] && { echo 'openjdk version \"21\"' >&2; exit 0; }\n" +
+		"echo \"$@\" > '" + argsFile + "'\n" +
 		"content=new\n" + pre + "\n" +
 		"while [ $# -gt 0 ]; do if [ \"$1\" = -o ]; then out=$2; fi; shift; done\necho $content > \"$out\"\n"
-	if err := os.WriteFile(filepath.Join(sdk, "bin", "monkeyc"), []byte(script), 0o755); err != nil {
+	javaHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(javaHome, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(javaHome, "bin", "java"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GARMIN_MCP_SDK", sdk)
 	t.Setenv("CIQ_SDK", "")
-	t.Setenv("JAVA_HOME", "")
+	t.Setenv("JAVA_HOME", javaHome)
 
 	k = tooltest.New(t).ReadOnly()
 	root := k.Files.Root
@@ -184,6 +193,54 @@ func TestBuildMissingKeyHintNamesEnv(t *testing.T) {
 	}
 }
 
+// SE-2: with no usable java sdk_build fails with the FindJava error and the
+// install hint; the SDK's bin/monkeyc wrapper never runs.
+func TestBuildWithoutJavaReturnsError(t *testing.T) {
+	k, argsFile, _ := exportFixture(t)
+	marker := filepath.Join(t.TempDir(), "ran")
+	if err := os.WriteFile(filepath.Join(os.Getenv("GARMIN_MCP_SDK"), "bin", "monkeyc"), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("JAVA_HOME", t.TempDir()) // no bin/java: FindJava fails deterministically
+	res := tooltest.MustFail(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`), "unavailable")
+	if b, _ := json.Marshal(res); !strings.Contains(string(b), "JAVA_HOME") {
+		t.Fatalf("no-java error lacks the hint: %s", b)
+	}
+	for _, f := range []string{marker, argsFile} {
+		if _, err := os.Stat(f); !os.IsNotExist(err) {
+			t.Fatalf("%s exists: a compiler ran without java", f)
+		}
+	}
+}
+
+// SE-5: jungle path keys are confined to the root; excludeAnnotations is not a path.
+func TestBuildRefusesJunglePathOutsideRoot(t *testing.T) {
+	k, argsFile, _ := exportFixture(t)
+	jungle := filepath.Join(k.Files.Root, "app", "monkey.jungle")
+	outside := t.TempDir()
+	for _, body := range []string{
+		"project.manifest = manifest.xml\nbase.resourcePath = " + outside + "\n",
+		"project.manifest = manifest.xml\nbase.resourcePath = resources;../../" + filepath.Base(outside) + "\n",
+		"lib = " + outside + "\nproject.manifest = manifest.xml\nbase.sourcePath = $(lib)\n",
+	} {
+		if err := os.WriteFile(jungle, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		res := tooltest.MustFail(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`), "invalid_arguments")
+		if b, _ := json.Marshal(res); !strings.Contains(string(b), "Path = ") {
+			t.Fatalf("refusal does not name the key: %s", b)
+		}
+		if _, err := os.Stat(argsFile); !os.IsNotExist(err) {
+			t.Fatal("monkeyc ran with an outside-root jungle path")
+		}
+	}
+	if err := os.WriteFile(jungle, []byte("project.manifest = manifest.xml\nbase.resourcePath = resources\nbase.excludeAnnotations = /etc\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tooltest.MustOK(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`))
+	tooltest.MustFail(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der","jungle":"monkey.jungle;x.jungle"}`), "invalid_arguments")
+}
+
 func TestKeyGenerateRefusesUnignoredGitPath(t *testing.T) {
 	git, err := exec.LookPath("git")
 	if err != nil {
@@ -208,6 +265,65 @@ func TestKeyGenerateRefusesUnignoredGitPath(t *testing.T) {
 	tooltest.MustOK(t, tooltest.Call(t, gen, k.Env, `{"path":"keys/developer_key.der"}`))
 }
 
+// gitInit makes root a git repo, skipping without git.
+func gitInit(t *testing.T, root string) string {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("no git")
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "t@example.test"}, {"config", "user.name", "t"}} {
+		if out, err := exec.Command(git, append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil { //nolint:gosec // test
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	return git
+}
+
+// SE-1: a core.fsmonitor command in the project's .git/config never runs.
+func TestKeyGenerateNeverRunsRepoFsmonitor(t *testing.T) {
+	k := tooltest.New(t).ReadOnly()
+	root := k.Files.Root
+	git := gitInit(t, root)
+	marker := filepath.Join(t.TempDir(), "PWNED")
+	if err := os.WriteFile(filepath.Join(root, "a"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "a"}, {"config", "core.fsmonitor", "touch '" + marker + "'; echo"}} {
+		if out, err := exec.Command(git, append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil { //nolint:gosec // test
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	_ = os.Remove(marker) // git add may already have run it
+	gen, _ := tool.Lookup("sdk_key_generate")
+	tooltest.MustFail(t, tooltest.Call(t, gen, k.Env, `{"path":"keys/developer_key.der"}`), "invalid_arguments")
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("repo fsmonitor ran during sdk_key_generate (%v)", err)
+	}
+}
+
+// SE-1: GIT_DIR (and other GIT_*) in the server env cannot point the check
+// at another repo whose excludes would ignore the key.
+func TestKeyGenerateIgnoresGitDirEnv(t *testing.T) {
+	k := tooltest.New(t).ReadOnly()
+	root := k.Files.Root
+	gitInit(t, root)
+	other := t.TempDir()
+	gitInit(t, other)
+	if err := os.WriteFile(filepath.Join(other, ".git", "info", "exclude"), []byte("/keys/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_WORK_TREE", root)
+	gen, _ := tool.Lookup("sdk_key_generate")
+	tooltest.MustFail(t, tooltest.Call(t, gen, k.Env, `{"path":"keys/developer_key.der"}`), "invalid_arguments")
+	for _, kv := range gitEnv([]string{"GIT_DIR=/x", "git_index_file=/y", "PATH=/bin"}) {
+		if strings.HasPrefix(strings.ToUpper(kv), "GIT_") && kv != "GIT_CONFIG_NOSYSTEM=1" {
+			t.Errorf("gitEnv kept %s", kv)
+		}
+	}
+}
+
 // A store build outliving the wait returns a build_id; polling returns the result.
 func TestBuildAllOutlivesWait(t *testing.T) {
 	k, _, iq := exportFixtureWith(t, "sleep 1", ` version="1.2.3"`)
@@ -225,38 +341,78 @@ func TestBuildAllOutlivesWait(t *testing.T) {
 	tooltest.MustFail(t, callBuild(t, k, `{"build_id":"`+p.BuildID+`"}`), "invalid_arguments")
 }
 
-// Two concurrent exports of the same name: exactly one succeeds, the other is
-// refused (up front if the winner already finished, else at install), and the
-// winner's file is never replaced. Which call wins is up to the scheduler.
-func TestBuildAllConcurrentNoClobber(t *testing.T) {
-	lock := filepath.Join(t.TempDir(), "lock")
-	pre := "if mkdir '" + lock + "' 2>/dev/null; then sleep 0.3; content=first; else sleep 1.5; content=second; fi"
-	k, _, iq := exportFixtureWith(t, pre, ` version="1.2.3"`)
+// LF-1: a second build of the same output while the first runs (an agent
+// re-calling instead of polling, or retrying after a cancelled call) gets the
+// same build_id; only one compiler runs.
+func TestBuildSameOutputSharesJob(t *testing.T) {
+	runs := filepath.Join(t.TempDir(), "runs")
+	k, _, iq := exportFixtureWith(t, "echo x >> '"+runs+"'; sleep 1", ` version="1.2.3"`)
 	setBuildWait(t, 50*time.Millisecond)
-	start := func() *tool.Result {
-		return callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`)
+	start := func() pendingOut {
+		return tooltest.Decode[pendingOut](t, tooltest.MustOK(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`)))
 	}
-	results := []*tool.Result{start(), start()}
+	a, b := start(), start()
+	if a.BuildID == "" || a.BuildID != b.BuildID {
+		t.Fatalf("build ids %q and %q, want the same running job", a.BuildID, b.BuildID)
+	}
 	setBuildWait(t, 10*time.Second)
-	ok := 0
-	for i, r := range results {
-		if !r.IsError {
-			if p := tooltest.Decode[pendingOut](t, r); p.BuildID != "" {
-				r = callBuild(t, k, `{"build_id":"`+p.BuildID+`"}`)
-			}
-		}
-		if !r.IsError {
-			ok++
-		} else {
-			t.Logf("call %d refused: %s", i, tooltest.JSON(t, r.Data))
-		}
+	out := tooltest.Decode[buildOut](t, tooltest.MustOK(t, callBuild(t, k, `{"build_id":"`+a.BuildID+`"}`)))
+	if !out.OK || out.Output != iq {
+		t.Fatalf("polled = %+v", out)
 	}
-	if ok != 1 {
-		t.Fatalf("%d builds succeeded, want exactly 1", ok)
+	if got, _ := os.ReadFile(runs); strings.Count(string(got), "x") != 1 {
+		t.Fatalf("compiler ran %d times, want 1", strings.Count(string(got), "x"))
 	}
-	if got, _ := os.ReadFile(iq); strings.TrimSpace(string(got)) != "first" {
-		t.Fatalf("winning package replaced: %q", got)
+}
+
+// LF-1: finished results nobody collected are swept after jobKeep.
+func TestSweepDropsStaleFinishedJobs(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	old := &buildJob{id: "old", done: done, end: time.Now().Add(-jobKeep - time.Minute)}
+	fresh := &buildJob{id: "fresh", done: done, end: time.Now()}
+	running := &buildJob{id: "running", done: make(chan struct{})}
+	jobsMu.Lock()
+	for _, j := range []*buildJob{old, fresh, running} {
+		jobs[j.id] = j
 	}
+	jobsMu.Unlock()
+	t.Cleanup(func() {
+		jobsMu.Lock()
+		delete(jobs, "fresh")
+		delete(jobs, "running")
+		jobsMu.Unlock()
+	})
+	if lookupJob("old") != nil || lookupJob("fresh") == nil || lookupJob("running") == nil {
+		t.Fatal("sweep kept a stale result or dropped a live one")
+	}
+}
+
+// LF-2: stopping the server ends a running build (process group killed).
+func TestBuildEndsWithServerLifetime(t *testing.T) {
+	k, _, _ := exportFixtureWith(t, "sleep 30 & wait", ` version="1.2.3"`)
+	life := tool.NewLifetime(t.Context())
+	k.Env.Lifetime = life
+	setBuildWait(t, 50*time.Millisecond)
+	p := tooltest.Decode[pendingOut](t, tooltest.MustOK(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`)))
+	j := lookupJob(p.BuildID)
+	if j == nil {
+		t.Fatal("job not registered")
+	}
+	begin := time.Now()
+	life.Close(10 * time.Second)
+	select {
+	case <-j.done:
+	default:
+		t.Fatal("build still running after the server lifetime closed")
+	}
+	if time.Since(begin) > 8*time.Second || j.err == nil {
+		t.Fatalf("build not cancelled promptly: took %s, err %v", time.Since(begin), j.err)
+	}
+	lookupJob(p.BuildID) // keep the registry tidy
+	jobsMu.Lock()
+	delete(jobs, p.BuildID)
+	jobsMu.Unlock()
 }
 
 func TestBuildAllNamesIQ(t *testing.T) {

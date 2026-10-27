@@ -10,32 +10,46 @@ type Line struct {
 	Text   string `json:"text"`
 }
 
+// RingBytes is a ring's default text budget: the oldest lines go once the
+// retained text exceeds it, so one chatty app cannot pin gigabytes.
+const RingBytes = 8 << 20
+
 // Ring keeps the newest lines of a session; older lines are dropped.
 type Ring struct {
-	mu   sync.Mutex
-	cap  int
-	buf  []Line
-	last int64
+	mu       sync.Mutex
+	cap      int
+	maxBytes int
+	bytes    int
+	buf      []Line
+	last     int64
 }
 
-// NewRing returns a ring holding at most n lines.
+// NewRing returns a ring holding at most n lines and [RingBytes] of text.
 func NewRing(n int) *Ring {
 	if n < 1 {
 		n = 1
 	}
-	return &Ring{cap: n}
+	return &Ring{cap: n, maxBytes: RingBytes}
 }
 
-// Append adds a line.
+// Append adds a line, evicting the oldest lines past the line or byte cap
+// (the newest line is always kept).
 func (r *Ring) Append(stream, text string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.last++
-	if len(r.buf) == r.cap {
-		copy(r.buf, r.buf[1:])
-		r.buf = r.buf[:len(r.buf)-1]
-	}
 	r.buf = append(r.buf, Line{Cursor: r.last, Stream: stream, Text: text})
+	r.bytes += len(text)
+	drop := 0
+	for drop < len(r.buf)-1 && (len(r.buf)-drop > r.cap || r.bytes > r.maxBytes) {
+		r.bytes -= len(r.buf[drop].Text)
+		drop++
+	}
+	if drop > 0 {
+		n := copy(r.buf, r.buf[drop:])
+		clear(r.buf[n:])
+		r.buf = r.buf[:n]
+	}
 }
 
 // Since returns up to limit lines (0 = all) with Cursor > cursor. next is the

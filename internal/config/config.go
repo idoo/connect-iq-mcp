@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -119,9 +122,27 @@ func decodeStrict(data []byte, v any) error {
 	return err
 }
 
-// Validate checks cross-references.
+// profileNameRE is the profile name rule: the name becomes a file name, a
+// browser-profile directory and a keychain account, so it is kept lowercase
+// (safe on case-insensitive filesystems) and free of separators.
+var profileNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+
+// ValidateProfileName rejects names outside ^[a-z0-9][a-z0-9_-]{0,62}$.
+func ValidateProfileName(name string) error {
+	if !profileNameRE.MatchString(name) {
+		return fmt.Errorf("invalid profile name %q: use 1-63 lowercase letters, digits, '-' or '_', starting with a letter or digit", name)
+	}
+	return nil
+}
+
+// Validate checks profile names and cross-references.
 func (c *Config) Validate() error {
 	var errs []error
+	for _, name := range c.ProfileNames() {
+		if err := ValidateProfileName(name); err != nil {
+			errs = append(errs, fmt.Errorf("[profiles.%q]: %w", name, err))
+		}
+	}
 	if c.DefaultProfile != "" {
 		if _, ok := c.Profiles[c.DefaultProfile]; !ok {
 			errs = append(errs, fmt.Errorf("default_profile %q is not defined", c.DefaultProfile))
@@ -215,8 +236,8 @@ func checkWritable(path string, info fs.FileInfo) error {
 	if runtime.GOOS == "windows" {
 		return nil
 	}
-	if info.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("refusing %s: writable by group or others (mode %04o); run chmod 600 %s", path, info.Mode().Perm(), path)
+	if why := othersCanWrite(info); why != "" {
+		return fmt.Errorf("refusing %s: %s (mode %04o); run chmod 600 %s", path, why, info.Mode().Perm(), path)
 	}
 	return nil
 }
@@ -231,10 +252,60 @@ func checkDir(dir string) error {
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", dir, err)
 	}
-	if info.Mode().Perm()&0o022 != 0 && info.Mode()&fs.ModeSticky == 0 {
-		return fmt.Errorf("refusing %s: writable by group or others (mode %04o); run chmod 700 %s", dir, info.Mode().Perm(), dir)
+	if info.Mode()&fs.ModeSticky != 0 {
+		return nil
+	}
+	if why := othersCanWrite(info); why != "" {
+		return fmt.Errorf("refusing %s: %s (mode %04o); run chmod 700 %s", dir, why, info.Mode().Perm(), dir)
 	}
 	return nil
+}
+
+// Lookups behind the user-private-group rule; tests replace them.
+var (
+	getgid          = os.Getgid
+	lookupGroupName = func(gid int) (string, error) {
+		g, err := user.LookupGroupId(strconv.Itoa(gid))
+		if err != nil {
+			return "", err
+		}
+		return g.Name, nil
+	}
+	currentUserName = func() (string, error) {
+		u, err := user.Current()
+		if err != nil {
+			return "", err
+		}
+		return u.Username, nil
+	}
+)
+
+// othersCanWrite says why another user could modify info's file ("" = only
+// the owner can). World-write is always refused. Group-write is allowed only
+// for the user's private group (Debian/Fedora umask 0002): the file's gid is
+// the process gid and that group is named after the current user.
+func othersCanWrite(info fs.FileInfo) string {
+	perm := info.Mode().Perm()
+	switch {
+	case perm&0o002 != 0:
+		return "writable by others"
+	case perm&0o020 != 0 && !userPrivateGroup(info):
+		return "writable by group"
+	}
+	return ""
+}
+
+func userPrivateGroup(info fs.FileInfo) bool {
+	gid, ok := fileGid(info)
+	if !ok || gid != getgid() {
+		return false
+	}
+	group, err := lookupGroupName(gid)
+	if err != nil {
+		return false
+	}
+	name, err := currentUserName()
+	return err == nil && name != "" && group == name
 }
 
 func permWarnings(path string, info fs.FileInfo) []string {

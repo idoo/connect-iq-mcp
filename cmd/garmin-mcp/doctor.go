@@ -203,6 +203,10 @@ func keyCheck(rep *report) {
 }
 
 func credLine(rep *report, name string, c auth.CredStatus) {
+	if state := credstore.UnreadableState(c); state != "" {
+		rep.fail("%s: %s (%s)", name, state, c.Note)
+		return
+	}
 	if !c.Present {
 		rep.warn("%s: missing; run `garmin-mcp auth login`%s", name, note(c.Note))
 		return

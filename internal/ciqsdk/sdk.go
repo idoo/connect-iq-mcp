@@ -157,8 +157,8 @@ func ParseCurrentCfg(b []byte, cfgDir string) (string, error) {
 	return filepath.Clean(p), nil
 }
 
-// ValidateSDK checks an SDK root has a usable compiler (monkeybrains.jar or
-// the monkeyc wrapper) and returns it with its version.
+// ValidateSDK checks an SDK root has bin/monkeybrains.jar (the only compiler
+// we run; the bin/ wrappers are never used) and returns it with its version.
 func ValidateSDK(path string) (SDK, error) {
 	path = filepath.Clean(path)
 	st, err := os.Stat(path) //nolint:gosec // G703: SDK paths come from env (trusted) or pass insideSdks before reaching here
@@ -174,13 +174,8 @@ func ValidateSDK(path string) (SDK, error) {
 			s.Version = v
 		}
 	}
-	if runtime.GOOS == "windows" {
-		// The bin/*.bat wrappers run through cmd.exe; only the jar is used.
-		if !exists(filepath.Join(s.Bin(), "monkeybrains.jar")) {
-			return SDK{}, fmt.Errorf("sdk %s has no bin/monkeybrains.jar", path)
-		}
-	} else if !exists(filepath.Join(s.Bin(), "monkeybrains.jar")) && !exists(filepath.Join(s.Bin(), "monkeyc")) {
-		return SDK{}, fmt.Errorf("sdk %s has neither bin/monkeybrains.jar nor bin/monkeyc", path)
+	if !exists(s.Jar()) {
+		return SDK{}, fmt.Errorf("sdk %s has no bin/monkeybrains.jar", path)
 	}
 	return s, nil
 }

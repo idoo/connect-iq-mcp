@@ -17,15 +17,18 @@ import (
 const BaseURL = "https://apps.garmin.com"
 
 var (
-	curlHeaderRE = regexp.MustCompile(`(?is)(?:-H|--header)\s+\$?(['"])\s*cookie\s*:\s*(.*?)(?:'|")`)
-	curlCookieRE = regexp.MustCompile(`(?is)(?:-b|--cookie)\s+\$?(['"])(.*?)(?:'|")`)
+	// `\$?` is bash's $'…' quoting; `\^?` before either quote is the cmd.exe
+	// form of DevTools "Copy as cURL (cmd)" (-H ^"cookie: …^").
+	curlHeaderRE = regexp.MustCompile(`(?is)(?:-H|--header)\s+\$?(\^?)(['"])\s*cookie\s*:\s*(.*?)\^?(?:'|")`)
+	curlCookieRE = regexp.MustCompile(`(?is)(?:-b|--cookie)\s+\$?(\^?)(['"])(.*?)\^?(?:'|")`)
+	cmdCaretRE   = regexp.MustCompile(`\^(.)`)
 	cookieNameRE = regexp.MustCompile(`^[!#$%&'*+\-.^_` + "`" + `|~0-9A-Za-z]+$`)
 )
 
 // ParseCookieInput reduces pasted portal cookies to the `session` cookie
 // header (see SessionOnly). It accepts "a=b; c=d", "Cookie: a=b; c=d", or a
-// DevTools "Copy as cURL" command (-H 'cookie: …' or -b '…'). Later
-// duplicates win. Errors never echo cookie values.
+// DevTools "Copy as cURL" command, bash or cmd (-H 'cookie: …', -b '…' or
+// -b ^"…^"). Later duplicates win. Errors never echo cookie values.
 func ParseCookieInput(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -33,11 +36,14 @@ func ParseCookieInput(s string) (string, error) {
 	}
 	if strings.HasPrefix(strings.ToLower(s), "curl ") || strings.Contains(s, "\ncurl ") {
 		var parts []string
-		for _, m := range curlHeaderRE.FindAllStringSubmatch(s, -1) {
-			parts = append(parts, m[2])
-		}
-		for _, m := range curlCookieRE.FindAllStringSubmatch(s, -1) {
-			parts = append(parts, m[2])
+		for _, re := range []*regexp.Regexp{curlHeaderRE, curlCookieRE} {
+			for _, m := range re.FindAllStringSubmatch(s, -1) {
+				v := m[3]
+				if m[1] != "" { // cmd.exe: ^X escapes X
+					v = cmdCaretRE.ReplaceAllString(v, "$1")
+				}
+				parts = append(parts, v)
+			}
 		}
 		if len(parts) == 0 {
 			return "", errors.New("the cURL command has no cookie header (-H 'cookie: …' or -b '…')")

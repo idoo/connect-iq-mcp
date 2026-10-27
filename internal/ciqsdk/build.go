@@ -50,7 +50,7 @@ func ParseDiagnostics(out string) []Diagnostic {
 // BuildOpts configures [Build] and [Export]. Paths are absolute.
 type BuildOpts struct {
 	SDK        SDK
-	Java       string // java path; empty uses the bin/ wrapper
+	Java       string // absolute java path; empty runs FindJava (its error fails the build)
 	ProjectDir string
 	Jungle     string // default <ProjectDir>/monkey.jungle
 	Device     string // required for Build, ignored by Export
@@ -93,6 +93,9 @@ func BuildArgs(o BuildOpts, export bool) ([]string, error) {
 	jungle := o.Jungle
 	if jungle == "" {
 		jungle = "monkey.jungle"
+	}
+	if strings.Contains(jungle, ";") {
+		return nil, fmt.Errorf("jungle path %q contains ';', which monkeyc reads as a list of jungle files", jungle)
 	}
 	a := []string{"-f", jungle}
 	if export {
@@ -149,6 +152,13 @@ func run(ctx context.Context, o BuildOpts, export bool) (BuildResult, error) {
 	if _, err := BuildArgs(o, export); err != nil {
 		return BuildResult{}, err
 	}
+	java, err := requireJava(ctx, o.Java)
+	if err != nil {
+		return BuildResult{}, err
+	}
+	if !exists(o.SDK.Jar()) {
+		return BuildResult{}, fmt.Errorf("sdk %s has no bin/monkeybrains.jar; reinstall it with SdkManager", o.SDK.Path)
+	}
 	if err := checkOutputDest(o.Output); err != nil {
 		return BuildResult{}, err
 	}
@@ -166,11 +176,14 @@ func run(ctx context.Context, o BuildOpts, export bool) (BuildResult, error) {
 	if err != nil {
 		return BuildResult{}, err
 	}
-	argv := o.SDK.MonkeycArgv(o.Java, args)
+	argv := o.SDK.MonkeycArgv(java, args)
 	cctx, cancel := context.WithTimeout(ctx, o.Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, argv[0], argv[1:]...) //nolint:gosec // G204: argv is the resolved SDK's monkeyc/java with BuildArgs-validated paths; no shell
 	cmd.Dir = o.ProjectDir
+	ownGroup(cmd)
+	// Grandchildren holding the output pipe must not keep Run waiting.
+	cmd.WaitDelay = 5 * time.Second
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	start := time.Now()

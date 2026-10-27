@@ -185,21 +185,31 @@ func HTTPHandler(opts HTTPOptions) (http.Handler, error) {
 			http.Error(w, "forbidden origin", http.StatusForbidden)
 			return
 		}
-		ip := clientIP(r)
-		if wait := throttle.blocked(ip); wait > 0 {
-			w.Header().Set("Retry-After", strconv.Itoa(int(wait.Round(time.Second)/time.Second)+1))
-			http.Error(w, "too many failed authentication attempts", http.StatusTooManyRequests)
-			return
-		}
-		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		// The token is compared first, so a correct token is never refused by
+		// the throttle. Only requests carrying a wrong Authorization header
+		// count as failures (a page can make the browser send header-less
+		// requests at will), and loopback peers are never throttled: every
+		// local process shares 127.0.0.1, and a 32+ character token cannot
+		// be guessed online anyway.
+		authz := r.Header.Get("Authorization")
+		got, ok := strings.CutPrefix(authz, "Bearer ")
 		sum := sha256.Sum256([]byte(got))
 		if !ok || subtle.ConstantTimeCompare(sum[:], want[:]) != 1 {
-			throttle.fail(ip)
+			if key := throttleKey(r); key != "" && authz != "" {
+				if wait := throttle.blocked(key); wait > 0 {
+					w.Header().Set("Retry-After", strconv.Itoa(int(wait.Round(time.Second)/time.Second)+1))
+					http.Error(w, "too many failed authentication attempts", http.StatusTooManyRequests)
+					return
+				}
+				throttle.fail(key)
+			}
 			w.Header().Set("WWW-Authenticate", `Bearer realm="garmin-mcp"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		throttle.ok(ip)
+		if key := throttleKey(r); key != "" {
+			throttle.ok(key)
+		}
 		if r.Header.Get(sessionIDHeader) != "" {
 			mcpHandler.ServeHTTP(w, r)
 			return
@@ -216,9 +226,10 @@ func HTTPHandler(opts HTTPOptions) (http.Handler, error) {
 	return mux, nil
 }
 
-// Failed-auth backoff: authFreeFailures misses per client IP are free, then
-// each further miss locks that IP out for authBaseLockout doubling up to
-// authMaxLockout. A success or authForget of quiet resets the IP.
+// Failed-auth backoff: authFreeFailures misses per client key are free, then
+// each further miss locks that key out for authBaseLockout doubling up to
+// authMaxLockout. A success or authForget of quiet resets the key. At most
+// authMaxTracked keys are kept; the least recently failed one is evicted.
 const (
 	authFreeFailures = 5
 	authBaseLockout  = time.Second
@@ -233,7 +244,7 @@ type authFailures struct {
 	until time.Time
 }
 
-// authThrottle slows bearer-token guessing per client IP.
+// authThrottle slows bearer-token guessing per client key (see throttleKey).
 type authThrottle struct {
 	now func() time.Time
 	mu  sync.Mutex
@@ -259,14 +270,10 @@ func (a *authThrottle) fail(ip string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := a.now()
-	if len(a.ips) >= authMaxTracked {
-		for k, f := range a.ips {
-			if now.Sub(f.last) > authForget {
-				delete(a.ips, k)
-			}
-		}
-	}
 	f := a.ips[ip]
+	if f == nil && len(a.ips) >= authMaxTracked {
+		a.evictLocked(now)
+	}
 	if f == nil || now.Sub(f.last) > authForget {
 		f = &authFailures{}
 		a.ips[ip] = f
@@ -279,18 +286,50 @@ func (a *authThrottle) fail(ip string) {
 	}
 }
 
+// evictLocked makes room for one new key: entries quiet for authForget go
+// first; if none, the least recently failed entry is dropped, so the map
+// never exceeds authMaxTracked.
+func (a *authThrottle) evictLocked(now time.Time) {
+	oldest, oldestAt := "", time.Time{}
+	for k, f := range a.ips {
+		if now.Sub(f.last) > authForget {
+			delete(a.ips, k)
+			continue
+		}
+		if oldest == "" || f.last.Before(oldestAt) {
+			oldest, oldestAt = k, f.last
+		}
+	}
+	if len(a.ips) >= authMaxTracked {
+		delete(a.ips, oldest)
+	}
+}
+
 func (a *authThrottle) ok(ip string) {
 	a.mu.Lock()
 	delete(a.ips, ip)
 	a.mu.Unlock()
 }
 
-// clientIP is the remote host of r without the port.
-func clientIP(r *http.Request) string {
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
+// throttleKey is the auth-throttle key of r's peer: "" for loopback (never
+// throttled), the address for IPv4, and the /64 prefix for IPv6 (one host
+// owns a whole /64 and can rotate addresses inside it).
+func throttleKey(r *http.Request) string {
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
 	}
-	return r.RemoteAddr
+	ip := net.ParseIP(host)
+	switch {
+	case ip == nil:
+		return host
+	case ip.IsLoopback():
+		return ""
+	case ip.To4() != nil:
+		return ip.To4().String()
+	default:
+		return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
+	}
 }
 
 // sessionLimits resolves the idle timeout (0 = never, for the SDK) and the

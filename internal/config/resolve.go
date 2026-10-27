@@ -206,6 +206,9 @@ func (r *Resolved) loadProfile(name string, cfg *Config) error {
 	if name == "" {
 		name = DefaultProfileName
 	}
+	if err := ValidateProfileName(name); err != nil {
+		return err
+	}
 	prof, ok := cfg.Profiles[name]
 	if !ok && name != DefaultProfileName {
 		return fmt.Errorf("profile %q is not defined (known: %s)", name, strings.Join(cfg.ProfileNames(), ", "))

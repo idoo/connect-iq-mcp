@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -40,7 +41,7 @@ func Open(_ context.Context, profile string) (auth.Store, error) {
 			}
 		}
 	}
-	return newStore(profile, dir, autoRenew), nil
+	return newStore(profile, dir, autoRenew)
 }
 
 const cliUsage = `usage:
@@ -136,7 +137,7 @@ func cliStore(flagProfile string) (*Store, error) {
 			autoRenew = p.AutoRenewEnabled()
 		}
 	}
-	return newStore(name, dir, autoRenew), nil
+	return newStore(name, dir, autoRenew)
 }
 
 func (s *Store) cliLogin(ctx context.Context, stdout, stderr io.Writer, connect, paste bool, browserPath string) error {
@@ -145,6 +146,9 @@ func (s *Store) cliLogin(ctx context.Context, stdout, stderr io.Writer, connect,
 	if paste {
 		if connect {
 			return errors.New("--paste only covers the developer portal; run login --connect without --paste for Garmin Connect")
+		}
+		if f, ok := stdin.(*os.File); ok && isTerminal(f) {
+			_, _ = fmt.Fprintln(stderr, pastePrompt())
 		}
 		if res, err = s.pasteLogin(ctx); err != nil {
 			return err
@@ -161,6 +165,9 @@ func (s *Store) cliLogin(ctx context.Context, stdout, stderr io.Writer, connect,
 		valid = res.PortalExpires.Local().Format("2006-01-02")
 	}
 	_, _ = fmt.Fprintf(stdout, "Signed in as %s (%s). Session valid until %s.\n", name, res.DeveloperID, valid)
+	for _, w := range res.Warnings {
+		_, _ = fmt.Fprintln(stderr, "warning:", w)
+	}
 	if res.Connect {
 		who := res.ConnectName
 		if who == "" {
@@ -169,6 +176,16 @@ func (s *Store) cliLogin(ctx context.Context, stdout, stderr io.Writer, connect,
 		_, _ = fmt.Fprintf(stdout, "Garmin Connect: signed in as %s.\n", who)
 	}
 	return nil
+}
+
+// pastePrompt tells a terminal user how to end the pasted input: --paste
+// reads to EOF, and a Windows console has no Ctrl+D.
+func pastePrompt() string {
+	eof := "Ctrl+D"
+	if runtime.GOOS == "windows" {
+		eof = "Ctrl+Z, then Enter"
+	}
+	return "Paste the Cookie header or the \"Copy as cURL\" command, then press Enter and " + eof + "."
 }
 
 // pasteLogin stores a developer-portal Cookie header read from stdin.
@@ -198,6 +215,7 @@ func (s *Store) pasteLogin(ctx context.Context) (auth.LoginResult, error) {
 	if err := s.savePortal(r.Portal); err != nil {
 		return auth.LoginResult{}, err
 	}
+	r.Warnings = s.takeSaveWarnings()
 	return r.result(), nil
 }
 
@@ -224,12 +242,21 @@ func toCredJSON(c auth.CredStatus) credJSON {
 	return j
 }
 
+// cliStatus prints the credential state. It fails (non-zero exit) when a
+// stored credential exists but could not be read (locked or unreadable).
 func (s *Store) cliStatus(ctx context.Context, stdout io.Writer, asJSON bool) error {
 	st := s.Status(ctx)
+	var err error
+	if state := UnreadableState(st.Portal); state != "" {
+		err = fmt.Errorf("stored credentials are %s; see the note above", state)
+	}
 	if asJSON {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(statusJSON{Profile: s.profile, Portal: toCredJSON(st.Portal), Connect: toCredJSON(st.Connect)})
+		if e := enc.Encode(statusJSON{Profile: s.profile, Portal: toCredJSON(st.Portal), Connect: toCredJSON(st.Connect)}); e != nil {
+			return e
+		}
+		return err
 	}
 	_, _ = fmt.Fprintf(stdout, "Profile: %s\n\n", s.profile)
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
@@ -242,6 +269,9 @@ func (s *Store) cliStatus(ctx context.Context, stdout io.Writer, asJSON bool) er
 				state = "expired"
 			}
 		}
+		if u := UnreadableState(c); u != "" {
+			state = u
+		}
 		if !c.ExpiresAt.IsZero() {
 			exp = c.ExpiresAt.Local().Format("2006-01-02 15:04")
 		}
@@ -249,7 +279,10 @@ func (s *Store) cliStatus(ctx context.Context, stdout io.Writer, asJSON bool) er
 	}
 	row("portal (apps.garmin.com)", st.Portal)
 	row("connect (Garmin Connect)", st.Connect)
-	return tw.Flush()
+	if e := tw.Flush(); e != nil {
+		return e
+	}
+	return err
 }
 
 func (s *Store) cliRenew(ctx context.Context, stdout io.Writer) error {
@@ -267,16 +300,22 @@ func (s *Store) cliRenew(ctx context.Context, stdout io.Writer) error {
 		return fmt.Errorf("lock credentials: %w", err)
 	}
 	defer unlock()
-	if err := s.renewLocked(ctx, wantPortal, wantConnect, true); err != nil {
-		if errors.Is(err, browser.ErrRateLimited) {
-			return fmt.Errorf("silent renewal failed: %w", err)
+	err = s.renewLocked(ctx, wantPortal, wantConnect, true)
+	switch {
+	case errors.Is(err, errSealNotExtended):
+		_, _ = fmt.Fprintln(stdout, "Garmin returned the same developer-portal session, so its expiry did not move; it was kept.")
+		if wantConnect {
+			_, _ = fmt.Fprintln(stdout, "Garmin Connect renewed.")
 		}
-		if errors.Is(err, errNoRenewal) || errors.Is(err, browser.ErrInteractionRequired) {
-			return authRequired("silent renewal failed", err)
-		}
+	case errors.Is(err, browser.ErrRateLimited):
+		return fmt.Errorf("silent renewal failed: %w", err)
+	case errors.Is(err, errNoRenewal) || errors.Is(err, browser.ErrInteractionRequired):
+		return authRequired("silent renewal failed", err)
+	case err != nil:
 		return err
+	default:
+		_, _ = fmt.Fprintln(stdout, "Renewed.")
 	}
-	_, _ = fmt.Fprintln(stdout, "Renewed.")
 	return s.cliStatus(ctx, stdout, false)
 }
 

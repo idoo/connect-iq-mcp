@@ -33,14 +33,11 @@ func launchApp(ctx context.Context, bundle, profile string, url string) (string,
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--disable-blink-features=AutomationControlled",
-		// Same cookie encryption as the headless exec launch (chromedp's
-		// defaults); otherwise silent renewal can't decrypt this profile's
-		// cookies and the user would see a keychain prompt.
-		"--use-mock-keychain",
-		"--password-store=basic",
-		"--window-size=" + windowSize,
-		url,
 	}
+	// Same cookie encryption as the headless exec launch, or silent renewal
+	// could not decrypt this profile's cookies.
+	args = append(args, cookieKeyArgs("darwin", bundle)...)
+	args = append(args, "--window-size="+windowSize, url)
 	if out, err := exec.CommandContext(ctx, "open", args...).CombinedOutput(); err != nil { //nolint:gosec // fixed program, argv array (no shell); bundle is the browser resolved by Find
 		return "", fmt.Errorf("browser: open %s: %v: %s", bundle, err, strings.TrimSpace(string(out)))
 	}

@@ -37,12 +37,12 @@ func init() {
 	// is a Write tool; it stays usable in read-only mode like the others.
 	shot := write("sim_screenshot", "Screenshot",
 		"macOS only. Capture the simulator window (works behind other windows; needs Screen Recording and an unlocked screen), crop to the device display at native size, save PNG under the root and return it as an image.")
-	shot.OS = []string{"darwin"}
+	shot.Platforms = []string{"darwin"}
 	tool.Register(tool.New(shot, simScreenshot))
 	m := write("sim_input", "Simulator input",
 		"macOS only. Drive the simulator in order: press a button (menu = long up), set the GPS position, or wait. Steals focus: requires allow_focus:true and Accessibility permission; stops if another app takes focus between steps.")
 	m.Enums = map[string][]any{"steps.press": {"up", "down", "enter", "esc", "back", "menu"}}
-	m.OS = []string{"darwin"}
+	m.Platforms = []string{"darwin"}
 	tool.Register(tool.New(m, simInput))
 }
 
@@ -98,8 +98,24 @@ func simErr(err error) error {
 		return &tool.Error{Code: "screen_locked", Message: err.Error(), Hint: "unlock the Mac (keep it awake with caffeinate -d) and retry"}
 	case err != nil && err.Error() == "unsupported_on_"+runtime.GOOS:
 		return &tool.Error{Code: err.Error(), Message: "not implemented on " + runtime.GOOS + "; GUI automation is macOS-only for now"}
+	case errors.Is(err, sim.ErrNoDisplay):
+		return &tool.Error{Code: tool.ErrUnavailable.Code, Message: err.Error(), Hint: "run garmin-mcp inside a desktop session (or under xvfb-run; on WSL use WSLg), then retry"}
+	case errors.Is(err, sim.ErrSimulatorExited):
+		return &tool.Error{Code: "sim_exited", Message: err.Error(), Hint: "fix what the simulator output names (display, missing libraries such as libwebkit2gtk), then retry sim_run"}
+	case errors.Is(err, sim.ErrTooManySessions):
+		return &tool.Error{Code: "sim_busy", Message: err.Error(), Hint: "call sim_stop to end the running sessions, then retry"}
 	}
 	return err
+}
+
+// findJava returns the absolute java for monkeyc/monkeydo; without one the
+// call fails (the SDK's wrapper scripts would run a bare `java`).
+func findJava(ctx context.Context) (string, error) {
+	j, err := ciqsdk.FindJava(ctx, os.Getenv)
+	if err != nil {
+		return "", fmt.Errorf("%w: java: %v; install a JDK 17+ and set JAVA_HOME to its absolute path (or put java on PATH), then retry", tool.ErrUnavailable, err)
+	}
+	return j.Path, nil
 }
 
 func sessionsOut() []sim.SessionInfo {
@@ -174,8 +190,8 @@ func simKey(env *tool.Env, key string) (string, error) {
 	return "", tool.InvalidArgs("give prg, or build one: ask the human to set %s to the app's developer key, or pass key inside the root", ciqsdk.EnvKeyVar)
 }
 
-// prgFor returns a PRG: the given one, or a fresh build of project.
-func prgFor(ctx context.Context, env *tool.Env, r ciqsdk.Resolved, in runIn, test bool) (string, *ciqsdk.BuildResult, error) {
+// prgFor returns a PRG: the given one, or a fresh build of project with java.
+func prgFor(ctx context.Context, env *tool.Env, r ciqsdk.Resolved, java string, in runIn, test bool) (string, *ciqsdk.BuildResult, error) {
 	if in.PRG != "" {
 		p, err := env.Root.Resolve(in.PRG)
 		if err != nil {
@@ -212,10 +228,6 @@ func prgFor(ctx context.Context, env *tool.Env, r ciqsdk.Resolved, in runIn, tes
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil { //nolint:gosec // G301: build output dir in the user's project; normal project-dir permissions
 		return "", nil, err
 	}
-	var java string
-	if j, err := ciqsdk.FindJava(ctx, os.Getenv); err == nil {
-		java = j.Path
-	}
 	br, err := ciqsdk.Build(ctx, ciqsdk.BuildOpts{
 		SDK: r.SDK, Java: java, ProjectDir: pdir, Device: in.Device, Key: kabs,
 		Output: out, Test: test, Warnings: true,
@@ -251,11 +263,19 @@ func startSession(ctx context.Context, env *tool.Env, in runIn, extra ...string)
 	if !ciqsdk.ValidDeviceID(in.Device) {
 		return out, nil, tool.InvalidArgs("invalid device id %q", in.Device)
 	}
+	if err := sim.Sessions.CheckRoom(); err != nil {
+		return out, nil, simErr(err)
+	}
 	_, r, err := resolveSDK(in.SDK)
 	if err != nil {
 		return out, nil, err
 	}
-	prg, br, err := prgFor(ctx, env, r, in, in.Test)
+	// monkeydo needs java too: fail before building or starting anything.
+	java, err := findJava(ctx)
+	if err != nil {
+		return out, nil, err
+	}
+	prg, br, err := prgFor(ctx, env, r, java, in, in.Test)
 	out.br = br
 	if err != nil {
 		return out, nil, err
@@ -268,12 +288,8 @@ func startSession(ctx context.Context, env *tool.Env, in runIn, extra ...string)
 		return out, nil, simErr(err)
 	}
 	out.simStarted = !already
-	var java string
-	if j, err := ciqsdk.FindJava(ctx, os.Getenv); err == nil {
-		java = j.Path
-	}
 	out.s, err = sim.Sessions.Start(r.SDK.MonkeydoArgv(java, prg, in.Device, extra...), prg, in.Device, in.Test)
-	return out, nil, err
+	return out, nil, simErr(err)
 }
 
 // testFilterRe bounds test filters to test-name characters so a filter

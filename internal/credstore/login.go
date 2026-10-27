@@ -17,24 +17,42 @@ var _ auth.Loginer = (*Store)(nil)
 // Login signs in through the dedicated browser profile (interactive window)
 // and stores what it captured. It is the one code path behind both
 // `garmin-mcp auth login` and the auth_login tool. On any error nothing is saved.
+//
+// The window is guarded by the <profile>.login lock, not the profile lock:
+// other calls keep using still-valid credentials while the human signs in
+// (LC-3). The profile lock is taken only for the validity check and the save.
 func (s *Store) Login(ctx context.Context, o auth.LoginOptions) (auth.LoginResult, error) {
 	if err := s.refuseEnv(o.Connect); err != nil {
 		return auth.LoginResult{}, err
 	}
-	unlock, err := lockPath(ctx, s.lockFile())
+	unlockLogin, err := lockPath(ctx, s.loginLockFile())
 	if err != nil {
-		return auth.LoginResult{}, fmt.Errorf("lock credentials: %w", err)
+		return auth.LoginResult{}, fmt.Errorf("lock browser profile: %w", err)
 	}
-	defer unlock()
+	defer unlockLogin()
 	if o.SkipIfValid {
-		if r, ok := s.validLocked(ctx, o.Connect); ok {
+		unlock, err := lockPath(ctx, s.lockFile())
+		if err != nil {
+			return auth.LoginResult{}, fmt.Errorf("lock credentials: %w", err)
+		}
+		r, ok := s.validLocked(ctx, o.Connect)
+		unlock()
+		if ok {
 			return r, nil
 		}
 	}
 	bo := browser.Options{ProfileDir: s.browserDir(), BrowserPath: o.BrowserPath, Timeout: o.Timeout, Log: o.Log}
-	res, err := s.signIn(ctx, bo, true, o.Connect)
+	res, err := s.signIn(ctx, bo, true, o.Connect, time.Time{})
 	if err != nil {
 		return auth.LoginResult{}, loginError(ctx, err, o.Timeout)
+	}
+	unlock, err := lockPath(ctx, s.lockFile())
+	if err != nil {
+		return auth.LoginResult{}, fmt.Errorf("lock credentials: %w; nothing was saved", err)
+	}
+	defer unlock()
+	if err := s.commitSignIn(&res); err != nil {
+		return auth.LoginResult{}, err
 	}
 	return res.result(), nil
 }
@@ -88,9 +106,7 @@ func (s *Store) validLocked(ctx context.Context, connect bool) (auth.LoginResult
 			if err != nil {
 				return auth.LoginResult{}, false
 			}
-			if err := s.saveConnect(nc); err != nil {
-				return auth.LoginResult{}, false
-			}
+			s.keepConnect(nc) // a failed save keeps the rotated token in memory
 			c = nc
 		}
 		r.Connect = c
@@ -108,6 +124,7 @@ func (r signInResult) result() auth.LoginResult {
 	if r.Connect != nil {
 		out.Connect, out.ConnectName = true, r.Connect.DisplayName
 	}
+	out.Warnings = r.Warnings
 	return out
 }
 

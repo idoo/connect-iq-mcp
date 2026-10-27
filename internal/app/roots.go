@@ -15,10 +15,12 @@ import (
 )
 
 // ProjectFiles is the session's [tool.Files]. Its root is, in order: the
-// explicit root (--root or GARMIN_MCP_ROOT), the MCP client's first file:// root,
-// or the git root of the cwd. A root picked automatically that is the
-// filesystem root or the home directory is refused, because desktop clients
-// start servers there and the whole disk would be readable.
+// explicit root (--root or GARMIN_MCP_ROOT), the MCP client's first file://
+// root that is a local folder, or (only when the client sent no roots) the
+// git root of the cwd. Client roots that are all unusable make file access
+// unavailable. A root picked automatically that is the filesystem root or
+// the home directory is refused, because desktop clients start servers there
+// and the whole disk would be readable.
 type ProjectFiles struct {
 	explicit *Files
 	def      *Files
@@ -64,8 +66,11 @@ func (pf *ProjectFiles) open(dir string) (*Files, error) {
 
 // ForRoots implements [tool.RootedFiles]: the explicit root wins; otherwise
 // the first client root that is an existing directory is used (refused when
-// it is / or home); otherwise the default root.
-func (pf *ProjectFiles) ForRoots(uris []string) (tool.Files, error) {
+// it is / or home). The default root is used only when the client sent no
+// roots; when it sent some (or listing them failed) and none is a local
+// folder, file access is unavailable rather than silently confined to a
+// folder the client never declared.
+func (pf *ProjectFiles) ForRoots(uris []string, listErr error) (tool.Files, error) {
 	if pf.explicit != nil {
 		return pf.explicit, nil
 	}
@@ -78,6 +83,13 @@ func (pf *ProjectFiles) ForRoots(uris []string) (tool.Files, error) {
 			continue
 		}
 		return pf.cached(dir)
+	}
+	if listErr != nil {
+		return nil, fmt.Errorf("%w: none of the client's roots is a local folder (listing them failed: %v); pass --root <project folder> or set GARMIN_MCP_ROOT", tool.ErrUnavailable, listErr)
+	}
+	if len(uris) > 0 {
+		shown := uris[:min(len(uris), 3)]
+		return nil, fmt.Errorf("%w: none of the client's roots is a local folder (got %q); open a local project folder in the client, or pass --root <project folder> or set GARMIN_MCP_ROOT", tool.ErrUnavailable, shown)
 	}
 	if pf.defErr != nil {
 		return nil, pf.defErr
@@ -101,7 +113,7 @@ func (pf *ProjectFiles) cached(dir string) (*Files, error) {
 
 // Root returns the root used without client roots, or "" when refused.
 func (pf *ProjectFiles) Root() string {
-	f, err := pf.ForRoots(nil)
+	f, err := pf.ForRoots(nil, nil)
 	if err != nil {
 		return ""
 	}
@@ -193,7 +205,7 @@ func canonical(p string) string {
 	return filepath.Clean(p)
 }
 
-func (pf *ProjectFiles) base() (tool.Files, error) { return pf.ForRoots(nil) }
+func (pf *ProjectFiles) base() (tool.Files, error) { return pf.ForRoots(nil, nil) }
 
 // Resolve implements tool.Files over the default root.
 func (pf *ProjectFiles) Resolve(p string) (string, error) {

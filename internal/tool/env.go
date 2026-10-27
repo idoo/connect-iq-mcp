@@ -54,8 +54,9 @@ type Toolsets interface {
 }
 
 // Files gives tools confined filesystem access: an explicit --root/GARMIN_MCP_ROOT,
-// else the MCP client's roots, else the git root of the cwd. A fallback root
-// of / or the home directory is refused. Symlink escapes are refused.
+// else the MCP client's roots, else (only when the client sent none) the git
+// root of the cwd. A fallback root of / or the home directory is refused.
+// Symlink escapes are refused.
 // All methods accept paths relative to the root or absolute paths inside it.
 type Files interface {
 	// Resolve returns the confined absolute path or an error.
@@ -132,6 +133,9 @@ type Env struct {
 	// declines and an error wrapping [ErrElicitationUnavailable] when the
 	// client cannot ask.
 	Elicit func(ctx context.Context, msg string) (bool, error)
+	// Lifetime runs work that outlives one call (sdk builds) until the
+	// server stops; nil runs it under context.Background (tests).
+	Lifetime *Lifetime
 
 	// noProgress records that Progress was nil before [Env.complete].
 	noProgress bool

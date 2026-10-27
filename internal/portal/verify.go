@@ -28,7 +28,8 @@ type Developer struct {
 
 // Verify calls GET /api/ciq-developerservices/developers with cookieHeader,
 // following no redirects. It returns the developer and the header with any
-// Set-Cookie rotations applied. 3xx/401/403 wrap auth.ErrAuthRequired.
+// Set-Cookie rotations applied. 3xx/401/403 wrap auth.ErrAuthRequired; a
+// Cloudflare block page is ErrBlocked (or a Cloudflare RateLimitError).
 func Verify(ctx context.Context, hc *http.Client, cookieHeader string) (Developer, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+devServices+"/developers", nil)
 	if err != nil {

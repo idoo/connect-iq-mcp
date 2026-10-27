@@ -31,8 +31,10 @@ func TestConnectTokenWithoutConsentNoSilentMint(t *testing.T) {
 	if n.Load() != 0 {
 		t.Fatalf("token endpoint called %d times", n.Load())
 	}
-	if _, err := os.Stat(s.stampFile()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("renewal attempted: %v", err)
+	for _, k := range []string{stampPortal, stampConnect} {
+		if _, err := os.Stat(s.stampFile(k)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s renewal attempted: %v", k, err)
+		}
 	}
 	if b, _, _ := s.readStored(); b.Connect != nil {
 		t.Fatalf("connect stored: %+v", b.Connect)
@@ -80,7 +82,7 @@ func TestLogoutWaitsForLock(t *testing.T) {
 		t.Fatalf("logout finished while the lock was held: %v", err)
 	case <-time.After(200 * time.Millisecond):
 	}
-	// A login holding the lock writes the session; logout must still win.
+	// A renewal holding the lock writes the session; logout must still win.
 	if err := s.writeStored(blob{Portal: &portalCred{Cookies: cookies(time.Now().Add(time.Hour))}}); err != nil {
 		t.Fatal(err)
 	}

@@ -124,3 +124,73 @@ func TestRetryAfterDate(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+// LF-4: only a 403 on /developers means "not signed in"; a 403 elsewhere is
+// an endpoint refusal and a Cloudflare page is a block, never auth_required.
+func TestForbiddenClassification(t *testing.T) {
+	const app = "11111111-2222-3333-4444-555555555555"
+	ctx := context.Background()
+	plain := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) }
+
+	c, _ := fakeServer(t, plain)
+	c.devID = ""
+	if _, err := c.Developer(ctx); !errors.Is(err, auth.ErrAuthRequired) {
+		t.Fatalf("403 on /developers err = %v, want auth required", err)
+	}
+
+	c, _ = fakeServer(t, plain)
+	_, err := c.AppMetadata(ctx, app)
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Status != http.StatusForbidden || ae.Code != "forbidden" || errors.Is(err, auth.ErrAuthRequired) {
+		t.Fatalf("403 on metadata err = %v, want APIError 403 forbidden", err)
+	}
+
+	c, _ = fakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cf-Ray", "8abc-AMS")
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("<html><title>Attention Required! | Cloudflare</title>error code: 1020</html>"))
+	})
+	c.devID = ""
+	if _, err := c.Developer(ctx); !errors.Is(err, ErrBlocked) || errors.Is(err, auth.ErrAuthRequired) {
+		t.Fatalf("Cloudflare 1020 on /developers err = %v, want ErrBlocked", err)
+	}
+
+	c, _ = fakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cf-Ray", "8abc-AMS")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("error code: 1015"))
+	})
+	var rl *RateLimitError
+	if _, err := c.AppMetadata(ctx, app); !errors.As(err, &rl) || !rl.Cloudflare {
+		t.Fatalf("Cloudflare 1015 err = %v, want Cloudflare RateLimitError", err)
+	}
+}
+
+type failingSave struct{ fakeCreds }
+
+func (failingSave) SavePortalCookies(context.Context, string, []string) error {
+	return errors.New("keychain timeout")
+}
+
+// LF-5: a write that succeeded is not turned into a failure by a cookie save
+// error (it becomes a warning); a GET still fails on it.
+func TestCookieSaveErrorAfterWrite(t *testing.T) {
+	const app = "11111111-2222-3333-4444-555555555555"
+	ctx := context.Background()
+	c, _ := fakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: "S2"})
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"r1"}`))
+	})
+	c.creds = failingSave{}
+	if _, err := c.CreateReply(ctx, app, "rev-1", "thanks"); err != nil {
+		t.Fatalf("write after save error = %v, want success", err)
+	}
+	if w := c.Warnings(); len(w) != 1 || c.Warnings() != nil {
+		t.Fatalf("warnings = %v, want one, then cleared", w)
+	}
+	if _, err := c.AppMetadata(ctx, app); err == nil {
+		t.Fatal("GET with a failed cookie save succeeded")
+	}
+}

@@ -81,7 +81,7 @@ func TestProjectFilesExplicitRootWins(t *testing.T) {
 	}
 	// An explicit --root is honoured even when it is home, and beats client roots.
 	pf := newProjectFiles(t, home, string(filepath.Separator), home)
-	f, err := pf.ForRoots([]string{fileURI(mkdir(t, t.TempDir(), "client"))})
+	f, err := pf.ForRoots([]string{fileURI(mkdir(t, t.TempDir(), "client"))}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestProjectFilesClientRoots(t *testing.T) {
 	}
 	// cwd is home (refused by default), but the client names a project root.
 	pf := newProjectFiles(t, "", home, home)
-	f, err := pf.ForRoots([]string{"https://example.com/x", fileURI(filepath.Join(base, "missing")), fileURI(proj)})
+	f, err := pf.ForRoots([]string{"https://example.com/x", fileURI(filepath.Join(base, "missing")), fileURI(proj)}, nil)
 	if err != nil {
 		t.Fatalf("ForRoots: %v", err)
 	}
@@ -115,17 +115,50 @@ func TestProjectFilesClientRoots(t *testing.T) {
 	if _, err := f.ReadFile(filepath.Join(home, "secret")); !errors.Is(err, ErrOutsideRoot) {
 		t.Fatalf("read outside client root: %v", err)
 	}
-	again, err := pf.ForRoots([]string{fileURI(proj)})
+	again, err := pf.ForRoots([]string{fileURI(proj)}, nil)
 	if err != nil || again != f {
 		t.Fatalf("client root not cached: %v", err)
 	}
 	// A client root that is home itself is refused like the fallback.
-	if _, err := pf.ForRoots([]string{fileURI(home)}); !errors.Is(err, tool.ErrUnavailable) {
+	if _, err := pf.ForRoots([]string{fileURI(home)}, nil); !errors.Is(err, tool.ErrUnavailable) {
 		t.Fatalf("home client root: %v", err)
 	}
-	// No usable client root falls back to the (refused) default.
-	if _, err := pf.ForRoots(nil); !errors.Is(err, tool.ErrUnavailable) {
+	// No client roots falls back to the (refused) default.
+	if _, err := pf.ForRoots(nil, nil); !errors.Is(err, tool.ErrUnavailable) {
 		t.Fatalf("fallback: %v", err)
+	}
+}
+
+// SA-3: when the client sent roots (or listing failed) and none is a local
+// folder, file access is unavailable; the safe default root is used only
+// when the client sent no roots at all. An explicit root still wins.
+func TestProjectFilesUnusableClientRoots(t *testing.T) {
+	base := t.TempDir()
+	home := mkdir(t, base, "home")
+	cwd := mkdir(t, mkdir(t, base, "work"), "repo")
+	pf := newProjectFiles(t, "", cwd, home)
+	if _, err := pf.ForRoots(nil, nil); err != nil {
+		t.Fatalf("no roots: default root refused: %v", err)
+	}
+	if _, err := pf.ForRoots([]string{}, nil); err != nil {
+		t.Fatalf("empty roots: default root refused: %v", err)
+	}
+	for name, uris := range map[string][]string{
+		"virtual": {"vscode-vfs://github/o/r"},
+		"unc":     {"file://server/share/proj"},
+		"missing": {fileURI(filepath.Join(base, "gone"))},
+	} {
+		_, err := pf.ForRoots(uris, nil)
+		if !errors.Is(err, tool.ErrUnavailable) || !strings.Contains(err.Error(), "none of the client's roots is a local folder") || !strings.Contains(err.Error(), "--root") {
+			t.Errorf("%s: err = %v, want unavailable naming --root", name, err)
+		}
+	}
+	if _, err := pf.ForRoots(nil, errors.New("timeout")); !errors.Is(err, tool.ErrUnavailable) {
+		t.Errorf("listing failure: err = %v, want unavailable", err)
+	}
+	explicit := newProjectFiles(t, cwd, home, home)
+	if _, err := explicit.ForRoots([]string{"vscode-vfs://x"}, errors.New("timeout")); err != nil {
+		t.Errorf("explicit root with unusable client roots: %v", err)
 	}
 }
 
@@ -184,11 +217,11 @@ func TestUnsafeRootRefusesHomeAncestors(t *testing.T) {
 	}
 	pf := newProjectFiles(t, "", proj, home)
 	for _, uri := range []string{fileURI(parent), fileURI(base)} {
-		if _, err := pf.ForRoots([]string{uri}); !errors.Is(err, tool.ErrUnavailable) {
+		if _, err := pf.ForRoots([]string{uri}, nil); !errors.Is(err, tool.ErrUnavailable) {
 			t.Errorf("client root %s: err = %v, want unavailable", uri, err)
 		}
 	}
-	if _, err := pf.ForRoots([]string{fileURI(proj)}); err != nil {
+	if _, err := pf.ForRoots([]string{fileURI(proj)}, nil); err != nil {
 		t.Errorf("client root inside home: %v", err)
 	}
 }
@@ -209,7 +242,7 @@ func TestUnsafeRootRefusesCaseVariantOfHome(t *testing.T) {
 		if !unsafeRoot(dir, home) {
 			t.Errorf("unsafeRoot(%q) = false, want refused", dir)
 		}
-		if _, err := pf.ForRoots([]string{fileURI(dir)}); !errors.Is(err, tool.ErrUnavailable) {
+		if _, err := pf.ForRoots([]string{fileURI(dir)}, nil); !errors.Is(err, tool.ErrUnavailable) {
 			t.Errorf("client root %s: err = %v, want unavailable", dir, err)
 		}
 	}
@@ -224,7 +257,7 @@ func TestOutsideRootIsInvalidArguments(t *testing.T) {
 	home := mkdir(t, base, "home")
 	proj := mkdir(t, home, "proj")
 	pf := newProjectFiles(t, "", proj, home)
-	f, err := pf.ForRoots(nil)
+	f, err := pf.ForRoots(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

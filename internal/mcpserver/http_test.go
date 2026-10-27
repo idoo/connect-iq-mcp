@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -324,8 +325,9 @@ func TestHTTPRejectsShortToken(t *testing.T) {
 	}
 }
 
-// HA-10: repeated wrong tokens from one IP get locked out, even when the
-// next guess is right; other IPs are unaffected.
+// HA-10 / SA-2: repeated wrong tokens from one IP get locked out (429 for
+// further wrong tokens), but the right token still gets in; other IPs are
+// unaffected.
 func TestHTTPThrottlesFailedAuth(t *testing.T) {
 	h := testHTTPHandler(t)
 	for i := range authFreeFailures {
@@ -336,9 +338,12 @@ func TestHTTPThrottlesFailedAuth(t *testing.T) {
 	if rec := doHTTP(t, h, "/mcp", "Bearer guess", ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("lockout-triggering miss = %d, want 401", rec.Code)
 	}
-	rec := doHTTP(t, h, "/mcp", "Bearer "+testToken, "")
+	rec := doHTTP(t, h, "/mcp", "Bearer guess", "")
 	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" {
-		t.Fatalf("right token during lockout = %d, want 429 with Retry-After", rec.Code)
+		t.Fatalf("wrong token during lockout = %d, want 429 with Retry-After", rec.Code)
+	}
+	if rec := doHTTP(t, h, "/mcp", "Bearer "+testToken, ""); rec.Code != http.StatusOK {
+		t.Fatalf("right token during lockout = %d, want 200", rec.Code)
 	}
 	other := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(initBody))
 	other.RemoteAddr = "198.51.100.7:4000"
@@ -349,6 +354,86 @@ func TestHTTPThrottlesFailedAuth(t *testing.T) {
 	h.ServeHTTP(orec, other)
 	if orec.Code != http.StatusOK {
 		t.Fatalf("other IP = %d, want 200", orec.Code)
+	}
+}
+
+// SA-2: header-less requests (what a web page's <img> sends) never count,
+// and loopback peers are never throttled, so a page cannot lock the local
+// client out.
+func TestHTTPNoHeaderAndLoopbackNeverLockOut(t *testing.T) {
+	h := testHTTPHandler(t)
+	send := func(remote, auth string) int {
+		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(initBody))
+		req.RemoteAddr = remote
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for _, remote := range []string{"127.0.0.1:5000", "[::1]:5000", "203.0.113.9:5000"} {
+		for i := range 3 * authFreeFailures {
+			if code := send(remote, ""); code != http.StatusUnauthorized {
+				t.Fatalf("%s no header #%d = %d, want 401", remote, i, code)
+			}
+		}
+		if code := send(remote, "Bearer "+testToken); code != http.StatusOK {
+			t.Fatalf("%s valid token after header-less flood = %d, want 200", remote, code)
+		}
+	}
+	for i := range 3 * authFreeFailures {
+		if code := send("127.0.0.1:5000", "Bearer wrong"); code != http.StatusUnauthorized {
+			t.Fatalf("loopback wrong token #%d = %d, want 401 (never 429)", i, code)
+		}
+	}
+	if code := send("127.0.0.1:5000", "Bearer "+testToken); code != http.StatusOK {
+		t.Fatalf("loopback valid token = %d, want 200", code)
+	}
+}
+
+// SA-4: IPv6 peers share one key per /64; loopback has none.
+func TestThrottleKey(t *testing.T) {
+	key := func(remote string) string {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = remote
+		return throttleKey(r)
+	}
+	if a, b := key("[2001:db8:1:2::1]:1"), key("[2001:db8:1:2:ffff::9]:2"); a != b || a != "2001:db8:1:2::/64" {
+		t.Fatalf("same /64 keys = %q, %q", a, b)
+	}
+	if key("[2001:db8:1:3::1]:1") == key("[2001:db8:1:2::1]:1") {
+		t.Fatal("different /64s share a key")
+	}
+	if k := key("198.51.100.7:4000"); k != "198.51.100.7" {
+		t.Fatalf("IPv4 key = %q", k)
+	}
+	for _, lo := range []string{"127.0.0.1:1", "[::1]:1", "127.1.2.3:1"} {
+		if k := key(lo); k != "" {
+			t.Fatalf("loopback %s key = %q, want none", lo, k)
+		}
+	}
+}
+
+// SA-4: the failure map never grows past authMaxTracked, even when every
+// entry is recent; the least recently failed key is evicted.
+func TestAuthThrottleCapEvictsOldest(t *testing.T) {
+	now := time.Unix(0, 0)
+	a := newAuthThrottle(func() time.Time { return now })
+	for i := range authMaxTracked + 100 {
+		now = now.Add(time.Millisecond)
+		a.fail(fmt.Sprintf("k%d", i))
+	}
+	if n := len(a.ips); n != authMaxTracked {
+		t.Fatalf("tracked = %d, want %d", n, authMaxTracked)
+	}
+	if _, ok := a.ips["k0"]; ok {
+		t.Fatal("oldest key was not evicted")
+	}
+	if _, ok := a.ips[fmt.Sprintf("k%d", authMaxTracked+99)]; !ok {
+		t.Fatal("newest key missing")
 	}
 }
 

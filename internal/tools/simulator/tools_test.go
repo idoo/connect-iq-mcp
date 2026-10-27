@@ -26,11 +26,16 @@ func TestRegistered(t *testing.T) {
 			t.Fatalf("%s must be Local without confirm gate", n)
 		}
 	}
-	// GUI tools are documented everywhere but only offered on macOS.
+	// GUI tools are registered (and documented) everywhere but declared
+	// macOS-only; the description says so.
 	for _, n := range []string{"sim_screenshot", "sim_input"} {
 		tl, _ := tool.Lookup(n)
-		if got := tl.ListedIn(tool.ProfileInfo{AllowWrites: true}); got != (runtime.GOOS == "darwin") {
-			t.Errorf("%s listed=%v on %s", n, got, runtime.GOOS)
+		m := tl.Meta()
+		if !m.SupportedOn("darwin") || m.SupportedOn("linux") || m.SupportedOn("windows") {
+			t.Errorf("%s platforms %v", n, m.Platforms)
+		}
+		if !strings.HasPrefix(m.Description, tool.PlatformLabel(m.Platforms)+". ") {
+			t.Errorf("%s description must start with %q", n, tool.PlatformLabel(m.Platforms))
 		}
 	}
 }
@@ -96,10 +101,7 @@ func TestWaitCapWithoutProgress(t *testing.T) {
 }
 
 func TestLocalSimToolsAvailableReadOnly(t *testing.T) {
-	names := []string{"sim_run", "sim_stop"}
-	if runtime.GOOS == "darwin" {
-		names = append(names, "sim_input", "sim_screenshot")
-	}
+	names := []string{"sim_run", "sim_stop", "sim_input", "sim_screenshot"}
 	for _, n := range names {
 		tl, _ := tool.Lookup(n)
 		if !tl.ListedIn(tool.ProfileInfo{}) {
@@ -138,8 +140,18 @@ func TestPRGMustBeARegularPRGFile(t *testing.T) {
 	kp := filepath.Join(k.Files.Root, "keys", "developer_key.der")
 	_ = os.MkdirAll(filepath.Dir(kp), 0o700)
 	_ = os.WriteFile(kp, []byte("KEY"), 0o600)
-	if _, _, err := prgFor(context.Background(), k.Env, ciqsdk.Resolved{}, runIn{Device: "fenix7", PRG: "keys/developer_key.der"}, false); !errors.Is(err, tool.ErrInvalidArgs) {
+	if _, _, err := prgFor(context.Background(), k.Env, ciqsdk.Resolved{}, "/usr/bin/java", runIn{Device: "fenix7", PRG: "keys/developer_key.der"}, false); !errors.Is(err, tool.ErrInvalidArgs) {
 		t.Fatalf("key accepted as prg: %v", err)
+	}
+}
+
+// SE-2: without a usable java the simulator tools fail with the install
+// hint instead of falling back to the SDK's wrapper scripts.
+func TestFindJavaErrorIsReturned(t *testing.T) {
+	t.Setenv("JAVA_HOME", "relative/jdk")
+	_, err := findJava(context.Background())
+	if !errors.Is(err, tool.ErrUnavailable) || !strings.Contains(err.Error(), "JAVA_HOME must be an absolute path") || !strings.Contains(err.Error(), "JDK 17+") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package sim
 
 import (
 	"bufio"
+	"encoding/binary"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -81,12 +82,40 @@ LISTEN 0 50 127.0.0.1:1234 0.0.0.0:*
 	if got := parseSSPIDs(ss); len(got) != 2 || got[0] != 77 || got[1] != 0 {
 		t.Errorf("ss = %v (another user's listener must yield 0)", got)
 	}
-	ns := `  TCP    127.0.0.1:1234         0.0.0.0:0              LISTENING       4242
-  TCP    127.0.0.1:12345        0.0.0.0:0              LISTENING       1
-  TCP    127.0.0.1:50000        127.0.0.1:1234         ESTABLISHED     9
-`
-	if got := parseNetstatPIDs(ns, "1234"); len(got) != 1 || got[0] != 4242 {
-		t.Errorf("netstat = %v", got)
+}
+
+// GetExtendedTcpTable rows: ports are in network order in the low 16 bits,
+// everything else little-endian; nothing depends on the UI language (WD-1).
+func TestParseTCPTable(t *testing.T) {
+	row4 := func(port uint16, pid uint32) []byte {
+		r := make([]byte, tcpRowSize)
+		binary.LittleEndian.PutUint32(r[0:], 2)                                    // LISTEN
+		binary.LittleEndian.PutUint32(r[4:], 0x0100007f)                           // 127.0.0.1
+		binary.LittleEndian.PutUint32(r[8:], uint32(port>>8)|uint32(port&0xff)<<8) // htons
+		binary.LittleEndian.PutUint32(r[20:], pid)
+		return r
+	}
+	row6 := func(port uint16, pid uint32) []byte {
+		r := make([]byte, tcp6RowSize)
+		binary.LittleEndian.PutUint32(r[20:], uint32(port>>8)|uint32(port&0xff)<<8)
+		binary.LittleEndian.PutUint32(r[52:], pid)
+		return r
+	}
+	table := func(rows ...[]byte) []byte {
+		b := binary.LittleEndian.AppendUint32(nil, uint32(len(rows)))
+		for _, r := range rows {
+			b = append(b, r...)
+		}
+		return b
+	}
+	if got := parseTCPTable(table(row4(1234, 4242), row4(12345, 1), row4(53764, 9)), false, 1234); len(got) != 1 || got[0] != 4242 {
+		t.Errorf("v4 = %v", got)
+	}
+	if got := parseTCPTable(table(row6(80, 1), row6(1234, 77)), true, 1234); len(got) != 1 || got[0] != 77 {
+		t.Errorf("v6 = %v", got)
+	}
+	if got := parseTCPTable(table(row4(1234, 1))[:10], false, 1234); len(got) != 0 {
+		t.Errorf("truncated = %v", got)
 	}
 }
 

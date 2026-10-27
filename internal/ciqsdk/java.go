@@ -106,42 +106,51 @@ const (
 // Jar returns the path of bin/monkeybrains.jar.
 func (s SDK) Jar() string { return filepath.Join(s.Bin(), "monkeybrains.jar") }
 
-// MonkeycArgv returns the argv (program first) for monkeyc. It calls Java
-// directly when the jar and java are available, else the bin/monkeyc wrapper
-// (never on Windows: the .bat wrappers would run through cmd.exe).
+// MonkeycArgv returns the argv (program first) running monkeyc from the jar
+// with java. The SDK's bin/monkeyc wrapper is never used: it runs a bare
+// `java` that the shell may resolve in the project directory. Callers pass
+// the [FindJava] path; see javaFor for an empty one.
 func (s SDK) MonkeycArgv(java string, args []string) []string {
-	if java, ok := s.javaFor(java); ok {
-		return append([]string{
-			java, "-Xms1g", "-Dfile.encoding=UTF-8", "-Dapple.awt.UIElement=true",
-			"-classpath", s.Jar(), ClassMonkeyc,
-		}, args...)
-	}
-	return append([]string{filepath.Join(s.Bin(), "monkeyc")}, args...)
+	return append([]string{
+		javaFor(java), "-Xms1g", "-Dfile.encoding=UTF-8", "-Dapple.awt.UIElement=true",
+		"-classpath", s.Jar(), ClassMonkeyc,
+	}, args...)
 }
 
 // MonkeydoArgv returns the argv to push prg to device on a running
-// simulator (extra are appended, e.g. "-t", testName).
+// simulator (extra are appended, e.g. "-t", testName). Like [SDK.MonkeycArgv]
+// it always runs the jar, never the bin/monkeydo wrapper.
 func (s SDK) MonkeydoArgv(java, prg, device string, extra ...string) []string {
-	if java, ok := s.javaFor(java); ok {
-		a := []string{java, "-classpath", s.Jar(), ClassMonkeydo, "-f", prg, "-d", device, "-s", filepath.Join(s.Bin(), "shell")}
-		return append(a, extra...)
-	}
-	return append([]string{filepath.Join(s.Bin(), "monkeydo"), prg, device}, extra...)
+	a := []string{javaFor(java), "-classpath", s.Jar(), ClassMonkeydo, "-f", prg, "-d", device, "-s", filepath.Join(s.Bin(), "shell")}
+	return append(a, extra...)
 }
 
-// javaFor picks the java to run the jar with. On Windows it always uses the
-// jar: a missing java becomes an absolute PATH lookup, or the bare name so the
-// command fails to start (os/exec refuses cwd-relative hits) instead of
-// falling back to a .bat wrapper.
-func (s SDK) javaFor(java string) (string, bool) {
-	if java != "" && exists(s.Jar()) {
-		return java, true
+// javaFor returns java when it is absolute, else the bare executable name:
+// os/exec then resolves it on PATH and refuses a working-directory hit, so a
+// caller that dropped the FindJava error fails to start rather than running a
+// planted java.
+func javaFor(java string) string {
+	if filepath.IsAbs(java) {
+		return java
 	}
-	if runtime.GOOS != "windows" {
-		return "", false
-	}
-	if p, err := lookPathAbs(javaExe()); err == nil {
-		return p, true
-	}
-	return javaExe(), true
+	return javaExe()
 }
+
+// requireJava returns java when absolute, else the [FindJava] result or its
+// error (which names the install step).
+func requireJava(ctx context.Context, java string) (string, error) {
+	if java != "" {
+		if !filepath.IsAbs(java) {
+			return "", errors.New("java must be an absolute path, got " + java)
+		}
+		return java, nil
+	}
+	j, err := findJava(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	return j.Path, nil
+}
+
+// findJava is FindJava; tests replace it.
+var findJava = FindJava

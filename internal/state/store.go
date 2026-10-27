@@ -215,7 +215,7 @@ func writeAtomic(path string, b []byte) (err error) {
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("state: close: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := Rename(tmp, path); err != nil {
 		return fmt.Errorf("state: rename: %w", err)
 	}
 	return nil

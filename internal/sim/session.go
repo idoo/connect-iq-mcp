@@ -149,10 +149,14 @@ type Manager struct {
 // Sessions is the process-wide session manager.
 var Sessions = &Manager{sessions: map[string]*Session{}}
 
-// Start launches argv (monkeydo) and captures its output.
+// Start launches argv (monkeydo) and captures its output. It refuses while
+// [MaxRunningSessions] clients run.
 func (m *Manager) Start(argv []string, prg, device string, tests bool) (*Session, error) {
 	if len(argv) == 0 {
 		return nil, errors.New("empty command")
+	}
+	if err := m.CheckRoom(); err != nil {
+		return nil, err
 	}
 	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // G204: argv is built by callers from the resolved SDK's monkeydo and validated project paths; no shell
 	ownGroup(cmd)
@@ -222,7 +226,29 @@ func (m *Manager) add(s *Session) {
 
 // MaxLineBytes is the longest output line kept; the rest of a longer line
 // is read and discarded so the client never blocks on a full pipe.
-const MaxLineBytes = 1024 * 1024
+const MaxLineBytes = 64 << 10
+
+// MaxRunningSessions is how many monkeydo clients may run at once.
+const MaxRunningSessions = 4
+
+// ErrTooManySessions refuses a new client while [MaxRunningSessions] run.
+var ErrTooManySessions = fmt.Errorf("%d monkeydo sessions are already running; call sim_stop to end them, then retry", MaxRunningSessions)
+
+// CheckRoom returns [ErrTooManySessions] when no other client may start.
+func (m *Manager) CheckRoom() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, s := range m.sessions {
+		if !s.Exited() {
+			n++
+		}
+	}
+	if n >= MaxRunningSessions {
+		return ErrTooManySessions
+	}
+	return nil
+}
 
 func (s *Session) pump(wg *sync.WaitGroup, stream string, r io.Reader) {
 	defer wg.Done()

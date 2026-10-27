@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"runtime"
 	"slices"
 	"sync"
 	"time"
@@ -42,6 +43,9 @@ type Deps struct {
 	MaxResultBytes int
 	// Now is the plan clock; nil means time.Now.
 	Now func() time.Time
+	// Platform is the GOOS whose tools are listed; "" means runtime.GOOS and
+	// [tool.AnyPlatform] lists every tool (generated docs).
+	Platform string
 }
 
 // session is the per-server state: enabled toolsets, write mode and plans.
@@ -49,7 +53,10 @@ type session struct {
 	deps  Deps
 	srv   *mcp.Server
 	tools []tool.Tool
-	plans *tool.Planner
+	// offPlatform holds the tools that don't work on this GOOS: never
+	// listed, a call answers unavailable.
+	offPlatform map[string]tool.Tool
+	plans       *tool.Planner
 
 	syncMu sync.Mutex // serializes sync against the SDK
 	mu     sync.Mutex
@@ -106,12 +113,23 @@ func newSession(deps Deps) (*session, error) {
 		}
 		s.on[ts] = true
 	}
+	if deps.Platform == "" {
+		deps.Platform = runtime.GOOS
+		s.deps.Platform = deps.Platform
+	}
 	seen := map[string]bool{}
 	for _, t := range append(slices.Clone(deps.Tools), s.toolsetsTool()) {
 		if seen[t.Name()] {
 			return nil, fmt.Errorf("mcpserver: duplicate tool %q", t.Name())
 		}
 		seen[t.Name()] = true
+		if !t.Meta().SupportedOn(deps.Platform) {
+			if s.offPlatform == nil {
+				s.offPlatform = map[string]tool.Tool{}
+			}
+			s.offPlatform[t.Name()] = t
+			continue
+		}
 		s.tools = append(s.tools, t)
 	}
 	s.srv = mcp.NewServer(&mcp.Implementation{Name: "garmin-mcp", Title: "garmin-mcp", Version: deps.Version}, &mcp.ServerOptions{

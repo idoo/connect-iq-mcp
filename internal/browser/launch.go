@@ -3,6 +3,9 @@ package browser
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	cdpbrowser "github.com/chromedp/cdproto/browser"
@@ -29,15 +32,55 @@ func start(ctx context.Context, o Options, exe string) (context.Context, func(),
 	return startExec(ctx, o, exe)
 }
 
+// cookieKey says how the profile's cookies are encrypted: mockKeychain and a
+// non-empty passwordStore select Chromium's constant key. On macOS a
+// vendor-signed Chrome, Brave or Edge uses neither, so cookies are sealed with
+// the browser's own "Safe Storage" keychain item. Chrome for Testing keeps the
+// mock keychain (it is unsigned, and a keychain item for it would prompt on
+// every launch). Linux and Windows keep the basic store: a server has no
+// unlocked keyring, and Windows ignores it (cookies use DPAPI).
+func cookieKey(goos, exe string) (mockKeychain bool, passwordStore string) {
+	if goos == "darwin" && !isCfT(exe) {
+		return false, ""
+	}
+	return true, "basic"
+}
+
+// cookieKeyArgs is cookieKey as command-line flags.
+func cookieKeyArgs(goos, exe string) []string {
+	var args []string
+	mock, store := cookieKey(goos, exe)
+	if mock {
+		args = append(args, "--use-mock-keychain")
+	}
+	if store != "" {
+		args = append(args, "--password-store="+store)
+	}
+	return args
+}
+
+// isCfT reports whether exe (or an .app bundle path) is Chrome for Testing.
+// Only the macOS name is distinctive; elsewhere the answer does not matter.
+func isCfT(exe string) bool {
+	return strings.HasPrefix(filepath.Base(exe), "Google Chrome for Testing")
+}
+
 // startExec runs the browser as our child process (headless, non-macOS, or a
 // bare executable outside an .app bundle).
 func startExec(ctx context.Context, o Options, exe string) (context.Context, func(), error) {
+	mock, store := cookieKey(runtime.GOOS, exe)
+	var passwordStore any = false // false drops chromedp's default flag
+	if store != "" {
+		passwordStore = store
+	}
 	opts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
 	opts = append(opts,
 		chromedp.ExecPath(exe),
 		chromedp.UserDataDir(o.ProfileDir),
 		chromedp.Flag("enable-automation", false),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("use-mock-keychain", mock),
+		chromedp.Flag("password-store", passwordStore),
 	)
 	if !o.Headless {
 		opts = append(opts, chromedp.VisibleWindow,

@@ -24,6 +24,8 @@ func TestParseCookieInput(t *testing.T) {
 		"curl -H":    "curl 'https://apps.garmin.com/x' \\\n  -H 'accept: */*' \\\n  -H 'cookie: session=S1; CIQ_DI_session=D1' \\\n  -H 'referer: x'",
 		"curl -b":    "curl 'https://apps.garmin.com/x' -H 'accept: */*' -b 'session=S1; CIQ_DI_session=D1' --compressed",
 		"curl $quot": "curl 'https://apps.garmin.com/x' -b $'session=S1; CIQ_DI_session=D1'",
+		"cmd -H":     "curl ^\"https://apps.garmin.com/x^\" ^\n  -H ^\"accept: */*^\" ^\n  -H ^\"cookie: session=S1; CIQ_DI_session=D1^\" ^\n  -H ^\"referer: x^\"",
+		"cmd -b":     "curl ^\"https://apps.garmin.com/x^\" ^\n  -b ^\"session=S1; CIQ_DI_session=D1^\" ^\n  --compressed",
 		"dupes":      "session=old; CIQ_DI_session=D1; session=S1; junk",
 	}
 	for name, in := range cases {
@@ -43,6 +45,15 @@ func TestParseCookieInput(t *testing.T) {
 	_, err := ParseCookieInput("CIQ_DI_session=SECRETVALUE")
 	if err == nil || strings.Contains(err.Error(), "SECRETVALUE") {
 		t.Fatalf("error must not echo values: %v", err)
+	}
+	// cmd.exe caret escapes inside the value are removed (Chrome writes % as ^%^).
+	got, err := ParseCookieInput("curl ^\"https://apps.garmin.com/x^\" -b ^\"session=S^%^3D1; a=b^\"")
+	if err != nil || got != "session=S%3D1" {
+		t.Fatalf("cmd escapes: %q, %v", got, err)
+	}
+	// A bash-quoted value keeps its carets.
+	if got, err := ParseCookieInput("curl 'https://x' -b 'session=S^1'"); err != nil || got != "session=S^1" {
+		t.Fatalf("bash caret: %q, %v", got, err)
 	}
 }
 

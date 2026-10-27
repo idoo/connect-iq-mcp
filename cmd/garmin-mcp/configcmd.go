@@ -19,6 +19,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/idoo/garmin-mcp/internal/config"
+	"github.com/idoo/garmin-mcp/internal/state"
 	"github.com/idoo/garmin-mcp/internal/tool"
 	_ "github.com/idoo/garmin-mcp/internal/tools/all" // registers every tool for the permissions list.
 )
@@ -57,6 +58,11 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	if !slices.Contains(clients, client) {
 		return usageErr(fmt.Sprintf("unknown client %q; one of: %s", client, strings.Join(clients, ", ")))
 	}
+	if *profile != "" {
+		if err := config.ValidateProfileName(*profile); err != nil {
+			return usageErr(err.Error())
+		}
+	}
 	bin, err := binaryPath()
 	if err != nil {
 		return err
@@ -73,11 +79,11 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stderr, credentialsNote) // stderr keeps stdout pasteable
 		return nil
 	case "install":
-		home, err := os.UserHomeDir()
+		env, err := currentInstallEnv()
 		if err != nil {
-			return fmt.Errorf("home dir: %w", err)
+			return err
 		}
-		if err := install(client, bin, *profile, home, stdout); err != nil {
+		if err := install(client, bin, *profile, env, stdout); err != nil {
 			return err
 		}
 		fmt.Fprintln(stdout, credentialsNote)
@@ -256,34 +262,120 @@ var snippetHints = map[string]string{
 	"windsurf":       "~/.codeium/windsurf/mcp_config.json",
 }
 
-// clientConfigPath returns the config file a client reads, under home.
-func clientConfigPath(client, home string) string {
+// installEnv is where `config install` finds client config directories;
+// tests inject it.
+type installEnv struct {
+	goos         string
+	home         string // os.UserHomeDir
+	configDir    string // os.UserConfigDir: %AppData%, ~/Library/Application Support, $XDG_CONFIG_HOME or ~/.config
+	localAppData string // Windows %LOCALAPPDATA%, home of MSIX package data
+	wslDistro    string // $WSL_DISTRO_NAME, set inside WSL
+}
+
+func currentInstallEnv() (installEnv, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return installEnv{}, fmt.Errorf("home dir: %w", err)
+	}
+	cfg, err := os.UserConfigDir()
+	if err != nil {
+		return installEnv{}, fmt.Errorf("config dir: %w (set XDG_CONFIG_HOME or use `garmin-mcp config snippet`)", err)
+	}
+	return installEnv{
+		goos:         runtime.GOOS,
+		home:         home,
+		configDir:    cfg,
+		localAppData: os.Getenv("LOCALAPPDATA"),
+		wslDistro:    os.Getenv("WSL_DISTRO_NAME"),
+	}, nil
+}
+
+// clientConfigPaths returns the config files a client reads. Claude Desktop
+// and VS Code may have several (MSIX copy, VS Code forks); each is written.
+func clientConfigPaths(client string, e installEnv) []string {
 	switch client {
 	case "cursor":
-		return filepath.Join(home, ".cursor", "mcp.json")
+		return []string{filepath.Join(e.home, ".cursor", "mcp.json")}
 	case "windsurf":
-		return filepath.Join(home, ".codeium", "windsurf", "mcp_config.json")
+		return []string{filepath.Join(e.home, ".codeium", "windsurf", "mcp_config.json")}
 	case "codex":
-		return filepath.Join(home, ".codex", "config.toml")
+		return []string{filepath.Join(e.home, ".codex", "config.toml")}
 	case "claude-desktop":
-		return filepath.Join(appSupportDir(home), "Claude", "claude_desktop_config.json")
+		return append([]string{filepath.Join(e.configDir, "Claude", "claude_desktop_config.json")}, msixClaudeConfigs(e)...)
 	case "vscode":
-		return filepath.Join(appSupportDir(home), "Code", "User", "mcp.json")
+		return vscodeConfigs(e)
 	default:
-		return ""
+		return nil
 	}
 }
 
-// appSupportDir is the per-user application config directory.
-func appSupportDir(home string) string {
-	switch runtime.GOOS {
-	case "darwin":
-		return filepath.Join(home, "Library", "Application Support")
-	case "windows":
-		return filepath.Join(home, "AppData", "Roaming")
-	default:
-		return filepath.Join(home, ".config")
+// msixClaudeConfigs returns the virtualized config of an MSIX-installed
+// Claude Desktop (%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude),
+// which that app reads instead of %AppData% once the folder exists.
+func msixClaudeConfigs(e installEnv) []string {
+	if e.goos != "windows" || e.localAppData == "" {
+		return nil
 	}
+	ents, err := os.ReadDir(filepath.Join(e.localAppData, "Packages"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, ent := range ents {
+		if !ent.IsDir() || !strings.HasPrefix(ent.Name(), "Claude_") {
+			continue
+		}
+		dir := filepath.Join(e.localAppData, "Packages", ent.Name(), "LocalCache", "Roaming", "Claude")
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			out = append(out, filepath.Join(dir, "claude_desktop_config.json"))
+		}
+	}
+	return out
+}
+
+// vscodeConfigs returns mcp.json in every existing VS Code User dir (Code,
+// Code - OSS, VSCodium, and on Linux their Flatpaks), or Code's when none
+// exists yet.
+func vscodeConfigs(e installEnv) []string {
+	dirs := []string{
+		filepath.Join(e.configDir, "Code", "User"),
+		filepath.Join(e.configDir, "Code - OSS", "User"),
+		filepath.Join(e.configDir, "VSCodium", "User"),
+	}
+	if e.goos == "linux" {
+		dirs = append(dirs,
+			filepath.Join(e.home, ".var", "app", "com.visualstudio.code", "config", "Code", "User"),
+			filepath.Join(e.home, ".var", "app", "com.vscodium.codium", "config", "VSCodium", "User"))
+	}
+	var out []string
+	for _, d := range dirs {
+		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
+			out = append(out, filepath.Join(d, "mcp.json"))
+		}
+	}
+	if len(out) == 0 {
+		out = []string{filepath.Join(dirs[0], "mcp.json")}
+	}
+	return out
+}
+
+// wslSnippet is the config for a Windows-side client launching the server
+// inside this WSL distro (env vars don't cross into WSL, so the profile is
+// a serve flag).
+func wslSnippet(client, distro, bin, profile string) (string, error) {
+	args := []string{"-d", distro, "--", bin}
+	if profile != "" {
+		args = append(args, "serve", "--profile", profile)
+	}
+	e := map[string]any{"command": "wsl.exe", "args": args}
+	if client == "vscode" {
+		e["type"] = "stdio"
+	}
+	out, err := json.MarshalIndent(map[string]any{serversKey(client): map[string]any{serverName: e}}, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode snippet: %w", err)
+	}
+	return string(out) + "\n", nil
 }
 
 // claudeTimeout bounds `claude mcp add`, which can hang on a first run.
@@ -316,33 +408,42 @@ func installClaudeCode(bin, profile string, stdout io.Writer) error {
 	}
 }
 
-func install(client, bin, profile, home string, stdout io.Writer) error {
+func install(client, bin, profile string, e installEnv, stdout io.Writer) error {
 	if client == "claude-code" {
 		return installClaudeCode(bin, profile, stdout)
 	}
-	path := clientConfigPath(client, home)
-	var (
-		res mergeResult
-		err error
-	)
-	if client == "codex" {
-		res, err = mergeFile(path, func(old []byte) ([]byte, error) { return mergeCodexTOML(old, codexBlock(bin, profile)) })
-	} else {
-		res, err = mergeFile(path, func(old []byte) ([]byte, error) {
-			return mergeJSONServer(old, serversKey(client), serverName, serverEntry(client, bin, profile))
-		})
-	}
-	if err != nil {
-		return err
-	}
-	if res.unchanged {
-		fmt.Fprintf(stdout, "already installed in %s (unchanged)\n", path)
+	if e.wslDistro != "" && (client == "claude-desktop" || client == "vscode") {
+		s, err := wslSnippet(client, e.wslDistro, bin, profile)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "not installed: this is WSL (%s), and the Windows %s never reads Linux-side config files.\nAdd this to its config on Windows (%s):\n%s", e.wslDistro, client, snippetHints[client], s)
 		return nil
 	}
-	if res.backup != "" {
-		fmt.Fprintf(stdout, "backup: %s\n", res.backup)
+	for _, path := range clientConfigPaths(client, e) {
+		var (
+			res mergeResult
+			err error
+		)
+		if client == "codex" {
+			res, err = mergeFile(path, func(old []byte) ([]byte, error) { return mergeCodexTOML(old, codexBlock(bin, profile)) })
+		} else {
+			res, err = mergeFile(path, func(old []byte) ([]byte, error) {
+				return mergeJSONServer(old, serversKey(client), serverName, serverEntry(client, bin, profile))
+			})
+		}
+		if err != nil {
+			return err
+		}
+		if res.unchanged {
+			fmt.Fprintf(stdout, "already installed in %s (unchanged)\n", path)
+			continue
+		}
+		if res.backup != "" {
+			fmt.Fprintf(stdout, "backup: %s\n", res.backup)
+		}
+		fmt.Fprintf(stdout, "installed %s into %s\n", serverName, path)
 	}
-	fmt.Fprintf(stdout, "installed %s into %s\n", serverName, path)
 	return nil
 }
 
@@ -406,7 +507,7 @@ func mergeFile(path string, merge func(old []byte) ([]byte, error)) (mergeResult
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(name, path)
+		err = state.Rename(name, path) // retries while Windows has the config open
 	}
 	if err != nil {
 		_ = os.Remove(name)

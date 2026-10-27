@@ -10,9 +10,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // Chrome for Testing is the pinned fallback when no Chromium-based browser is
@@ -35,7 +37,8 @@ func cftPlatform(goos, goarch string) string {
 		return "mac-x64"
 	case goos == "linux" && goarch == "amd64":
 		return "linux64"
-	case goos == "windows" && goarch == "amd64":
+	case goos == "windows" && (goarch == "amd64" || goarch == "arm64"):
+		// Windows 11 on ARM runs the x64 build under emulation.
 		return "win64"
 	}
 	return ""
@@ -107,6 +110,46 @@ func ensureCfT(ctx context.Context, binDir string, log io.Writer) (string, error
 	return exe, nil
 }
 
+// usernsSysctl is 1 by default on Ubuntu 23.10+: AppArmor then denies the
+// unprivileged user namespaces Chromium's sandbox needs to any binary without
+// an AppArmor profile, such as Chrome for Testing under our state dir.
+const usernsSysctl = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
+
+var readSysctl = func(p string) (string, error) {
+	b, err := os.ReadFile(p) //nolint:gosec // fixed /proc path
+	return string(b), err
+}
+
+// cftSandboxBlocked fails fast, before any download, where Chrome for Testing
+// would die with "No usable sandbox!". read reads a sysctl file. The sandbox
+// is never disabled to work around it.
+func cftSandboxBlocked(goos string, read func(string) (string, error)) error {
+	if goos != "linux" {
+		return nil
+	}
+	v, err := read(usernsSysctl)
+	if err != nil || strings.TrimSpace(v) != "1" {
+		return nil
+	}
+	return fmt.Errorf("%w: Chrome for Testing can't start its sandbox here (AppArmor restricts unprivileged user namespaces: kernel.apparmor_restrict_unprivileged_userns=1); install Google Chrome, Brave or Edge from their .deb packages (they ship AppArmor profiles), or set %s to such a browser", ErrNoBrowser, EnvBrowser)
+}
+
+// cftRuns starts `chrome --version` so a missing shared library shows up as
+// an install hint instead of a raw loader error at launch.
+func cftRuns(ctx context.Context, exe string) error {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, exe, "--version").CombinedOutput() //nolint:gosec // our own Chrome for Testing path
+	if err == nil {
+		return nil
+	}
+	msg := strings.TrimSpace(string(out))
+	if msg == "" {
+		msg = err.Error()
+	}
+	return fmt.Errorf("%w: Chrome for Testing can't run here: %s; install google-chrome-stable, or its libraries (Debian/Ubuntu: apt install libnss3 libgbm1 libatk-bridge2.0-0 libasound2 libxkbcommon0 libgtk-3-0), or set %s to an installed browser", ErrNoBrowser, msg, EnvBrowser)
+}
+
 // download streams url into w and returns the hex sha256 of what it wrote.
 func download(ctx context.Context, url string, w io.Writer) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -146,12 +189,14 @@ func verifyAndExtract(zipPath, gotSum, wantSum, dest string) error {
 		os.RemoveAll(tmp)
 		return fmt.Errorf("browser: extract Chrome for Testing: %w", err)
 	}
-	if err := os.Rename(tmp, dest); err != nil {
+	// Defender scanning the fresh exe/dll files can block the rename for a
+	// moment on Windows; retry rather than throw away a 200 MB extract.
+	if err := retryBusy(func() error { return os.Rename(tmp, dest) }); err != nil {
 		os.RemoveAll(tmp)
 		if _, serr := os.Stat(dest); serr == nil {
 			return nil // another run finished first
 		}
-		return fmt.Errorf("browser: %w", err)
+		return fmt.Errorf("browser: install Chrome for Testing: %w", err)
 	}
 	return nil
 }

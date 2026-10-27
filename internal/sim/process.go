@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -43,13 +44,25 @@ func portOpen(ctx context.Context, dial DialFunc, addr string) bool {
 	return true
 }
 
+// ErrNotReady means the simulator port did not become ready in time.
+var ErrNotReady = errors.New("simulator port not ready")
+
 // WaitReady polls addr until connects keep succeeding for stable, and alive
 // (nil = always) reports the process is running. It returns an error after
-// timeout or when the process dies.
-func WaitReady(ctx context.Context, clk Clock, dial DialFunc, addr string, alive func() bool, stable, timeout time.Duration) error {
+// timeout, and as soon as exited (nil = never) delivers the launched child's
+// exit, unless alive still finds a simulator (one that re-execs itself).
+func WaitReady(ctx context.Context, clk Clock, dial DialFunc, addr string, alive func() bool, exited <-chan error, stable, timeout time.Duration) error {
 	deadline := clk.Now().Add(timeout)
 	var upSince time.Time
 	for {
+		select {
+		case err := <-exited:
+			if alive == nil || !alive() {
+				return err
+			}
+			exited = nil
+		default:
+		}
 		now := clk.Now()
 		if portOpen(ctx, dial, addr) && (alive == nil || alive()) {
 			if upSince.IsZero() {
@@ -62,7 +75,7 @@ func WaitReady(ctx context.Context, clk Clock, dial DialFunc, addr string, alive
 			upSince = time.Time{}
 		}
 		if now.After(deadline) {
-			return fmt.Errorf("simulator port %s not ready after %s", addr, timeout)
+			return fmt.Errorf("%w: %s after %s", ErrNotReady, addr, timeout)
 		}
 		if err := clk.Sleep(ctx, 25*time.Millisecond); err != nil {
 			return err
@@ -195,11 +208,7 @@ func verifyListener(ctx context.Context, pid int) error {
 // listenerPIDs returns the pids listening on TCP port 1234.
 func listenerPIDs(ctx context.Context) ([]int, error) {
 	if runtime.GOOS == "windows" {
-		out, err := exec.CommandContext(ctx, "netstat", "-ano", "-p", "TCP").Output()
-		if err != nil {
-			return nil, err
-		}
-		return parseNetstatPIDs(string(out), "1234"), nil
+		return osListenerPIDs(1234)
 	}
 	out, err := exec.CommandContext(ctx, "lsof", "-nP", "-iTCP:1234", "-sTCP:LISTEN", "-Fp").Output()
 	var ee *exec.ExitError
@@ -255,21 +264,6 @@ func parseSSPIDs(out string) []int {
 	return pids
 }
 
-// parseNetstatPIDs reads `netstat -ano` output for LISTENING sockets on port.
-func parseNetstatPIDs(out, port string) []int {
-	var pids []int
-	for _, line := range strings.Split(out, "\n") {
-		f := strings.Fields(line)
-		if len(f) < 5 || !strings.EqualFold(f[0], "TCP") || f[3] != "LISTENING" || !strings.HasSuffix(f[1], ":"+port) {
-			continue
-		}
-		if pid, err := strconv.Atoi(f[4]); err == nil {
-			pids = append(pids, pid)
-		}
-	}
-	return pids
-}
-
 // executable returns the binary path of pid (best effort).
 func executable(ctx context.Context, pid int) string {
 	switch runtime.GOOS {
@@ -277,8 +271,7 @@ func executable(ctx context.Context, pid int) string {
 		p, _ := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
 		return p
 	case "windows":
-		out, _ := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", fmt.Sprintf("(Get-Process -Id %d).Path", pid)).Output() //nolint:gosec // G204: fixed program; only an integer pid is formatted in
-		return strings.TrimSpace(string(out))
+		return osExecutable(pid)
 	}
 	out, _ := exec.CommandContext(ctx, "ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output() //nolint:gosec // G204: fixed program; integer pid argument
 	return strings.TrimSpace(string(out))
@@ -327,10 +320,39 @@ func SameSDK(a, b string) bool {
 	return clean(a) == clean(b)
 }
 
+// ErrNoDisplay means a Linux simulator could not open a window.
+var ErrNoDisplay = errors.New("no graphical display: the Connect IQ simulator is a GUI app and neither DISPLAY nor WAYLAND_DISPLAY is set")
+
+// ErrSimulatorExited means the launched simulator exited before it listened.
+var ErrSimulatorExited = errors.New("simulator exited before opening its port")
+
+// launcher holds Start's process and network hooks; tests replace them.
+type launcher struct {
+	status  func(context.Context) (Status, error)
+	launch  func(context.Context, ciqsdk.SDK) (<-chan error, error)
+	alive   func(context.Context) bool
+	verify  func(context.Context, int) error
+	dial    DialFunc // nil = Dial
+	timeout time.Duration
+}
+
+var defaultLauncher = launcher{
+	status:  GetStatus,
+	launch:  launch,
+	alive:   func(ctx context.Context) bool { pid, _ := FindPID(ctx); return pid > 0 },
+	verify:  verifyListener,
+	timeout: 60 * time.Second,
+}
+
 // Start launches the simulator of sdk (no-op if one is ready) and waits for
-// the port. A simulator of another SDK is an [ErrSDKMismatch].
+// the port. A simulator of another SDK is an [ErrSDKMismatch]. A simulator
+// that is running but not listening yet is waited for, never launched twice.
 func Start(ctx context.Context, clk Clock, sdk ciqsdk.SDK) (st Status, already bool, err error) {
-	st, err = GetStatus(ctx)
+	return defaultLauncher.start(ctx, clk, sdk)
+}
+
+func (l launcher) start(ctx context.Context, clk Clock, sdk ciqsdk.SDK) (st Status, already bool, err error) {
+	st, err = l.status(ctx)
 	if err != nil {
 		return st, false, err
 	}
@@ -338,37 +360,108 @@ func Start(ctx context.Context, clk Clock, sdk ciqsdk.SDK) (st Status, already b
 		return st, false, fmt.Errorf("%w: running %s, requested %s (sim_stop first)", ErrSDKMismatch, st.SDKPath, sdk.Path)
 	}
 	if st.Ready {
-		if err := verifyListener(ctx, st.PID); err != nil {
+		if err := l.verify(ctx, st.PID); err != nil {
 			return st, false, err
 		}
 		return st, true, nil
 	}
-	bin := sdk.Bin()
-	switch runtime.GOOS {
-	case "darwin":
-		app := filepath.Join(bin, "ConnectIQ.app")
-		if out, err := exec.CommandContext(ctx, "open", "-a", app).CombinedOutput(); err != nil { //nolint:gosec // G204: fixed program; app is the resolved SDK's bundled ConnectIQ.app
-			return st, false, fmt.Errorf("open -a %s: %v: %s", app, err, strings.TrimSpace(string(out)))
-		}
-	default:
-		exe := filepath.Join(bin, processName())
-		cmd := exec.Command(exe) //nolint:gosec // G204: exe is the simulator binary inside the resolved SDK's bin dir
-		cmd.Dir = bin
-		ownGroup(cmd)
-		if err := cmd.Start(); err != nil {
-			return st, false, fmt.Errorf("start %s: %w", exe, err)
-		}
-		go func() { _ = cmd.Wait() }()
+	dial := l.dial
+	if dial == nil {
+		dial = Dial
 	}
-	alive := func() bool { pid, _ := FindPID(ctx); return pid > 0 }
-	if err := WaitReady(ctx, clk, Dial, Addr, alive, 100*time.Millisecond, 60*time.Second); err != nil {
-		return st, false, err
+	alive := func() bool { return l.alive(ctx) }
+	if st.Running {
+		// Still booting, or hung after an earlier timeout: a second binary
+		// would fight it for the port.
+		if err := WaitReady(ctx, clk, dial, Addr, alive, nil, 100*time.Millisecond, l.timeout); err != nil {
+			if errors.Is(err, ErrNotReady) {
+				return st, false, fmt.Errorf("simulator (pid %d) is running but not listening on %s after %s; call sim_stop, then retry", st.PID, Addr, l.timeout)
+			}
+			return st, false, err
+		}
+	} else {
+		exited, err := l.launch(ctx, sdk)
+		if err != nil {
+			return st, false, err
+		}
+		if err := WaitReady(ctx, clk, dial, Addr, alive, exited, 100*time.Millisecond, l.timeout); err != nil {
+			return st, false, err
+		}
 	}
-	st, err = GetStatus(ctx)
+	st, err = l.status(ctx)
 	if err != nil {
 		return st, false, err
 	}
-	return st, false, verifyListener(ctx, st.PID)
+	return st, false, l.verify(ctx, st.PID)
+}
+
+// launch starts the simulator of sdk. On macOS `open -a` hands the app to
+// launchd (nil channel). Elsewhere the child's output tail is kept and the
+// channel delivers an [ErrSimulatorExited] naming it once the child exits.
+func launch(ctx context.Context, sdk ciqsdk.SDK) (<-chan error, error) {
+	bin := sdk.Bin()
+	if runtime.GOOS == "darwin" {
+		app := filepath.Join(bin, "ConnectIQ.app")
+		if out, err := exec.CommandContext(ctx, "open", "-a", app).CombinedOutput(); err != nil { //nolint:gosec // G204: fixed program; app is the resolved SDK's bundled ConnectIQ.app
+			return nil, fmt.Errorf("open -a %s: %v: %s", app, err, strings.TrimSpace(string(out)))
+		}
+		return nil, nil
+	}
+	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+		return nil, ErrNoDisplay
+	}
+	return spawn(filepath.Join(bin, processName()), bin)
+}
+
+// spawn starts exe in dir, detached from the request, and reports its exit
+// with the last 4 KiB of its stdout and stderr.
+func spawn(exe, dir string) (<-chan error, error) {
+	cmd := exec.Command(exe) //nolint:gosec // G204: exe is the simulator binary inside the resolved SDK's bin dir
+	cmd.Dir = dir
+	ownGroup(cmd)
+	out := &tailBuffer{max: 4 << 10}
+	cmd.Stdout, cmd.Stderr = out, out
+	// A grandchild holding the output pipe must not hide the exit.
+	cmd.WaitDelay = time.Second
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start %s: %w", exe, err)
+	}
+	exited := make(chan error, 1)
+	go func() {
+		status := "exit status 0"
+		if err := cmd.Wait(); err != nil {
+			status = err.Error()
+		}
+		tail := strings.TrimSpace(out.String())
+		if tail == "" {
+			tail = "no output"
+		}
+		exited <- fmt.Errorf("%w (%s): %s", ErrSimulatorExited, status, tail)
+	}()
+	return exited, nil
+}
+
+// tailBuffer keeps the last max bytes written to it.
+type tailBuffer struct {
+	mu  sync.Mutex
+	max int
+	b   []byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.b = append(t.b, p...)
+	if over := len(t.b) - t.max; over > 0 {
+		t.b = append(t.b[:0], t.b[over:]...)
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(t.b)
 }
 
 // Stop kills monkeydo clients, then the simulator, and waits for the port

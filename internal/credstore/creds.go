@@ -25,8 +25,24 @@ const (
 
 	portalRenewWindow  = 3 * 24 * time.Hour
 	accessRefreshSlack = 15 * time.Minute
-	renewInterval      = 10 * time.Minute
 	loginHint          = `call the auth_login tool (it opens a browser window for the user to sign in), or run "garmin-mcp auth login" in a terminal`
+
+	// profileLockWait bounds the wait for the profile lock while the current
+	// credential still works; past it that credential is returned.
+	profileLockWait = time.Second
+
+	// Renewal stamps (see renewLocked).
+	stampPortal        = "portal"
+	stampConnect       = "connect"
+	renewInterval      = 10 * time.Minute
+	rateLimitBackoff   = 90 * time.Minute // a 1015 lasted over an hour live
+	notExtendedBackoff = 12 * time.Hour
+
+	outcomeStarted     = "started"
+	outcomeRenewed     = "renewed"
+	outcomeFailed      = "failed"
+	outcomeRateLimited = "rate_limited"
+	outcomeNotExtended = "not_extended"
 )
 
 // diClientIDs are tried in order when exchanging a service ticket.
@@ -52,6 +68,9 @@ var nativeHeaders = map[string]string{
 var (
 	errTokenRejected = errors.New("garmin rejected the token")
 	errNoRenewal     = errors.New("silent renewal unavailable")
+	// errSealNotExtended: a portal renewal returned a seal that expires no
+	// later than the stored one; the stored session is kept.
+	errSealNotExtended = fmt.Errorf("%w: the renewed developer-portal session expires no later than the current one", errNoRenewal)
 )
 
 func authRequired(what string, cause error) error {
@@ -66,6 +85,50 @@ func authRequired(what string, cause error) error {
 // same limit, so the error says to wait rather than to call auth_login.
 func renewRateLimited(what string, err error) error {
 	return fmt.Errorf("%s and silent renewal was refused: %w", what, err)
+}
+
+// rateLimitedError is a renewal refused by (or held back because of) a
+// Cloudflare 1015. It wraps browser.ErrRateLimited and names when to retry.
+type rateLimitedError struct{ until time.Time }
+
+func (e *rateLimitedError) Error() string {
+	return "Garmin is rate-limiting sign-ins (Cloudflare 1015); wait until " + e.until.Local().Format("15:04") +
+		", do not call auth_login (a new sign-in hits the same limit)"
+}
+
+func (e *rateLimitedError) Unwrap() error { return browser.ErrRateLimited }
+
+// lockProfile takes the profile lock. When the caller still holds a usable
+// credential (live), it waits at most profileLockWait and reports busy
+// instead of an error, so the caller can return that credential while
+// another process holds the lock (LC-3).
+func (s *Store) lockProfile(ctx context.Context, live bool) (unlock func(), busy bool, err error) {
+	lctx := ctx
+	if live {
+		var cancel context.CancelFunc
+		lctx, cancel = context.WithTimeout(ctx, profileLockWait)
+		defer cancel()
+	}
+	unlock, err = lockPath(lctx, s.lockFile())
+	if err != nil {
+		if live && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			return nil, true, nil
+		}
+		return nil, false, fmt.Errorf("lock credentials: %w", err)
+	}
+	return unlock, false, nil
+}
+
+// tryLoginLock takes the browser sign-in lock without waiting; busy means an
+// interactive sign-in holds it.
+func (s *Store) tryLoginLock() (unlock func(), busy bool, err error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // lockPath tries once before it looks at ctx
+	unlock, err = lockPath(ctx, s.loginLockFile())
+	if errors.Is(err, context.Canceled) {
+		return nil, true, nil
+	}
+	return unlock, false, err
 }
 
 // PortalCookies returns a Cookie header for apps.garmin.com, renewing it
@@ -87,21 +150,26 @@ func (s *Store) PortalCookies(ctx context.Context) (string, error) {
 		}
 		return "", authRequired("GARMIN_MCP_PORTAL_COOKIES holds an expired session", nil)
 	}
-	unlock, err := lockPath(ctx, s.lockFile())
-	if err != nil {
-		return "", fmt.Errorf("lock credentials: %w", err)
-	}
-	defer unlock()
-	if b, _, _, err = s.view(); err != nil { // another process may have renewed
-		return "", err
-	}
-	if h, ok := s.portalUsable(b.Portal); ok {
-		return h, nil
-	}
-	rerr := s.renewLocked(ctx, true, false, false)
-	if rerr == nil {
-		if b, _, _, err = s.view(); err == nil && b.Portal != nil {
-			return b.Portal.Cookies, nil
+	rerr := fmt.Errorf("%w: auto_renew is off", errNoRenewal)
+	if s.autoRenew { // auto_renew off: nothing to decide under the lock
+		unlock, busy, err := s.lockProfile(ctx, !s.portalDead(b.Portal))
+		if err != nil {
+			return "", err
+		}
+		if busy {
+			return b.Portal.Cookies, nil // still valid; another process is busy with it
+		}
+		defer unlock()
+		if b, _, _, err = s.view(); err != nil { // another process may have renewed
+			return "", err
+		}
+		if h, ok := s.portalUsable(b.Portal); ok {
+			return h, nil
+		}
+		if rerr = s.renewLocked(ctx, true, false, false); rerr == nil {
+			if b, _, _, err = s.view(); err == nil && b.Portal != nil {
+				return b.Portal.Cookies, nil
+			}
 		}
 	}
 	if b.Portal != nil && !s.portalDead(b.Portal) {
@@ -184,12 +252,18 @@ func (s *Store) ConnectToken(ctx context.Context) (string, error) {
 	if tok, ok := s.accessUsable(b.Connect); ok {
 		return tok, nil
 	}
-	unlock, err := lockPath(ctx, s.lockFile())
+	live := b.Connect.AccessToken != "" && time.Unix(b.Connect.AccessExpiresAt, 0).After(s.now())
+	unlock, busy, err := s.lockProfile(ctx, live)
 	if err != nil {
-		return "", fmt.Errorf("lock credentials: %w", err)
+		return "", err
+	}
+	if busy {
+		return b.Connect.AccessToken, nil // not expired yet; another process is busy with it
 	}
 	defer unlock()
-	if b, _, _, err = s.view(); err != nil { // another process may have refreshed
+	s.retryPendingConnect()
+	var cs string
+	if b, _, cs, err = s.view(); err != nil { // another process may have refreshed
 		return "", err
 	}
 	if b.Connect == nil { // signed out meanwhile
@@ -203,15 +277,19 @@ func (s *Store) ConnectToken(ctx context.Context) (string, error) {
 		(c.RefreshExpiresAt == 0 || time.Unix(c.RefreshExpiresAt, 0).After(s.now())) {
 		nc, err := s.diRefresh(ctx, c)
 		if err == nil {
-			if err := s.saveConnect(nc); err != nil {
-				return "", err
-			}
+			s.keepConnect(nc)
 			return nc.AccessToken, nil
 		}
 		if !errors.Is(err, errTokenRejected) {
 			return "", err // transient: keep the refresh token
 		}
 		cause = err
+	}
+	if cs == srcEnv { // never mint a token for whichever account the browser profile holds
+		if cause == nil {
+			cause = errors.New("refresh token expired")
+		}
+		return "", fmt.Errorf("%w: GARMIN_MCP_CONNECT_REFRESH_TOKEN was rejected (%v); put a fresh refresh token in it, or unset it and have a human run \"garmin-mcp auth login --connect\"", auth.ErrAuthRequired, cause)
 	}
 	rerr := s.renewLocked(ctx, false, true, false)
 	if rerr == nil {
@@ -223,6 +301,29 @@ func (s *Store) ConnectToken(ctx context.Context) (string, error) {
 		return "", renewRateLimited("Garmin Connect sign-in expired", rerr)
 	}
 	return "", authRequired("Garmin Connect sign-in expired", cause)
+}
+
+// keepConnect saves a refreshed Connect credential. When the save fails the
+// credential stays in memory (view prefers it), so a rotated refresh token is
+// not lost; the next locked ConnectToken retries the save (LC-6). Callers
+// hold the profile lock.
+func (s *Store) keepConnect(c *connectCred) {
+	if err := s.saveConnect(c); err != nil {
+		s.mu.Lock()
+		s.pendingConnect = c
+		s.mu.Unlock()
+	}
+}
+
+// retryPendingConnect persists a credential keepConnect could not save. On
+// success saveConnect clears it. Callers hold the profile lock.
+func (s *Store) retryPendingConnect() {
+	s.mu.Lock()
+	c := s.pendingConnect
+	s.mu.Unlock()
+	if c != nil {
+		_ = s.saveConnect(c)
+	}
 }
 
 // errNoConnectConsent is returned when Connect was never explicitly enabled.
@@ -368,8 +469,48 @@ func (s *Store) displayName(ctx context.Context, token string) string {
 	return p.DisplayName
 }
 
+// renewStamp records the last silent renewal of one credential kind in
+// <profile>.renew-<kind>: when, how it ended and until when the next silent
+// attempt is held back.
+type renewStamp struct {
+	At      time.Time `json:"at"`
+	Outcome string    `json:"outcome"`
+	Until   time.Time `json:"until"`
+}
+
+// stampBlocks reports the kind's stamp when it still holds renewal back. A
+// stamp from the future (the clock went back) or a damaged one never blocks,
+// and no stamp blocks longer than notExtendedBackoff.
+func (s *Store) stampBlocks(kind string) (renewStamp, bool) {
+	raw, err := os.ReadFile(s.stampFile(kind))
+	if err != nil {
+		return renewStamp{}, false
+	}
+	var st renewStamp
+	if json.Unmarshal(raw, &st) != nil || st.At.IsZero() {
+		return renewStamp{}, false
+	}
+	age := s.now().Sub(st.At)
+	window := min(st.Until.Sub(st.At), notExtendedBackoff)
+	return st, age >= 0 && age < window
+}
+
+// writeStamp records outcome for kind, holding renewal back for d.
+func (s *Store) writeStamp(kind, outcome string, d time.Duration) error {
+	now := s.now()
+	raw, err := json.Marshal(renewStamp{At: now.UTC(), Outcome: outcome, Until: now.Add(d).UTC()})
+	if err != nil {
+		return err
+	}
+	return writeFile0600(s.stampFile(kind), raw)
+}
+
 // renewLocked silently signs in again with the dedicated browser profile.
-// force skips the auto_renew switch and the 10-minute rate limit (`auth renew`).
+// force skips the auto_renew switch and the stamps (`auth renew`). Each
+// credential kind has its own stamp: a Cloudflare 1015 holds renewal back for
+// rateLimitBackoff (and every call meanwhile gets the rate-limited error), a
+// portal seal that did not get later keeps the old one and holds portal
+// renewal back for notExtendedBackoff, anything else for renewInterval.
 // Callers hold the profile lock.
 func (s *Store) renewLocked(ctx context.Context, wantPortal, wantConnect, force bool) error {
 	if !force && !s.autoRenew {
@@ -378,29 +519,85 @@ func (s *Store) renewLocked(ctx context.Context, wantPortal, wantConnect, force 
 	if !s.hasProfile(s.browserDir()) {
 		return fmt.Errorf("%w: no browser profile (sign in once with the auth_login tool or \"garmin-mcp auth login\")", errNoRenewal)
 	}
+	var kinds []string
+	if wantPortal {
+		kinds = append(kinds, stampPortal)
+	}
+	if wantConnect {
+		kinds = append(kinds, stampConnect)
+	}
 	if !force {
-		if fi, err := os.Stat(s.stampFile()); err == nil && s.now().Sub(fi.ModTime()) < renewInterval {
-			return fmt.Errorf("%w: renewal attempted less than 10 minutes ago", errNoRenewal)
+		for _, k := range kinds {
+			st, blocked := s.stampBlocks(k)
+			if !blocked {
+				continue
+			}
+			if st.Outcome == outcomeRateLimited {
+				return &rateLimitedError{until: st.Until}
+			}
+			return fmt.Errorf("%w: last %s renewal at %s (%s); the next attempt is after %s", errNoRenewal, k,
+				st.At.Local().Format("15:04"), st.Outcome, st.Until.Local().Format("15:04"))
 		}
 	}
-	if err := writeFile0600(s.stampFile(), []byte(s.now().UTC().Format(time.RFC3339))); err != nil {
-		return err
+	unlockLogin, busy, err := s.tryLoginLock()
+	if err != nil {
+		return fmt.Errorf("lock browser profile: %w", err)
 	}
-	_ = os.Chtimes(s.stampFile(), s.now(), s.now())
-	_, err := s.signIn(ctx, browser.Options{ProfileDir: s.browserDir(), Headless: true}, wantPortal, wantConnect)
+	if busy {
+		return fmt.Errorf("%w: an interactive sign-in is using the browser profile", errNoRenewal)
+	}
+	defer unlockLogin()
+	var oldSeal time.Time
+	if wantPortal {
+		if b, _, _, err := s.view(); err == nil && b.Portal != nil {
+			oldSeal, _ = portal.SealExpiry(b.Portal.Cookies)
+		}
+	}
+	for _, k := range kinds { // written first: a crash mid-renewal still backs off
+		if err := s.writeStamp(k, outcomeStarted, renewInterval); err != nil {
+			return err
+		}
+	}
+	out, err := s.signIn(ctx, browser.Options{ProfileDir: s.browserDir(), Headless: true}, wantPortal, wantConnect, oldSeal)
+	if err == nil {
+		err = s.commitSignIn(&out)
+	}
+	outcome, backoff := outcomeRenewed, renewInterval
+	switch {
+	case errors.Is(err, browser.ErrRateLimited):
+		outcome, backoff = outcomeRateLimited, rateLimitBackoff
+	case err != nil:
+		outcome = outcomeFailed
+	}
+	for _, k := range kinds {
+		_ = s.writeStamp(k, outcome, backoff)
+	}
+	if outcome == outcomeRateLimited {
+		return &rateLimitedError{until: s.now().Add(backoff)}
+	}
+	if err == nil && out.PortalNotExtended {
+		_ = s.writeStamp(stampPortal, outcomeNotExtended, notExtendedBackoff)
+		return errSealNotExtended
+	}
 	return err
 }
 
-// signInResult describes what a browser sign-in stored.
+// signInResult describes what a browser sign-in captured.
 type signInResult struct {
 	Portal  *portalCred
 	Connect *connectCred
 	Expires time.Time
+	// PortalNotExtended: the renewed seal expires no later than the stored
+	// one, so Portal is nil and the stored session is kept.
+	PortalNotExtended bool
+	// Warnings come from saves that replaced unreadable stored credentials.
+	Warnings []string
 }
 
-// signIn runs the browser, verifies what it captured and stores it only once
-// everything requested succeeded. Callers hold the profile lock.
-func (s *Store) signIn(ctx context.Context, o browser.Options, wantPortal, wantConnect bool) (signInResult, error) {
+// signIn runs the browser and verifies what it captured; commitSignIn stores
+// it. It saves nothing and needs no profile lock. With a non-zero oldSeal a
+// portal seal expiring no later than it is dropped (PortalNotExtended).
+func (s *Store) signIn(ctx context.Context, o browser.Options, wantPortal, wantConnect bool, oldSeal time.Time) (signInResult, error) {
 	var out signInResult
 	req := browser.Request{
 		Portal:  wantPortal,
@@ -423,8 +620,13 @@ func (s *Store) signIn(ctx context.Context, o browser.Options, wantPortal, wantC
 		if err != nil {
 			return out, err
 		}
-		out.Portal = &portalCred{Cookies: session, DeveloperID: dev.ID, DeveloperName: dev.Name, SavedAt: s.now().Unix()}
-		out.Expires, _ = portal.SealExpiry(session)
+		exp, expErr := portal.SealExpiry(session)
+		if !oldSeal.IsZero() && expErr == nil && !exp.After(oldSeal) {
+			out.PortalNotExtended = true
+		} else {
+			out.Portal = &portalCred{Cookies: session, DeveloperID: dev.ID, DeveloperName: dev.Name, SavedAt: s.now().Unix()}
+			out.Expires = exp
+		}
 	}
 	if wantConnect {
 		if res.ConnectTicket == "" {
@@ -440,17 +642,23 @@ func (s *Store) signIn(ctx context.Context, o browser.Options, wantPortal, wantC
 		}
 		out.Connect = c
 	}
+	return out, nil
+}
+
+// commitSignIn stores what signIn captured. Callers hold the profile lock.
+func (s *Store) commitSignIn(out *signInResult) error {
 	if out.Portal != nil {
 		if err := s.savePortal(out.Portal); err != nil {
-			return signInResult{}, err
+			return err
 		}
 	}
 	if out.Connect != nil {
 		if err := s.saveConnect(out.Connect); err != nil {
-			return signInResult{}, err
+			return err
 		}
 	}
-	return out, nil
+	out.Warnings = s.takeSaveWarnings()
+	return nil
 }
 
 // verifyPortal checks header's `session` cookie with the portal and returns
@@ -487,7 +695,7 @@ func (s *Store) Status(context.Context) auth.Status {
 	b, ps, cs, err := s.view()
 	renewable := s.hasProfile(s.browserDir())
 	if err != nil {
-		note := "unreadable: " + err.Error()
+		note := statusNote(err)
 		return auth.Status{Portal: auth.CredStatus{Note: note}, Connect: auth.CredStatus{Note: note}}
 	}
 	if b.Portal != nil && b.Portal.Cookies != "" {

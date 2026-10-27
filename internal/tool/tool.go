@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -36,10 +35,11 @@ type Meta struct {
 	// mode; the tool restricts itself (e.g. via ReadOnlyEnums) and receives
 	// no write capability.
 	AvailableReadOnly bool
-	// OS lists the GOOS values the tool works on; empty means all. Tools stay
-	// registered everywhere (so generated docs don't depend on the build
-	// host) but are only listed on a supported OS.
-	OS []string
+	// Platforms lists the GOOS values the tool works on; empty means all.
+	// Tools stay registered everywhere (so generated docs don't depend on the
+	// build host); the server hides them on other GOOS and answers a call
+	// with unavailable (see [Meta.SupportedOn], [PlatformLabel]).
+	Platforms []string
 	// Confirm is the gate mode: ConfirmByFlag (confirm:true after a preview);
 	// zero means no gate.
 	Confirm ConfirmMode
@@ -246,11 +246,38 @@ func (t Tool) DescriptionFor(allowWrites bool) string {
 }
 
 // ListedIn reports whether the tool is offered for the given profile mode.
+// The platform filter is the server's ([Meta.SupportedOn]).
 func (t Tool) ListedIn(p ProfileInfo) bool {
-	if len(t.meta.OS) > 0 && !slices.Contains(t.meta.OS, runtime.GOOS) {
-		return false
-	}
 	return t.meta.Class == Read || p.AllowWrites || t.meta.AvailableReadOnly
+}
+
+// AnyPlatform is a platform for which every tool is supported (generated
+// docs).
+const AnyPlatform = "*"
+
+// SupportedOn reports whether the tool works on goos (a GOOS value or
+// [AnyPlatform]).
+func (m Meta) SupportedOn(goos string) bool {
+	return len(m.Platforms) == 0 || goos == AnyPlatform || slices.Contains(m.Platforms, goos)
+}
+
+// PlatformLabel names a Platforms list for people: {"darwin"} is "macOS
+// only".
+func PlatformLabel(platforms []string) string {
+	names := make([]string, len(platforms))
+	for i, p := range platforms {
+		switch p {
+		case "darwin":
+			names[i] = "macOS"
+		case "linux":
+			names[i] = "Linux"
+		case "windows":
+			names[i] = "Windows"
+		default:
+			names[i] = p
+		}
+	}
+	return strings.Join(names, ", ") + " only"
 }
 
 // Call runs the tool with raw JSON arguments. It enforces the write guard,

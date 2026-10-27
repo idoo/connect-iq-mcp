@@ -171,20 +171,27 @@ func TestKeychainFallbackRules(t *testing.T) {
 	}
 }
 
-// X2: a keyring waiting on an invisible unlock prompt must not hang callers.
-func TestKeychainTimeoutFallsBack(t *testing.T) {
+// X2/LD-2: a keyring waiting on an invisible unlock prompt must not hang
+// callers, and must not downgrade to the plaintext file either.
+func TestKeychainTimeoutIsLocked(t *testing.T) {
 	k := useFakeKeyring(t)
 	keyringTimeout = 50 * time.Millisecond
 	release := make(chan struct{})
 	k.set(nil, release)
 	s := testStore(t, nil)
 	start := time.Now()
-	if err := s.writeStored(blob{Portal: &portalCred{Cookies: "session=S"}}); err != nil {
-		t.Fatal(err)
+	if err := s.writeStored(blob{Portal: &portalCred{Cookies: "session=S"}}); !errors.Is(err, errKeyringLocked) {
+		t.Fatalf("write = %v, want locked", err)
+	}
+	if _, ok, _ := s.readFile(); ok {
+		t.Fatal("credentials written to file while the keychain was locked")
 	}
 	// The stuck call keeps its slot: later calls fail fast, not after 5 s each.
-	if _, src, err := s.readStored(); err != nil || !strings.Contains(src, "still waiting") {
-		t.Fatalf("read = %q, %v", src, err)
+	if _, _, err := s.readStored(); !errors.Is(err, errKeyringLocked) || !strings.Contains(err.Error(), "still waiting") {
+		t.Fatalf("read = %v", err)
+	}
+	if st := s.Status(context.Background()); UnreadableState(st.Portal) != "locked" {
+		t.Fatalf("status note = %q", st.Portal.Note)
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Fatalf("took %v", d)

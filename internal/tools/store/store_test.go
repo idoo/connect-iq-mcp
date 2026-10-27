@@ -39,6 +39,10 @@ type fakePortal struct {
 	reviews429 bool
 	// noManifest drops manifestAppId from the first app's metadata.
 	noManifest bool
+	// published is the version last POSTed (shown as newAppVersion).
+	published string
+	// validManifest overrides the manifest id validate reports.
+	validManifest string
 }
 
 // day is local midnight of YYYY-MM-DD in epoch ms, as the portal sends dates.
@@ -76,6 +80,11 @@ func (f *fakePortal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		js(map[string]any{"appIqFileInfoResult": map[string]any{"manifestAppId": manifest2, "newAppVersion": "2.0.0"}})
 	case r.URL.Path == devBase+"/apps/"+appID+"/metadata":
 		info := map[string]any{"manifestAppId": manifest, "newAppVersion": "1.0.0", "compatibleDevices": []any{"fenix7", "fenix6"}}
+		f.mu.Lock()
+		if f.published != "" {
+			info["newAppVersion"] = f.published
+		}
+		f.mu.Unlock()
 		if f.noManifest {
 			delete(info, "manifestAppId")
 		}
@@ -91,12 +100,25 @@ func (f *fakePortal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	case r.URL.Path == "/api/ciq-developerservices/iqFiles/validate":
+		mid := strings.ReplaceAll(manifest, "-", "")
+		if f.validManifest != "" {
+			mid = f.validManifest
+		}
 		js(map[string]any{"tempFileId": "tmp-1", "iqFileInfoResult": map[string]any{
-			"manifestAppId": strings.ReplaceAll(manifest, "-", ""), "signatureCheckSuccessFul": f.signature,
+			"manifestAppId": mid, "signatureCheckSuccessFul": f.signature,
 			"compatibleDevices": []any{"fenix7", "fr965"},
 		}})
 	case r.URL.Path == devBase+"/apps/"+appID+"/version":
+		var body struct {
+			Version string `json:"appVersion"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.published = body.Version
+		f.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
+	case r.URL.Path == devBase+"/apps" && r.Method == http.MethodPost:
+		_, _ = w.Write([]byte(`"33333333-4444-5555-6666-777777777777"`))
 	case r.URL.Path == devBase+"/apps/"+appID && r.Method == http.MethodPut:
 		_, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		mr := multipart.NewReader(r.Body, params["boundary"])
@@ -209,9 +231,10 @@ func TestResolveByManifestAndTitle(t *testing.T) {
 	}
 }
 
+// writeIQ writes app.iq: the ZIP signature (checked by readFile) + data.
 func writeIQ(t *testing.T, k *tooltest.Kit, data string) {
 	t.Helper()
-	if err := k.Files.WriteFile("app.iq", []byte(data), 0o600); err != nil {
+	if err := k.Files.WriteFile("app.iq", []byte("PK\x03\x04"+data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

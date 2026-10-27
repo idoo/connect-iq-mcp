@@ -96,15 +96,21 @@ func checkPath(path string) error {
 	return nil
 }
 
-// RateLimitError is a portal 429, or a 503 carrying Retry-After.
+// RateLimitError is a portal 429, a 503 carrying Retry-After, or a
+// Cloudflare 1015 rate-limit page.
 type RateLimitError struct {
 	Status int
 	// RetryAfter is the server's Retry-After (0 when absent or unparsable).
 	RetryAfter time.Duration
+	// Cloudflare is set for a Cloudflare 1015 page.
+	Cloudflare bool
 }
 
 func (e *RateLimitError) Error() string {
 	s := fmt.Sprintf("portal HTTP %d: rate limited", e.Status)
+	if e.Cloudflare {
+		s = fmt.Sprintf("portal HTTP %d: Cloudflare rate limit (error 1015)", e.Status)
+	}
 	if e.RetryAfter > 0 {
 		s += fmt.Sprintf(" (Retry-After %ds)", int(e.RetryAfter/time.Second))
 	}
@@ -126,10 +132,55 @@ func retryAfter(v string, now time.Time) time.Duration {
 	return 0
 }
 
+// ErrBlocked is a Cloudflare block page (WAF rule, bot check, IP ban) in
+// front of the portal. The session is fine; signing in again does not help.
+var ErrBlocked = errors.New("blocked by Cloudflare in front of the developer portal (the session itself is fine; signing in again will not help); wait a few minutes and retry, or open apps.garmin.com in a browser to clear the check")
+
+// ErrNoResponse marks a request that was sent (or may have been) but got no
+// HTTP status back: timeout, connection reset, cancelled context. For a
+// write the outcome is unknown.
+var ErrNoResponse = errors.New("no response from the developer portal")
+
+// developersPath is the session probe: a 403 here means "not signed in".
+const developersPath = devServices + "/developers"
+
+// cloudflareCode returns the Cloudflare "error code: 10xx" of a block page,
+// "challenge" for a bot check or Attention Required page, or "" when the
+// response is not a Cloudflare page.
+func cloudflareCode(res *http.Response, body []byte) string {
+	if res.Header.Get("Cf-Ray") == "" && !strings.EqualFold(res.Header.Get("Server"), "cloudflare") {
+		return ""
+	}
+	if res.Header.Get("Cf-Mitigated") != "" {
+		return "challenge"
+	}
+	if m := cfCodeRE.FindSubmatch(body); m != nil {
+		return string(m[1])
+	}
+	if bytes.Contains(body, []byte("Attention Required")) {
+		return "challenge"
+	}
+	return ""
+}
+
+var cfCodeRE = regexp.MustCompile(`(?i)error code:?\s*(10\d\d)\b`)
+
 func statusError(res *http.Response, body []byte) error {
 	c := res.StatusCode
-	if (c >= 300 && c < 400) || c == http.StatusUnauthorized || c == http.StatusForbidden {
+	if c >= 400 {
+		switch cloudflareCode(res, body) {
+		case "":
+		case "1015":
+			return &RateLimitError{Status: c, RetryAfter: retryAfter(res.Header.Get("Retry-After"), time.Now()), Cloudflare: true}
+		default:
+			return fmt.Errorf("%w (HTTP %d)", ErrBlocked, c)
+		}
+	}
+	if (c >= 300 && c < 400) || c == http.StatusUnauthorized || (c == http.StatusForbidden && res.Request != nil && strings.HasSuffix(res.Request.URL.Path, developersPath)) {
 		return fmt.Errorf("%w: the developer portal answered HTTP %d (not signed in or session expired)", auth.ErrAuthRequired, c)
+	}
+	if c == http.StatusForbidden {
+		return &APIError{Status: c, Code: "forbidden", Message: "forbidden for this endpoint: the session is valid but the portal refused this action (no permission for this app or operation)"}
 	}
 	if ra := res.Header.Get("Retry-After"); c == http.StatusTooManyRequests || (c == http.StatusServiceUnavailable && ra != "") {
 		return &RateLimitError{Status: c, RetryAfter: retryAfter(ra, time.Now())}
@@ -186,8 +237,19 @@ type Client struct {
 	// (success or not), so callers can drop cached portal state.
 	OnWrite func()
 
-	mu    sync.Mutex
-	devID string
+	mu       sync.Mutex
+	devID    string
+	warnings []string
+}
+
+// Warnings returns and clears the non-fatal problems seen by writes (a
+// rotated cookie that could not be saved after a successful write).
+func (c *Client) Warnings() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	w := c.warnings
+	c.warnings = nil
+	return w
 }
 
 // New returns a client over hc (the write-guarded env.HTTP) and creds.
@@ -197,7 +259,10 @@ func New(hc *http.Client, creds auth.Store) *Client {
 
 // File is an in-memory upload part.
 type File struct {
+	// Name is the multipart file name (the base name).
 	Name string
+	// Path is the root-relative path shown in approvals ("" when unknown).
+	Path string
 	Data []byte
 }
 
@@ -244,12 +309,16 @@ func (c *Client) do(ctx context.Context, r request, out any) error {
 	}
 	res, err := c.hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("portal %s %s: %w", r.method, r.path, err)
+		return fmt.Errorf("portal %s %s: %w: %w", r.method, r.path, ErrNoResponse, err)
 	}
 	defer res.Body.Close()
+	var saveErr error
 	if sc := res.Header.Values("Set-Cookie"); len(sc) > 0 && MergeSetCookie(cookie, sc) != cookie {
-		if err := c.creds.SavePortalCookies(ctx, cookie, sc); err != nil {
-			return fmt.Errorf("saving rotated portal cookies: %w", err)
+		saveErr = c.creds.SavePortalCookies(ctx, cookie, sc)
+		// A GET may fail on it (nothing changed upstream); a write has
+		// already happened, so failing it would invite a duplicate retry.
+		if saveErr != nil && r.method == http.MethodGet {
+			return fmt.Errorf("saving rotated portal cookies: %w", saveErr)
 		}
 	}
 	data, err := io.ReadAll(io.LimitReader(res.Body, maxBody))
@@ -258,6 +327,11 @@ func (c *Client) do(ctx context.Context, r request, out any) error {
 	}
 	if err := statusError(res, data); err != nil {
 		return err
+	}
+	if saveErr != nil {
+		c.mu.Lock()
+		c.warnings = append(c.warnings, "the portal rotated its session cookie but saving it failed ("+saveErr.Error()+"); the write itself went through, do not repeat it. If later calls fail with auth_required, call auth_login")
+		c.mu.Unlock()
 	}
 	switch o := out.(type) {
 	case nil:
