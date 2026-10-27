@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
+	"github.com/idoo/connect-iq-mcp/internal/tool/tooltest"
 )
 
 // HA-8: names other users set on a public activity reach the agent untrusted.

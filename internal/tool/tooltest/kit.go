@@ -18,9 +18,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/portal"
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/portal"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 // Kit bundles a ready [tool.Env] with handles to its fakes.

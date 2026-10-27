@@ -1,5 +1,5 @@
 // Package login signs a credential profile in through its dedicated Chromium
-// profile: the interactive window behind `garmin-mcp auth login` and the
+// profile: the interactive window behind `connect-iq-mcp auth login` and the
 // auth_login tool, and (as credstore's [credstore.Browser]) the headless
 // window of silent renewal.
 package login
@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/browser"
-	"github.com/idoo/garmin-mcp/internal/credstore"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/browser"
+	"github.com/idoo/connect-iq-mcp/internal/credstore"
 )
 
 // Chromium runs credstore sign-ins in the dedicated Chromium profile.
@@ -69,7 +69,7 @@ func Open(ctx context.Context, profile string) (*Store, error) {
 
 // Login signs in through the dedicated browser profile (interactive window)
 // and stores what it captured. It is the one code path behind both
-// `garmin-mcp auth login` and the auth_login tool. On any error nothing is saved.
+// `connect-iq-mcp auth login` and the auth_login tool. On any error nothing is saved.
 func (s *Store) Login(ctx context.Context, o auth.LoginOptions) (auth.LoginResult, error) {
 	return login(ctx, s.Store, o)
 }
@@ -136,7 +136,7 @@ func (timeoutError) Unwrap() error { return ErrTimedOut }
 func loginError(ctx context.Context, err error, timeout time.Duration) error {
 	switch {
 	case errors.Is(err, browser.ErrNoBrowser):
-		return fmt.Errorf("%w: set %s to a Chrome, Edge, Brave or Chromium executable; when none is installed garmin-mcp downloads a pinned Chrome for Testing on first use", err, browser.EnvBrowser)
+		return fmt.Errorf("%w: set %s to a Chrome, Edge, Brave or Chromium executable; when none is installed connect-iq-mcp downloads a pinned Chrome for Testing on first use", err, browser.EnvBrowser)
 	case errors.Is(err, auth.ErrRateLimited):
 		return fmt.Errorf("%w; nothing was saved", err)
 	case ctx.Err() != nil:

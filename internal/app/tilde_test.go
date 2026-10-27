@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 // J7: "~/k.der" is refused with a hint, never resolved as a "~" folder

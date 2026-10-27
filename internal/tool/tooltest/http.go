@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 // Delete sends DELETE https://example.test+path through env.HTTP, the way a

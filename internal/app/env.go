@@ -9,10 +9,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/auth/login"
-	"github.com/idoo/garmin-mcp/internal/config"
-	"github.com/idoo/garmin-mcp/internal/state"
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/auth/login"
+	"github.com/idoo/connect-iq-mcp/internal/config"
+	"github.com/idoo/connect-iq-mcp/internal/state"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 // httpTimeout bounds one outbound request.
@@ -38,7 +38,7 @@ func newEnv(ctx context.Context, r *config.Resolved, version, root string) (*too
 	}
 	env := &tool.Env{
 		HTTP: &http.Client{
-			Transport: userAgent{base: tool.GuardWrites(nil), ua: "garmin-mcp/" + version},
+			Transport: userAgent{base: tool.GuardWrites(nil), ua: "connect-iq-mcp/" + version},
 			Timeout:   httpTimeout,
 		},
 		State:     store,

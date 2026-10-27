@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 // ErrOutsideRoot is returned for paths that resolve outside the confined root,
@@ -37,7 +37,7 @@ func NewFiles(root string) (*Files, error) {
 	if err != nil {
 		return nil, fmt.Errorf("files: root %q: %w", root, err)
 	}
-	fi, err := os.Stat(resolved) //nolint:gosec // root is chosen by the user (--root/GARMIN_MCP_ROOT, client roots or cwd); confinement starts here
+	fi, err := os.Stat(resolved) //nolint:gosec // root is chosen by the user (--root/CIQ_MCP_ROOT, client roots or cwd); confinement starts here
 	if err != nil {
 		return nil, fmt.Errorf("files: root %q: %w", root, err)
 	}
@@ -80,7 +80,7 @@ func (f *Files) Resolve(p string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("files: empty path")
 	}
-	// The shell expands ~, garmin-mcp does not: "~/k.der" would otherwise
+	// The shell expands ~, connect-iq-mcp does not: "~/k.der" would otherwise
 	// name a "~" folder inside the root. Home is outside the root anyway.
 	if strings.HasPrefix(p, "~") {
 		return "", fmt.Errorf("files: %q: %w; ~ is not expanded; use a path relative to the project or an absolute path inside the root", p, ErrOutsideRoot)

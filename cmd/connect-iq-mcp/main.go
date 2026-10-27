@@ -1,4 +1,4 @@
-// Command garmin-mcp is the Garmin Connect IQ MCP server.
+// Command connect-iq-mcp is the Garmin Connect IQ MCP server.
 //
 // With no arguments it serves MCP over stdio. Subcommands manage credentials
 // profiles, diagnose the setup and configure MCP clients; they never run the
@@ -15,24 +15,24 @@ import (
 	"syscall"
 )
 
-const usage = `garmin-mcp: MCP server for Garmin Connect IQ developers
+const usage = `connect-iq-mcp: MCP server for Garmin Connect IQ developers
 
 Usage:
-  garmin-mcp [serve] [flags]          serve MCP over stdio (or --http ADDR); garmin-mcp serve --help lists flags
-  garmin-mcp auth <subcommand>        manage Connect IQ portal and Garmin Connect credentials
-  garmin-mcp doctor [--profile NAME] [--probe]  check config, credentials, SDK, Java and browser
-  garmin-mcp config snippet <client>  print client config (claude-code, claude-desktop, codex, cursor, vscode, windsurf)
-  garmin-mcp config install <client>  write it into the client's config (with backup)
-  garmin-mcp version
+  connect-iq-mcp [serve] [flags]          serve MCP over stdio (or --http ADDR); connect-iq-mcp serve --help lists flags
+  connect-iq-mcp auth <subcommand>        manage Connect IQ portal and Garmin Connect credentials
+  connect-iq-mcp doctor [--profile NAME] [--probe]  check config, credentials, SDK, Java and browser
+  connect-iq-mcp config snippet <client>  print client config (claude-code, claude-desktop, codex, cursor, vscode, windsurf)
+  connect-iq-mcp config install <client>  write it into the client's config (with backup)
+  connect-iq-mcp version
 
 Any subcommand with --help prints its usage and does nothing else.
 `
 
-// subUsage is the usage text printed for `garmin-mcp <cmd> --help`.
+// subUsage is the usage text printed for `connect-iq-mcp <cmd> --help`.
 var subUsage = map[string]string{
 	"config":  configUsage,
-	"doctor":  "usage: garmin-mcp doctor [--profile NAME] [--probe]\n  checks the config, credentials, Connect IQ SDK, Java and sign-in browser\n  --probe also asks the developer portal who is signed in (one network call)",
-	"version": "usage: garmin-mcp version",
+	"doctor":  "usage: connect-iq-mcp doctor [--profile NAME] [--probe]\n  checks the config, credentials, Connect IQ SDK, Java and sign-in browser\n  --probe also asks the developer portal who is signed in (one network call)",
+	"version": "usage: connect-iq-mcp version",
 }
 
 // usageError is a command-line misuse; it exits with status 2.
@@ -59,10 +59,10 @@ func main() {
 	case errors.As(err, &ee):
 		os.Exit(int(ee))
 	case errors.As(err, &ue):
-		fmt.Fprintln(os.Stderr, "garmin-mcp:", err)
+		fmt.Fprintln(os.Stderr, "connect-iq-mcp:", err)
 		os.Exit(2)
 	default:
-		fmt.Fprintln(os.Stderr, "garmin-mcp:", err)
+		fmt.Fprintln(os.Stderr, "connect-iq-mcp:", err)
 		os.Exit(1)
 	}
 }
@@ -99,7 +99,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "config":
 		return runConfig(rest, stdout, stderr)
 	case "version", "--version":
-		_, err := fmt.Fprintln(stdout, "garmin-mcp", buildVersion())
+		_, err := fmt.Fprintln(stdout, "connect-iq-mcp", buildVersion())
 		return err
 	default:
 		return usageErr(fmt.Sprintf("unknown command %q\n\n%s", cmd, usage))

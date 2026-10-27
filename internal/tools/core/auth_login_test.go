@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/tool"
-	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool/tooltest"
 )
 
 // loginCreds is a fake store whose Login is scripted per test.
@@ -178,10 +178,10 @@ func TestAuthLoginSuccessAndFailure(t *testing.T) {
 func TestAuthLoginRefusals(t *testing.T) {
 	k := tooltest.New(t)
 	lc := &loginCreds{FakeCredentials: k.Creds, login: func(auth.LoginOptions) (auth.LoginResult, error) {
-		return auth.LoginResult{}, errors.New("developer-portal cookies come from GARMIN_MCP_PORTAL_COOKIES; unset it to sign in with the browser")
+		return auth.LoginResult{}, errors.New("developer-portal cookies come from CIQ_MCP_PORTAL_COOKIES; unset it to sign in with the browser")
 	}}
 	k.Env.Credentials = lc
-	setEnv(t, map[string]string{"GARMIN_MCP_CI": "1"})
+	setEnv(t, map[string]string{"CIQ_MCP_CI": "1"})
 	tooltest.MustFail(t, tooltest.Call(t, authLoginTool(t), k.Env, `{}`), "login_unavailable")
 	if lc.calls != 0 {
 		t.Fatalf("CI called Login %d times", lc.calls)
@@ -189,7 +189,7 @@ func TestAuthLoginRefusals(t *testing.T) {
 
 	setEnv(t, nil)
 	body := tooltest.MustFail(t, tooltest.Call(t, authLoginTool(t), k.Env, `{}`), "login_failed")
-	if !strings.Contains(body.Message, "GARMIN_MCP_PORTAL_COOKIES") {
+	if !strings.Contains(body.Message, "CIQ_MCP_PORTAL_COOKIES") {
 		t.Fatalf("body = %+v", body)
 	}
 	tooltest.MustFail(t, tooltest.Call(t, authLoginTool(t), k.Env, `{"timeout_minutes":16}`), "invalid_arguments")
@@ -206,7 +206,7 @@ func TestAuthLoginConnectNeedsHuman(t *testing.T) {
 	k.Env.Credentials = lc
 	k.Env.Elicit = func(context.Context, string) (bool, error) { return false, tool.ErrElicitationUnavailable }
 	body := tooltest.MustFail(t, tooltest.Call(t, authLoginTool(t), k.Env, `{"connect":true}`), tool.ErrHumanRequired.Code)
-	if !strings.Contains(body.Hint, "garmin-mcp auth login --connect") {
+	if !strings.Contains(body.Hint, "connect-iq-mcp auth login --connect") {
 		t.Fatalf("body = %+v", body)
 	}
 	k.Elicit(false)

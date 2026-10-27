@@ -7,8 +7,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/idoo/garmin-mcp/internal/config"
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/config"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 type toolsetsIn struct {
@@ -161,14 +161,14 @@ func clientName(ctx context.Context) string {
 	return ""
 }
 
-// writesInstructions returns copy-paste steps to restart garmin-mcp with writes on
+// writesInstructions returns copy-paste steps to restart connect-iq-mcp with writes on
 // for the detected MCP client. They only run for clients that cannot elicit,
 // so they also name allow_no_elicit: without it every publish, listing edit and
 // review reply fails with human_approval_required and needs a second restart.
 func writesInstructions(client, profile string) string {
 	cfgPath, err := config.DefaultPath(os.Getenv)
 	if err != nil {
-		cfgPath = "the garmin-mcp config.toml"
+		cfgPath = "the connect-iq-mcp config.toml"
 	}
 	if profile == "" {
 		profile = config.DefaultProfileName
@@ -180,27 +180,27 @@ func writesInstructions(client, profile string) string {
 	c := strings.ToLower(client)
 	switch {
 	case strings.Contains(c, "claude-code") || strings.Contains(c, "claude code"):
-		return "Ask the user to run: claude mcp remove garmin-mcp -s user && claude mcp add garmin-mcp -s user -e GARMIN_MCP_ALLOW_WRITES=1 <existing -e flags> -- garmin-mcp." + tail
+		return "Ask the user to run: claude mcp remove connect-iq-mcp -s user && claude mcp add connect-iq-mcp -s user -e CIQ_MCP_ALLOW_WRITES=1 <existing -e flags> -- connect-iq-mcp." + tail
 	case strings.Contains(c, "claude"):
-		return `Ask the user to add "GARMIN_MCP_ALLOW_WRITES": "1" to mcpServers.garmin-mcp.env in claude_desktop_config.json.` + tail
+		return `Ask the user to add "CIQ_MCP_ALLOW_WRITES": "1" to mcpServers.connect-iq-mcp.env in claude_desktop_config.json.` + tail
 	case strings.Contains(c, "cursor"):
-		return `Ask the user to add "GARMIN_MCP_ALLOW_WRITES": "1" to mcpServers.garmin-mcp.env in ~/.cursor/mcp.json.` + tail
+		return `Ask the user to add "CIQ_MCP_ALLOW_WRITES": "1" to mcpServers.connect-iq-mcp.env in ~/.cursor/mcp.json.` + tail
 	case strings.Contains(c, "codex"):
-		return `Ask the user to add GARMIN_MCP_ALLOW_WRITES = "1" to env of [mcp_servers.garmin-mcp] in ~/.codex/config.toml.` + tail
+		return `Ask the user to add CIQ_MCP_ALLOW_WRITES = "1" to env of [mcp_servers.connect-iq-mcp] in ~/.codex/config.toml.` + tail
 	case strings.Contains(c, "visual studio code") || strings.Contains(c, "vscode"):
 		where := `the user mcp.json (run "MCP: Open User Configuration")`
 		if paths := vscodeUserConfigs(); len(paths) > 0 {
-			where = `the user mcp.json that "garmin-mcp config install vscode" writes, ` + strings.Join(paths, " or ") + ` (run "MCP: Open User Configuration")`
+			where = `the user mcp.json that "connect-iq-mcp config install vscode" writes, ` + strings.Join(paths, " or ") + ` (run "MCP: Open User Configuration")`
 		}
-		return `Ask the user to add "GARMIN_MCP_ALLOW_WRITES": "1" to servers.garmin-mcp.env in ` + where + `.` + tail
+		return `Ask the user to add "CIQ_MCP_ALLOW_WRITES": "1" to servers.connect-iq-mcp.env in ` + where + `.` + tail
 	case strings.Contains(c, "windsurf"):
-		return `Ask the user to add "GARMIN_MCP_ALLOW_WRITES": "1" to mcpServers.garmin-mcp.env in ~/.codeium/windsurf/mcp_config.json.` + tail
+		return `Ask the user to add "CIQ_MCP_ALLOW_WRITES": "1" to mcpServers.connect-iq-mcp.env in ~/.codeium/windsurf/mcp_config.json.` + tail
 	default:
-		return "Ask the user to set the environment variable GARMIN_MCP_ALLOW_WRITES=1 in this client's garmin-mcp server config (or start garmin-mcp with --allow-writes)." + tail
+		return "Ask the user to set the environment variable CIQ_MCP_ALLOW_WRITES=1 in this client's connect-iq-mcp server config (or start connect-iq-mcp with --allow-writes)." + tail
 	}
 }
 
-// vscodeUserConfigs lists the VS Code user mcp.json files `garmin-mcp config
+// vscodeUserConfigs lists the VS Code user mcp.json files `connect-iq-mcp config
 // install vscode` writes on this machine (nil when the dirs are unknown);
 // tests replace it.
 var vscodeUserConfigs = func() []string {

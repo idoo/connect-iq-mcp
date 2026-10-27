@@ -1,10 +1,10 @@
-/garmin-mcp
+/connect-iq-mcp
 /bin/
 /dist/
 *.test
 *.out
 coverage.*
 *.p8
-.garmin-mcp.toml
+.connect-iq-mcp.toml
 .env
 .DS_Store

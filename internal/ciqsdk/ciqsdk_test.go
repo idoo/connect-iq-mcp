@@ -98,7 +98,7 @@ func TestResolvePrecedence(t *testing.T) {
 		{"cfg beats newest", "", p84 + "/", nil, p84, SourceConfig, false},
 		{"broken cfg errors", "", root + "/Sdks/missing/", nil, "", "", true},
 		{"env beats cfg", "", p84 + "/", map[string]string{"CIQ_SDK": "9.2.0"}, p92, SourceEnv, false},
-		{"GARMIN_MCP_SDK beats CIQ_SDK", "", "", map[string]string{"CIQ_SDK": "9.2.0", "GARMIN_MCP_SDK": p84}, p84, SourceEnv, false},
+		{"CIQ_MCP_SDK beats CIQ_SDK", "", "", map[string]string{"CIQ_SDK": "9.2.0", "CIQ_MCP_SDK": p84}, p84, SourceEnv, false},
 		{"broken env errors", "", p84 + "/", map[string]string{"CIQ_SDK": "7.0.0"}, "", "", true},
 		{"arg beats env", "8.4.0", "", map[string]string{"CIQ_SDK": "9.2.0"}, p84, SourceArg, false},
 		{"arg prefix", "9.2", "", nil, p92, SourceArg, false},

@@ -1,21 +1,21 @@
 #!/bin/sh
-# garmin-mcp installer: downloads a release binary from GitHub, verifies its
+# connect-iq-mcp installer: downloads a release binary from GitHub, verifies its
 # sha256 against checksums.txt, the cosign signature of checksums.txt (if
 # `cosign` is installed) and the build provenance (if `gh` is installed),
 # and installs it to ~/.local/bin.
 #
-#   curl -fsSL https://raw.githubusercontent.com/idoo/garmin-mcp/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/idoo/connect-iq-mcp/main/install.sh | sh
 #
 # Environment:
-#   GARMIN_MCP_VERSION         release to install, e.g. 0.1.0 (default: latest)
-#   GARMIN_MCP_INSTALL_DIR     target directory (default: ~/.local/bin)
-#   GARMIN_MCP_REQUIRE_COSIGN  1 = refuse to install unless cosign verifies checksums.txt
+#   CIQ_MCP_VERSION         release to install, e.g. 0.1.0 (default: latest)
+#   CIQ_MCP_INSTALL_DIR     target directory (default: ~/.local/bin)
+#   CIQ_MCP_REQUIRE_COSIGN  1 = refuse to install unless cosign verifies checksums.txt
 set -eu
 
-repo=idoo/garmin-mcp
-install_dir=${GARMIN_MCP_INSTALL_DIR:-$HOME/.local/bin}
+repo=idoo/connect-iq-mcp
+install_dir=${CIQ_MCP_INSTALL_DIR:-$HOME/.local/bin}
 
-say() { printf 'garmin-mcp-install: %s\n' "$*" >&2; }
+say() { printf 'connect-iq-mcp-install: %s\n' "$*" >&2; }
 die() {
 	say "error: $*"
 	exit 1
@@ -39,15 +39,15 @@ case $(uname -s) in
 Darwin) os=darwin ;;
 Linux) os=linux ;;
 MINGW* | MSYS* | CYGWIN*) os=windows ;;
-*) die "unsupported OS $(uname -s); download a release from https://github.com/$repo/releases or run: go install github.com/$repo/cmd/garmin-mcp@latest" ;;
+*) die "unsupported OS $(uname -s); download a release from https://github.com/$repo/releases or run: go install github.com/$repo/cmd/connect-iq-mcp@latest" ;;
 esac
 ext=tar.gz
-exe=garmin-mcp
+exe=connect-iq-mcp
 if [ "$os" = windows ]; then
-	# Git Bash / MSYS2: release ships a zip with garmin-mcp.exe.
-	command -v unzip >/dev/null 2>&1 || die "unzip is required on Windows; or download the zip from https://github.com/$repo/releases, or run: go install github.com/$repo/cmd/garmin-mcp@latest"
+	# Git Bash / MSYS2: release ships a zip with connect-iq-mcp.exe.
+	command -v unzip >/dev/null 2>&1 || die "unzip is required on Windows; or download the zip from https://github.com/$repo/releases, or run: go install github.com/$repo/cmd/connect-iq-mcp@latest"
 	ext=zip
-	exe=garmin-mcp.exe
+	exe=connect-iq-mcp.exe
 fi
 case $(uname -m) in
 x86_64 | amd64) arch=amd64 ;;
@@ -59,25 +59,25 @@ if [ "$os" = darwin ] && [ "$arch" = amd64 ] && [ "$(sysctl -n hw.optional.arm64
 	arch=arm64
 fi
 
-version=${GARMIN_MCP_VERSION:-}
+version=${CIQ_MCP_VERSION:-}
 if [ -z "$version" ]; then
 	# The releases/latest page redirects to .../releases/tag/vX.Y.Z; no API
 	# call, so no 60-requests-per-hour limit.
 	latest=$(resolve "https://github.com/$repo/releases/latest") || latest=
 	case $latest in
 	*/releases/tag/*) version=${latest##*/releases/tag/} ;;
-	*) die "could not determine the latest release (set GARMIN_MCP_VERSION)" ;;
+	*) die "could not determine the latest release (set CIQ_MCP_VERSION)" ;;
 	esac
 fi
 version=${version#v}
 
-archive="garmin-mcp_${version}_${os}_${arch}.${ext}"
+archive="connect-iq-mcp_${version}_${os}_${arch}.${ext}"
 base="https://github.com/$repo/releases/download/v$version"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-say "downloading garmin-mcp $version ($os/$arch)"
+say "downloading connect-iq-mcp $version ($os/$arch)"
 fetch "$base/$archive" "$tmp/$archive"
 fetch "$base/checksums.txt" "$tmp/checksums.txt"
 
@@ -90,8 +90,8 @@ if command -v cosign >/dev/null 2>&1; then
 		"$tmp/checksums.txt" >/dev/null 2>&1 ||
 		die "cosign could not verify checksums.txt; refusing to install"
 	say "checksums.txt signature verified (cosign)"
-elif [ "${GARMIN_MCP_REQUIRE_COSIGN:-0}" = 1 ]; then
-	die "GARMIN_MCP_REQUIRE_COSIGN=1 but cosign is not installed"
+elif [ "${CIQ_MCP_REQUIRE_COSIGN:-0}" = 1 ]; then
+	die "CIQ_MCP_REQUIRE_COSIGN=1 but cosign is not installed"
 else
 	say "warning: cosign not installed; skipping the checksums.txt signature check"
 fi
@@ -125,7 +125,7 @@ else
 fi
 mkdir -p "$install_dir"
 dest="$install_dir/$exe"
-# Install via a temp name + rename so a running garmin-mcp is not truncated.
+# Install via a temp name + rename so a running connect-iq-mcp is not truncated.
 cp "$tmp/$exe" "$dest.new"
 chmod 0755 "$dest.new"
 if [ "$os" = darwin ]; then
@@ -143,7 +143,7 @@ case ":$PATH:" in
 	;;
 esac
 
-say "next: sign in once (opens a browser, tick Remember me), then add garmin-mcp to your client:"
+say "next: sign in once (opens a browser, tick Remember me), then add connect-iq-mcp to your client:"
 say "  $dest auth login"
 say "  $dest config install claude-code   # or claude-desktop, codex, cursor, vscode, windsurf"
 say "snippet for Claude Code:"

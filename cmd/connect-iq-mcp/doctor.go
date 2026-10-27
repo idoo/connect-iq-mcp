@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/auth/login"
-	"github.com/idoo/garmin-mcp/internal/browser"
-	"github.com/idoo/garmin-mcp/internal/ciqsdk"
-	"github.com/idoo/garmin-mcp/internal/config"
-	"github.com/idoo/garmin-mcp/internal/credstore"
-	"github.com/idoo/garmin-mcp/internal/portal"
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/auth/login"
+	"github.com/idoo/connect-iq-mcp/internal/browser"
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk"
+	"github.com/idoo/connect-iq-mcp/internal/config"
+	"github.com/idoo/connect-iq-mcp/internal/credstore"
+	"github.com/idoo/connect-iq-mcp/internal/portal"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 // Local lookups doctor runs; tests replace them so no real SDK, Java or
@@ -87,7 +87,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 }
 
 func doctor(ctx context.Context, rep *report, profile string, probe bool) {
-	fmt.Fprintf(rep.w, "garmin-mcp %s\n", buildVersion())
+	fmt.Fprintf(rep.w, "connect-iq-mcp %s\n", buildVersion())
 	r, err := config.Resolve(config.Options{Flags: config.Flags{Profile: profile}})
 	if err != nil {
 		rep.fail("config: %v", err)
@@ -115,7 +115,7 @@ func doctor(ctx context.Context, rep *report, profile string, probe bool) {
 	if p.AllowWrites {
 		rep.ok("mode: writes enabled")
 	} else {
-		rep.ok("mode: read-only (ask the agent to enable writes, or set GARMIN_MCP_ALLOW_WRITES=1)")
+		rep.ok("mode: read-only (ask the agent to enable writes, or set CIQ_MCP_ALLOW_WRITES=1)")
 	}
 	names := make([]string, len(r.Toolsets))
 	for i, ts := range r.Toolsets {
@@ -187,16 +187,16 @@ func localChecks(ctx context.Context, rep *report, profile string) {
 		rep.warn("browser: %v", err)
 	}
 	if !hasDisplay() {
-		rep.warn("display: DISPLAY and WAYLAND_DISPLAY are unset, so `%s` can't open a window; run `%s` and paste the Cookie of a signed-in apps.garmin.com request (DevTools → Network → Copy as cURL), or use GARMIN_MCP_PORTAL_COOKIES", tool.LoginCommand(profile), tool.LoginCommand(profile, "--paste"))
+		rep.warn("display: DISPLAY and WAYLAND_DISPLAY are unset, so `%s` can't open a window; run `%s` and paste the Cookie of a signed-in apps.garmin.com request (DevTools → Network → Copy as cURL), or use CIQ_MCP_PORTAL_COOKIES", tool.LoginCommand(profile), tool.LoginCommand(profile, "--paste"))
 	}
 }
 
-// keyCheck reports the GARMIN_MCP_KEY signing key: set, present, and its
+// keyCheck reports the CIQ_MCP_KEY signing key: set, present, and its
 // public key SHA-256. It never prints key bytes.
 func keyCheck(rep *report) {
 	raw := os.Getenv(ciqsdk.EnvKeyVar)
 	if raw == "" {
-		rep.info("developer key: %s not set; to sign builds with your app's key, run `garmin-mcp config install <client> --key /absolute/path/developer_key.der` (until then each build needs a key file inside the project)", ciqsdk.EnvKeyVar)
+		rep.info("developer key: %s not set; to sign builds with your app's key, run `connect-iq-mcp config install <client> --key /absolute/path/developer_key.der` (until then each build needs a key file inside the project)", ciqsdk.EnvKeyVar)
 		return
 	}
 	p, ok := ciqsdk.EnvKey()
@@ -224,7 +224,7 @@ func shellNote(rep *report) {
 	if !fromShell() {
 		return
 	}
-	rep.info("env: these checks use this shell's environment; your MCP client starts the server with its own, so set %s and JAVA_HOME in the client's garmin-mcp entry (`garmin-mcp config install <client> --key <abs path> --java-home <abs path>`), then restart the client", ciqsdk.EnvKeyVar)
+	rep.info("env: these checks use this shell's environment; your MCP client starts the server with its own, so set %s and JAVA_HOME in the client's connect-iq-mcp entry (`connect-iq-mcp config install <client> --key <abs path> --java-home <abs path>`), then restart the client", ciqsdk.EnvKeyVar)
 }
 
 // credLine reports one credential. Garmin Connect is opt-in, so a missing

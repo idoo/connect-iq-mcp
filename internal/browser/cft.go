@@ -18,7 +18,7 @@ import (
 )
 
 // Chrome for Testing is the pinned fallback when no Chromium-based browser is
-// installed (or GARMIN_MCP_BROWSER=bundled). Hashes are of the official zips.
+// installed (or CIQ_MCP_BROWSER=bundled). Hashes are of the official zips.
 const cftVersion = "156.0.8078.47"
 
 var cftSHA256 = map[string]string{

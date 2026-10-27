@@ -3,7 +3,7 @@ package store
 import (
 	"testing"
 
-	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
+	"github.com/idoo/connect-iq-mcp/internal/tool/tooltest"
 )
 
 // G1/HA-4: without elicitation (allow_no_elicit) the agent path works:

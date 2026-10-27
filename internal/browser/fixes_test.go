@@ -13,7 +13,7 @@ import (
 )
 
 func TestCmdlineHasProfile(t *testing.T) {
-	const prof = `C:\Users\John Smith\AppData\Local\garmin-mcp\browser\default`
+	const prof = `C:\Users\John Smith\AppData\Local\connect-iq-mcp\browser\default`
 	match := []string{
 		// Go's exec quotes the whole argument when the path has a space.
 		`"C:\Program Files\Google\Chrome\Application\chrome.exe" "--user-data-dir=` + prof + `" --no-first-run`,

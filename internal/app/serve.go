@@ -7,17 +7,17 @@ import (
 	"os"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/config"
-	"github.com/idoo/garmin-mcp/internal/mcpserver"
-	"github.com/idoo/garmin-mcp/internal/sim"
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/config"
+	"github.com/idoo/connect-iq-mcp/internal/mcpserver"
+	"github.com/idoo/connect-iq-mcp/internal/sim"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 // ServeOptions configures [Serve].
 type ServeOptions struct {
 	// Resolved is the effective configuration.
 	Resolved *config.Resolved
-	// Version is the garmin-mcp build version.
+	// Version is the connect-iq-mcp build version.
 	Version string
 	// HTTPAddr serves Streamable HTTP when set; empty serves stdio.
 	HTTPAddr string
@@ -26,7 +26,7 @@ type ServeOptions struct {
 	// Logger receives server logs on stderr; nil uses a stderr text logger.
 	Logger *slog.Logger
 	// Root confines file tools to this directory (--root); empty falls back
-	// to GARMIN_MCP_ROOT, then the client's MCP roots, then the git root of the cwd.
+	// to CIQ_MCP_ROOT, then the client's MCP roots, then the git root of the cwd.
 	Root string
 }
 

@@ -13,7 +13,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 const (
@@ -35,22 +35,22 @@ type Store struct {
 
 var _ tool.StateStore = (*Store)(nil)
 
-// DefaultDir returns garmin-mcp's state directory: %LocalAppData%\garmin-mcp on Windows,
-// otherwise $XDG_STATE_HOME/garmin-mcp or ~/.local/state/garmin-mcp.
+// DefaultDir returns connect-iq-mcp's state directory: %LocalAppData%\connect-iq-mcp on Windows,
+// otherwise $XDG_STATE_HOME/connect-iq-mcp or ~/.local/state/connect-iq-mcp.
 func DefaultDir() (string, error) {
 	if runtime.GOOS == "windows" {
 		if d := os.Getenv("LocalAppData"); d != "" {
-			return filepath.Join(d, "garmin-mcp"), nil
+			return filepath.Join(d, "connect-iq-mcp"), nil
 		}
 	}
 	if d := os.Getenv("XDG_STATE_HOME"); d != "" && filepath.IsAbs(d) {
-		return filepath.Join(d, "garmin-mcp"), nil
+		return filepath.Join(d, "connect-iq-mcp"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("state: home dir: %w", err)
 	}
-	return filepath.Join(home, ".local", "state", "garmin-mcp"), nil
+	return filepath.Join(home, ".local", "state", "connect-iq-mcp"), nil
 }
 
 // New returns a Store rooted at dir, creating it with mode 0700.
@@ -65,7 +65,7 @@ func New(dir string) (*Store, error) {
 func (s *Store) Dir() string { return s.dir }
 
 // Cursor returns the stored cursor for profile/app/name, or "". Values
-// written by garmin-mcp 0.1.0 into the shared cursors.json are still read when no
+// written by connect-iq-mcp 0.1.0 into the shared cursors.json are still read when no
 // per-key record exists yet.
 func (s *Store) Cursor(profile, app, name string) (string, error) {
 	var rec cursorRecord
@@ -83,7 +83,7 @@ func (s *Store) Cursor(profile, app, name string) (string, error) {
 }
 
 // SetCursor stores a cursor value for profile/app/name. Each cursor is its
-// own atomically replaced file, so concurrent garmin-mcp processes updating
+// own atomically replaced file, so concurrent connect-iq-mcp processes updating
 // different cursors never overwrite each other.
 func (s *Store) SetCursor(profile, app, name, value string) error {
 	return s.Save(cursorKind, cursorFile(profile, app, name), cursorRecord{
@@ -159,7 +159,7 @@ func (s *Store) recordPath(kind, key string) (string, error) {
 	return filepath.Join(s.dir, kind, key+".json"), nil
 }
 
-// readLegacyCursors reads the cursors.json map written by garmin-mcp 0.1.0.
+// readLegacyCursors reads the cursors.json map written by connect-iq-mcp 0.1.0.
 func (s *Store) readLegacyCursors() (map[string]string, error) {
 	m := map[string]string{}
 	b, err := os.ReadFile(filepath.Join(s.dir, legacyCursorsDB))

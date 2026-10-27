@@ -7,7 +7,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 // errToolsetDisabled is the result of calling a tool whose toolset is off in
@@ -51,7 +51,7 @@ func (s *session) hiddenResult(name string) *tool.Result {
 		return tool.Fail(&tool.Error{
 			Code:    tool.ErrUnavailable.Code,
 			Message: fmt.Sprintf("%s is %s; this server runs on %s", name, label, s.deps.Platform),
-			Hint:    "run garmin-mcp on a supported OS for this tool",
+			Hint:    "run connect-iq-mcp on a supported OS for this tool",
 		})
 	}
 	s.mu.Lock()

@@ -13,9 +13,9 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/flock"
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/flock"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 type fakeClock struct {
@@ -339,7 +339,7 @@ func TestConnectSaveFailureKeepsRotation(t *testing.T) {
 // never renews through the browser profile.
 func TestEnvConnectRejectedNoBrowser(t *testing.T) {
 	srv, _ := diauth(t, 0)
-	s, _, logins := renewStore(t, map[string]string{"GARMIN_MCP_CONNECT_REFRESH_TOKEN": "revoked"},
+	s, _, logins := renewStore(t, map[string]string{"CIQ_MCP_CONNECT_REFRESH_TOKEN": "revoked"},
 		func(SignInRequest) (Capture, error) {
 			return Capture{ConnectTicket: "ST-1"}, nil
 		})

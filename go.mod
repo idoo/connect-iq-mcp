@@ -1,4 +1,4 @@
-module github.com/idoo/garmin-mcp
+module github.com/idoo/connect-iq-mcp
 
 go 1.25.0
 

@@ -23,16 +23,16 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 // EnvHTTPToken is the environment variable holding the HTTP bearer token.
-const EnvHTTPToken = "GARMIN_MCP_HTTP_TOKEN" //nolint:gosec // variable name, not a credential.
+const EnvHTTPToken = "CIQ_MCP_HTTP_TOKEN" //nolint:gosec // variable name, not a credential.
 
 // Session limits for HTTP mode, overridable by HTTPOptions or env.
 const (
-	EnvHTTPSessionTimeout = "GARMIN_MCP_HTTP_SESSION_TIMEOUT"
-	EnvHTTPMaxSessions    = "GARMIN_MCP_HTTP_MAX_SESSIONS"
+	EnvHTTPSessionTimeout = "CIQ_MCP_HTTP_SESSION_TIMEOUT"
+	EnvHTTPMaxSessions    = "CIQ_MCP_HTTP_MAX_SESSIONS"
 	// DefaultSessionTimeout closes idle sessions; it outlives tool.PreviewTTL
 	// so a pending preview never loses its session first.
 	DefaultSessionTimeout = 30 * time.Minute
@@ -75,11 +75,11 @@ type HTTPOptions struct {
 	// StderrIsTTY overrides terminal detection of os.Stderr (tests).
 	StderrIsTTY *bool
 	// SessionTimeout closes sessions idle this long; 0 reads
-	// GARMIN_MCP_HTTP_SESSION_TIMEOUT (a Go duration), else DefaultSessionTimeout.
+	// CIQ_MCP_HTTP_SESSION_TIMEOUT (a Go duration), else DefaultSessionTimeout.
 	// Negative never expires sessions.
 	SessionTimeout time.Duration
 	// MaxSessions caps open sessions (new ones get 503); 0 reads
-	// GARMIN_MCP_HTTP_MAX_SESSIONS, else DefaultMaxSessions. Negative is unlimited.
+	// CIQ_MCP_HTTP_MAX_SESSIONS, else DefaultMaxSessions. Negative is unlimited.
 	MaxSessions int
 }
 
@@ -203,7 +203,7 @@ func HTTPHandler(opts HTTPOptions) (http.Handler, error) {
 				}
 				throttle.fail(key)
 			}
-			w.Header().Set("WWW-Authenticate", `Bearer realm="garmin-mcp"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="connect-iq-mcp"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -439,7 +439,7 @@ func SessionFactory(deps Deps) func(*http.Request) *mcp.Server {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	probe := mcp.NewServer(&mcp.Implementation{Name: "garmin-mcp", Version: deps.Version}, &mcp.ServerOptions{
+	probe := mcp.NewServer(&mcp.Implementation{Name: "connect-iq-mcp", Version: deps.Version}, &mcp.ServerOptions{
 		Logger:                    logger,
 		SupportedProtocolVersions: legacyProtocolVersions(),
 	})
@@ -527,7 +527,7 @@ func generateToken(opts HTTPOptions) (string, error) {
 	if w == nil {
 		w = os.Stderr
 	}
-	if _, err := fmt.Fprintf(w, "garmin-mcp: HTTP bearer token (set %s to reuse): %s\n", EnvHTTPToken, tok); err != nil {
+	if _, err := fmt.Fprintf(w, "connect-iq-mcp: HTTP bearer token (set %s to reuse): %s\n", EnvHTTPToken, tok); err != nil {
 		return "", fmt.Errorf("mcpserver: http: print token: %w", err)
 	}
 	return tok, nil

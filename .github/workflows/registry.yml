@@ -36,7 +36,7 @@ jobs:
           version="${TAG#v}"
           dir="$RUNNER_TEMP/mcpb"
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$dir" \
-            --pattern "garmin-mcp-${version}.mcpb" --pattern "garmin-mcp-${version}.mcpb.sha256"
-          (cd "$dir" && sha256sum -c "garmin-mcp-${version}.mcpb.sha256")
-          sha=$(awk '{print $1}' "$dir/garmin-mcp-${version}.mcpb.sha256")
+            --pattern "connect-iq-mcp-${version}.mcpb" --pattern "connect-iq-mcp-${version}.mcpb.sha256"
+          (cd "$dir" && sha256sum -c "connect-iq-mcp-${version}.mcpb.sha256")
+          sha=$(awk '{print $1}' "$dir/connect-iq-mcp-${version}.mcpb.sha256")
           scripts/publish-registry.sh "$TAG" "$sha"

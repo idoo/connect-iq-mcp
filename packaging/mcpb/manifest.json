@@ -1,22 +1,22 @@
 {
   "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-latest.schema.json",
   "manifest_version": "0.3",
-  "name": "garmin-mcp",
-  "display_name": "Garmin MCP",
+  "name": "connect-iq-mcp",
+  "display_name": "Connect IQ MCP",
   "version": "0.0.0",
   "description": "MCP server for Garmin Connect IQ developers. Ask Claude about your store apps, SDK builds and the simulator. Read-only by default.",
-  "long_description": "MCP server for Garmin Connect IQ developers. Ask Claude about your store apps, SDK builds and the simulator. Read-only by default; anything public waits for your yes. Run `garmin-mcp auth login` once: a browser opens, you sign in with Remember me, and sessions renew silently after that. Unofficial; not affiliated with Garmin.",
+  "long_description": "MCP server for Garmin Connect IQ developers. Ask Claude about your store apps, SDK builds and the simulator. Read-only by default; anything public waits for your yes. Run `connect-iq-mcp auth login` once: a browser opens, you sign in with Remember me, and sessions renew silently after that. Unofficial; not affiliated with Garmin.",
   "author": {
     "name": "Ivan Verevkin",
     "url": "https://github.com/idoo"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/idoo/garmin-mcp"
+    "url": "https://github.com/idoo/connect-iq-mcp"
   },
-  "homepage": "https://github.com/idoo/garmin-mcp",
-  "documentation": "https://github.com/idoo/garmin-mcp#readme",
-  "support": "https://github.com/idoo/garmin-mcp/issues",
+  "homepage": "https://github.com/idoo/connect-iq-mcp",
+  "documentation": "https://github.com/idoo/connect-iq-mcp#readme",
+  "support": "https://github.com/idoo/connect-iq-mcp/issues",
   "icon": "icon.png",
   "license": "MIT",
   "keywords": [
@@ -28,22 +28,22 @@
   ],
   "server": {
     "type": "binary",
-    "entry_point": "server/garmin-mcp-darwin",
+    "entry_point": "server/connect-iq-mcp-darwin",
     "mcp_config": {
-      "command": "${__dirname}/server/garmin-mcp-darwin",
+      "command": "${__dirname}/server/connect-iq-mcp-darwin",
       "args": [
         "serve"
       ],
       "env": {
-        "GARMIN_MCP_ALLOW_WRITES": "${user_config.allow_writes}",
-        "GARMIN_MCP_TOOLSETS": "${user_config.toolsets}"
+        "CIQ_MCP_ALLOW_WRITES": "${user_config.allow_writes}",
+        "CIQ_MCP_TOOLSETS": "${user_config.toolsets}"
       },
       "platform_overrides": {
         "win32": {
-          "command": "${__dirname}/server/garmin-mcp-windows-amd64.exe"
+          "command": "${__dirname}/server/connect-iq-mcp-windows-amd64.exe"
         },
         "linux": {
-          "command": "${__dirname}/server/garmin-mcp-linux"
+          "command": "${__dirname}/server/connect-iq-mcp-linux"
         }
       }
     }

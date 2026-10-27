@@ -4,7 +4,7 @@ One binary, one Go module. The MCP server sits in the middle, the tools are plai
 
 ## Packages
 
-- `cmd/garmin-mcp`: the CLI (`serve`, `auth`, `config`, `doctor`).
+- `cmd/connect-iq-mcp`: the CLI (`serve`, `auth`, `config`, `doctor`).
 - `internal/app`: wires config, credentials, HTTP and state into a `tool.Env` and runs the server.
 - `internal/mcpserver`: builds the MCP server from the registry: toolsets, read-only hiding, approvals, transports.
 - `internal/tool`: the contract every tool is written against: `Meta`, registry, `Env`, results, errors, confirm gates.
@@ -16,7 +16,7 @@ One binary, one Go module. The MCP server sits in the middle, the tools are plai
 - `internal/auth/login`: interactive sign-in orchestration (`auth.Loginer`) and `Chromium`, the `credstore.Browser` used for sign-in and silent renewal. `login.Open` is the store `app` and `doctor` use.
 - `internal/credstore`: implements `auth.Store`: keychain or 0600 file, locks, locked refresh, renewal policy and stamps. It runs browser sign-ins only through the injected `credstore.Browser` and never imports `internal/browser` (depguard).
 - `internal/browser`: drives the dedicated Chromium profile for sign-in and renewal.
-- `cmd/garmin-mcp`: also holds the `garmin-mcp auth` CLI (`auth.go`).
+- `cmd/connect-iq-mcp`: also holds the `connect-iq-mcp auth` CLI (`auth.go`).
 - `internal/portal`: client for the apps.garmin.com developer portal's internal API.
 - `internal/connectapi`: read-only Garmin Connect client.
 - `internal/ciqsdk`: finds SDKs, devices and Java, parses manifests, runs monkeyc, handles keys. `ciqsdktest` is test-only.
@@ -41,10 +41,10 @@ depguard in `.golangci.yml` enforces three of these: only `mcpserver` and `docsg
 
 ## Where state lives
 
-- Keychain, service `garmin-mcp`: the portal session cookie and Connect tokens, in chunks.
-- State dir (`~/.local/state/garmin-mcp`, `$XDG_STATE_HOME/garmin-mcp`, `%LocalAppData%\garmin-mcp`): `credentials/<profile>.json` when there's no keychain, `locks/`, `browser/<profile>` (the sign-in profile), `browser-bin` (downloaded Chrome for Testing), `cursors/`, `uploads/`, `sim.lock`, `sim-launch.log`.
-- Config: `~/.config/garmin-mcp/config.toml` (`$XDG_CONFIG_HOME`, `%AppData%` on Windows), plus an optional `.garmin-mcp.toml` pin in the project, which can only narrow permissions.
-- The client's own config holds the env: `GARMIN_MCP_KEY`, `JAVA_HOME`, `GARMIN_MCP_PROFILE`.
+- Keychain, service `connect-iq-mcp`: the portal session cookie and Connect tokens, in chunks.
+- State dir (`~/.local/state/connect-iq-mcp`, `$XDG_STATE_HOME/connect-iq-mcp`, `%LocalAppData%\connect-iq-mcp`): `credentials/<profile>.json` when there's no keychain, `locks/`, `browser/<profile>` (the sign-in profile), `browser-bin` (downloaded Chrome for Testing), `cursors/`, `uploads/`, `sim.lock`, `sim-launch.log`.
+- Config: `~/.config/connect-iq-mcp/config.toml` (`$XDG_CONFIG_HOME`, `%AppData%` on Windows), plus an optional `.connect-iq-mcp.toml` pin in the project, which can only narrow permissions.
+- The client's own config holds the env: `CIQ_MCP_KEY`, `JAVA_HOME`, `CIQ_MCP_PROFILE`.
 - In-process, per server: `tool.Env.Shared` holds the store app cache, the sdk build jobs and the simulator sessions (`sim.Manager`, which owns launched simulators). Tool packages own their state types and reach this server's single value through `tool.SharedValue`; none of it lives in package-level variables.
 - `app.Serve` creates that `Shared` once and every session uses it, so all HTTP sessions share one cache, one build-job registry and one simulator manager; on return it calls `sim.Manager.KillAll`. `tooltest.New` makes a fresh one per test kit; a hand-built `Env` without one gets call-private state.
 

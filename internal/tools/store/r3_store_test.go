@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/idoo/garmin-mcp/internal/tool"
-	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool/tooltest"
 )
 
 // lossyTransport delivers requests matching lose to next (so the fake portal

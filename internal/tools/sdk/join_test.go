@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
+	"github.com/idoo/connect-iq-mcp/internal/tool/tooltest"
 )
 
 // Two identical builds join one job; each caller then writes its own result

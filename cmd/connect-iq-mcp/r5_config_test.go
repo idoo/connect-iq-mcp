@@ -24,7 +24,7 @@ func TestInstallWritesKeyAndJavaEnv(t *testing.T) {
 	o := entryOpts{Key: key, JavaHome: jdk}
 
 	e := testEnv(t, "linux")
-	if err := install("cursor", "/usr/local/bin/garmin-mcp", o, e, io.Discard); err != nil {
+	if err := install("cursor", "/usr/local/bin/connect-iq-mcp", o, e, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(clientConfigPaths("cursor", e)[0])
@@ -39,12 +39,12 @@ func TestInstallWritesKeyAndJavaEnv(t *testing.T) {
 	if err := json.Unmarshal(b, &doc); err != nil {
 		t.Fatal(err)
 	}
-	if env := doc.MCPServers[serverName].Env; env["GARMIN_MCP_KEY"] != key || env["JAVA_HOME"] != jdk {
+	if env := doc.MCPServers[serverName].Env; env["CIQ_MCP_KEY"] != key || env["JAVA_HOME"] != jdk {
 		t.Fatalf("cursor env = %v\n%s", env, b)
 	}
 
-	args := claudeAddArgs("/usr/local/bin/garmin-mcp", o)
-	if !slices.Contains(args, "GARMIN_MCP_KEY="+key) || !slices.Contains(args, "JAVA_HOME="+jdk) {
+	args := claudeAddArgs("/usr/local/bin/connect-iq-mcp", o)
+	if !slices.Contains(args, "CIQ_MCP_KEY="+key) || !slices.Contains(args, "JAVA_HOME="+jdk) {
 		t.Fatalf("claude args = %v", args)
 	}
 
@@ -53,7 +53,7 @@ func TestInstallWritesKeyAndJavaEnv(t *testing.T) {
 			Env map[string]string `toml:"env"`
 		} `toml:"mcp_servers"`
 	}
-	if err := toml.Unmarshal([]byte(codexBlock("/usr/local/bin/garmin-mcp", o)), &codex); err != nil || codex.MCPServers[serverName].Env["GARMIN_MCP_KEY"] != key {
+	if err := toml.Unmarshal([]byte(codexBlock("/usr/local/bin/connect-iq-mcp", o)), &codex); err != nil || codex.MCPServers[serverName].Env["CIQ_MCP_KEY"] != key {
 		t.Fatalf("codex: %v %+v", err, codex)
 	}
 }

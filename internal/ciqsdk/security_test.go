@@ -30,9 +30,9 @@ func TestResolveArgRejectsSDKOutsideDataRoot(t *testing.T) {
 	if r, err := Resolve(ResolveOpts{Arg: inside, DataRoot: root, Getenv: noenv}); err != nil || r.SDK.Path != inside {
 		t.Fatalf("installed SDK by path: %+v %v", r, err)
 	}
-	// The human may point GARMIN_MCP_SDK anywhere.
+	// The human may point CIQ_MCP_SDK anywhere.
 	env := func(k string) string {
-		if k == "GARMIN_MCP_SDK" {
+		if k == "CIQ_MCP_SDK" {
 			return evil
 		}
 		return ""

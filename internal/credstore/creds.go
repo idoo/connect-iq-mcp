@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/flock"
-	"github.com/idoo/garmin-mcp/internal/portal"
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/flock"
+	"github.com/idoo/connect-iq-mcp/internal/portal"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 const (
@@ -150,12 +150,12 @@ func (s *Store) PortalCookies(ctx context.Context) (string, error) {
 	}
 	if src == srcEnv { // read-only: cannot renew
 		if b.Portal == nil || b.Portal.Cookies == "" {
-			return "", s.authRequired("GARMIN_MCP_PORTAL_COOKIES has no `session` cookie", nil)
+			return "", s.authRequired("CIQ_MCP_PORTAL_COOKIES has no `session` cookie", nil)
 		}
 		if !s.portalDead(b.Portal) {
 			return b.Portal.Cookies, nil
 		}
-		return "", s.authRequired("GARMIN_MCP_PORTAL_COOKIES holds an expired session", nil)
+		return "", s.authRequired("CIQ_MCP_PORTAL_COOKIES holds an expired session", nil)
 	}
 	rerr := fmt.Errorf("%w: auto_renew is off", errNoRenewal)
 	if s.autoRenew { // auto_renew off: nothing to decide under the lock
@@ -245,7 +245,7 @@ func (s *Store) SavePortalCookies(ctx context.Context, sent string, setCookie []
 // is dead.
 //
 // A stored Connect credential is the human's consent marker: only an explicit
-// sign-in with connect=true (`garmin-mcp auth login --connect` or a
+// sign-in with connect=true (`connect-iq-mcp auth login --connect` or a
 // human-approved auth_login) stores one, and logout deletes it. Without it
 // ConnectToken never mints a token from the browser profile's SSO session.
 func (s *Store) ConnectToken(ctx context.Context) (string, error) {
@@ -296,7 +296,7 @@ func (s *Store) ConnectToken(ctx context.Context) (string, error) {
 		if cause == nil {
 			cause = errors.New("refresh token expired")
 		}
-		return "", fmt.Errorf("%w: GARMIN_MCP_CONNECT_REFRESH_TOKEN was rejected (%v); put a fresh refresh token in it, or unset it and have a human run \"%s\"", auth.ErrAuthRequired, cause, tool.LoginCommand(s.profile, "--connect"))
+		return "", fmt.Errorf("%w: CIQ_MCP_CONNECT_REFRESH_TOKEN was rejected (%v); put a fresh refresh token in it, or unset it and have a human run \"%s\"", auth.ErrAuthRequired, cause, tool.LoginCommand(s.profile, "--connect"))
 	}
 	rerr := s.renewLocked(ctx, false, true, false)
 	if rerr == nil {
@@ -598,11 +598,11 @@ type Renewal struct {
 	Connect bool
 }
 
-// ErrRenewSignInOpen means `garmin-mcp auth renew` found an interactive
+// ErrRenewSignInOpen means `connect-iq-mcp auth renew` found an interactive
 // sign-in window holding the browser profile.
-var ErrRenewSignInOpen = errors.New("a sign-in window is open for this profile; finish or close it, then retry `garmin-mcp auth renew`")
+var ErrRenewSignInOpen = errors.New("a sign-in window is open for this profile; finish or close it, then retry `connect-iq-mcp auth renew`")
 
-// Renew silently signs in again now (`garmin-mcp auth renew`), ignoring
+// Renew silently signs in again now (`connect-iq-mcp auth renew`), ignoring
 // auto_renew and the renewal stamps. Env-sourced credentials are skipped.
 func (s *Store) Renew(ctx context.Context) (Renewal, error) {
 	b, ps, cs, err := s.view()

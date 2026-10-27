@@ -30,7 +30,7 @@ func TestConfigRejectsBadProfileKeys(t *testing.T) {
 
 // SG-3: allow_profile_switch was removed; old config files must still load.
 func TestLegacyAllowProfileSwitchLoads(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "garmin-mcp", "config.toml")
+	path := filepath.Join(t.TempDir(), "connect-iq-mcp", "config.toml")
 	writeFile(t, path, "default_profile = \"work\"\nallow_profile_switch = true\n\n[profiles.work]\nallow_writes = true\n")
 	cfg, warnings, err := Load(path)
 	if err != nil {

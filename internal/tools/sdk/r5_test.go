@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/idoo/garmin-mcp/internal/ciqsdk"
-	"github.com/idoo/garmin-mcp/internal/tool"
-	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool/tooltest"
 )
 
 // addDevice installs a fake device definition under the data root.

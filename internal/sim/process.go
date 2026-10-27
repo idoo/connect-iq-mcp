@@ -18,9 +18,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/ciqsdk"
-	"github.com/idoo/garmin-mcp/internal/flock"
-	"github.com/idoo/garmin-mcp/internal/state"
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk"
+	"github.com/idoo/connect-iq-mcp/internal/flock"
+	"github.com/idoo/connect-iq-mcp/internal/state"
 )
 
 // Addr is the simulator's loopback command port.
@@ -484,7 +484,7 @@ func notStarted(la launched, timeout time.Duration) error {
 	if shown == "" {
 		shown = "none captured"
 	}
-	return fmt.Errorf("%w: the simulator garmin-mcp launched (%s) never opened %s within %s; last output: %s; next: %s",
+	return fmt.Errorf("%w: the simulator connect-iq-mcp launched (%s) never opened %s within %s; last output: %s; next: %s",
 		ErrNotReady, la.path, Addr, timeout, shown, launchHint(runtime.GOOS, out, la.path))
 }
 
@@ -495,9 +495,9 @@ func launchHint(goos, out, path string) string {
 	lo := strings.ToLower(out)
 	switch {
 	case strings.Contains(lo, "display") || strings.Contains(lo, "gtk") || strings.Contains(lo, "x11"):
-		return "the simulator could not open a window: run garmin-mcp inside a desktop session (DISPLAY or WAYLAND_DISPLAY set; xvfb-run, or WSLg on WSL), then retry sim_run"
+		return "the simulator could not open a window: run connect-iq-mcp inside a desktop session (DISPLAY or WAYLAND_DISPLAY set; xvfb-run, or WSLg on WSL), then retry sim_run"
 	case strings.Contains(lo, "java") || strings.Contains(lo, "jvm") || strings.Contains(lo, "jdk"):
-		return "the output names Java: set JAVA_HOME to a JDK 17+ in the MCP client's garmin-mcp env (config install <client> --java-home <dir>), then retry sim_run"
+		return "the output names Java: set JAVA_HOME to a JDK 17+ in the MCP client's connect-iq-mcp env (config install <client> --java-home <dir>), then retry sim_run"
 	case strings.Contains(lo, "incompatible") || strings.Contains(lo, "unsupported"):
 		return "the output names the SDK: pick another installed SDK with sim_run's sdk argument (sdk_info lists them) or update it with SdkManager, then retry"
 	}

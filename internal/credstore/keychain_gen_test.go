@@ -475,14 +475,14 @@ func TestKeychainReadsV1Chunks(t *testing.T) {
 	}
 }
 
-// LC-10: logout clears the keychain even with GARMIN_MCP_KEYRING=off;
+// LC-10: logout clears the keychain even with CIQ_MCP_KEYRING=off;
 // unavailable is ignored, other errors are reported.
 func TestLogoutAlwaysClearsKeychain(t *testing.T) {
 	k := useFakeKeyring(t)
 	env := map[string]string{}
 	s := testStore(t, env)
 	bigBlob(t, s, bigCookies(5000))
-	env["GARMIN_MCP_KEYRING"] = "off"
+	env["CIQ_MCP_KEYRING"] = "off"
 	if err := s.deleteAll(); err != nil || k.count() != 0 {
 		t.Fatalf("deleteAll = %v, items %d", err, k.count())
 	}

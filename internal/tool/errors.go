@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/upstream"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/upstream"
 )
 
-// Error is a typed garmin-mcp error with a stable machine-readable code. The
+// Error is a typed connect-iq-mcp error with a stable machine-readable code. The
 // package-level Err* values are sentinels: wrap them with fmt.Errorf("...: %w")
 // and test with errors.Is.
 type Error struct {
@@ -21,17 +21,17 @@ type Error struct {
 // Error implements error.
 func (e *Error) Error() string { return e.Message }
 
-// EnableWritesHint is the one way garmin-mcp tells agents to turn writes on: the
+// EnableWritesHint is the one way connect-iq-mcp tells agents to turn writes on: the
 // toolsets tool asks the human in the client and, when the client cannot
 // ask, returns the restart steps for that client.
 const EnableWritesHint = `call toolsets {"action":"enable_writes"} so the user can approve writes for this session (if the client cannot show the approval, it returns the restart steps)`
 
 // LoginCommand is the one CLI sign-in command every human-facing hint names:
-// "garmin-mcp auth login" plus flags, plus "--profile <name>" unless the
+// "connect-iq-mcp auth login" plus flags, plus "--profile <name>" unless the
 // profile is "" or "default" (a bare command in the user's terminal signs in
 // "default", not the profile the server runs as).
 func LoginCommand(profile string, flags ...string) string {
-	cmd := "garmin-mcp auth login"
+	cmd := "connect-iq-mcp auth login"
 	for _, f := range flags {
 		cmd += " " + f
 	}
@@ -66,7 +66,7 @@ var (
 	ErrOutcomeUnknown = &Error{
 		Code:    "outcome_unknown",
 		Message: "the request may or may not have been applied",
-		Hint:    "read the object back before retrying; garmin-mcp never replays mutations",
+		Hint:    "read the object back before retrying; connect-iq-mcp never replays mutations",
 	}
 	ErrDeclined = &Error{
 		Code:    "declined",
@@ -81,7 +81,7 @@ var (
 	ErrOutsideRoot = &Error{
 		Code:    "invalid_arguments",
 		Message: "path is outside the allowed root",
-		Hint:    "paths are relative to the client's workspace root (or the directory garmin-mcp started in when the client has no roots); pass a path inside it, or open the project folder as a workspace root",
+		Hint:    "paths are relative to the client's workspace root (or the directory connect-iq-mcp started in when the client has no roots); pass a path inside it, or open the project folder as a workspace root",
 	}
 	ErrRateLimited = &Error{
 		Code:    "rate_limited",
@@ -91,12 +91,12 @@ var (
 	ErrInternal = &Error{
 		Code:    "internal_error",
 		Message: "internal error",
-		Hint:    "this is a garmin-mcp bug; please report it",
+		Hint:    "this is a connect-iq-mcp bug; please report it",
 	}
 	ErrWriteGuard = &Error{
 		Code:    "write_guard",
 		Message: "refused a non-GET request outside an approved write call",
-		Hint:    "this is a garmin-mcp bug; please report it",
+		Hint:    "this is a connect-iq-mcp bug; please report it",
 	}
 	ErrAuthRequired = &Error{
 		Code:    "auth_required",
@@ -114,7 +114,7 @@ var (
 	ErrHumanRequired = &Error{
 		Code:    "human_approval_required",
 		Message: "this action needs explicit human approval, but the client cannot ask",
-		Hint:    "use a client with elicitation support, or set allow_no_elicit = true under the profile in garmin-mcp's config.toml (~/.config/garmin-mcp/config.toml, $XDG_CONFIG_HOME/garmin-mcp/config.toml if set, %AppData%\\garmin-mcp\\config.toml on Windows)",
+		Hint:    "use a client with elicitation support, or set allow_no_elicit = true under the profile in connect-iq-mcp's config.toml (~/.config/connect-iq-mcp/config.toml, $XDG_CONFIG_HOME/connect-iq-mcp/config.toml if set, %AppData%\\connect-iq-mcp\\config.toml on Windows)",
 	}
 )
 
@@ -261,7 +261,7 @@ func FromUpstream(err error, h UpstreamHints) error {
 		if !h.RateLimitAPI {
 			return fmt.Errorf("%w: %s", ErrRateLimited, he.Error())
 		}
-		hint := "wait before retrying; garmin-mcp does not retry by itself"
+		hint := "wait before retrying; connect-iq-mcp does not retry by itself"
 		if he.Cloudflare {
 			hint = fmt.Sprintf("Cloudflare is rate-limiting requests to the %s (error 1015); wait several minutes before retrying and do not call auth_login", he.Service)
 		}

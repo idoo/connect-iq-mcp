@@ -18,9 +18,9 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/portal"
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/portal"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 func seal(t time.Time) string {
@@ -38,7 +38,7 @@ func jar(exp time.Time) string {
 }
 
 // Only the `session` cookie is sent and stored: an old stored jar or a jar in
-// GARMIN_MCP_PORTAL_COOKIES is trimmed on read, and the next save persists
+// CIQ_MCP_PORTAL_COOKIES is trimmed on read, and the next save persists
 // the trimmed form.
 func TestPortalJarTrimmedToSession(t *testing.T) {
 	keyring.MockInit()
@@ -56,14 +56,14 @@ func TestPortalJarTrimmedToSession(t *testing.T) {
 	if b, _, err := s.readStored(); err != nil || b.Portal.Cookies != cookies(exp) {
 		t.Fatalf("stored = %+v, %v", b.Portal, err)
 	}
-	env := testStore(t, map[string]string{"GARMIN_MCP_PORTAL_COOKIES": jar(exp)})
+	env := testStore(t, map[string]string{"CIQ_MCP_PORTAL_COOKIES": jar(exp)})
 	if got, err := env.PortalCookies(context.Background()); err != nil || got != cookies(exp) {
 		t.Fatalf("env PortalCookies = %q, %v", got, err)
 	}
 	if st := env.Status(context.Background()).Portal; !st.ExpiresAt.Equal(time.UnixMilli(exp.UnixMilli())) {
 		t.Fatalf("status expiry = %v, want %v", st.ExpiresAt, exp)
 	}
-	env = testStore(t, map[string]string{"GARMIN_MCP_PORTAL_COOKIES": "refresh_token=" + seal(exp)})
+	env = testStore(t, map[string]string{"CIQ_MCP_PORTAL_COOKIES": "refresh_token=" + seal(exp)})
 	if _, err := env.PortalCookies(context.Background()); !errors.Is(err, auth.ErrAuthRequired) {
 		t.Fatalf("env without session: %v", err)
 	}
@@ -299,20 +299,20 @@ func TestLoginHintGolden(t *testing.T) {
 	s := testStore(t, nil)
 	s.profile = "work"
 	_, err := s.PortalCookies(context.Background())
-	const portalHint = `auth_required: not signed in to the Connect IQ developer portal; call the auth_login tool (it opens a browser window for the user to sign in), or run "garmin-mcp auth login --profile work" in a terminal`
+	const portalHint = `auth_required: not signed in to the Connect IQ developer portal; call the auth_login tool (it opens a browser window for the user to sign in), or run "connect-iq-mcp auth login --profile work" in a terminal`
 	if !errors.Is(err, auth.ErrAuthRequired) || err.Error() != portalHint {
 		t.Fatalf("portal err =\n%v\nwant\n%s", err, portalHint)
 	}
 	_, err = s.ConnectToken(context.Background())
-	const connectHint = `auth_required: Garmin Connect is not enabled; a human must run "garmin-mcp auth login --connect --profile work" (or approve auth_login with connect=true); call the auth_login tool (it opens a browser window for the user to sign in), or run "garmin-mcp auth login --profile work" in a terminal`
+	const connectHint = `auth_required: Garmin Connect is not enabled; a human must run "connect-iq-mcp auth login --connect --profile work" (or approve auth_login with connect=true); call the auth_login tool (it opens a browser window for the user to sign in), or run "connect-iq-mcp auth login --profile work" in a terminal`
 	if !errors.Is(err, auth.ErrAuthRequired) || err.Error() != connectHint {
 		t.Fatalf("connect err =\n%v\nwant\n%s", err, connectHint)
 	}
 	st := s.Status(context.Background())
-	if want := `not signed in; auth_login tool or "garmin-mcp auth login --profile work"`; st.Portal.Note != want {
+	if want := `not signed in; auth_login tool or "connect-iq-mcp auth login --profile work"`; st.Portal.Note != want {
 		t.Fatalf("portal note = %q, want %q", st.Portal.Note, want)
 	}
-	if want := `not enabled (optional; health data); a human enables it with "garmin-mcp auth login --connect --profile work" or by approving auth_login with connect=true`; st.Connect.Note != want {
+	if want := `not enabled (optional; health data); a human enables it with "connect-iq-mcp auth login --connect --profile work" or by approving auth_login with connect=true`; st.Connect.Note != want {
 		t.Fatalf("connect note = %q, want %q", st.Connect.Note, want)
 	}
 }
@@ -394,8 +394,8 @@ func TestEnvOverridePrecedence(t *testing.T) {
 	srv, _ := diauth(t, 0)
 	envCookies := cookies(time.Now().Add(20 * 24 * time.Hour))
 	s := testStore(t, map[string]string{
-		"GARMIN_MCP_PORTAL_COOKIES":        envCookies,
-		"GARMIN_MCP_CONNECT_REFRESH_TOKEN": "rt-0",
+		"CIQ_MCP_PORTAL_COOKIES":        envCookies,
+		"CIQ_MCP_CONNECT_REFRESH_TOKEN": "rt-0",
 	})
 	s.diauthURL = srv.URL
 	_ = s.writeStored(blob{Portal: &portalCred{Cookies: cookies(time.Now().Add(40 * 24 * time.Hour))}})

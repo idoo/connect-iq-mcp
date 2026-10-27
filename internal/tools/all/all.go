@@ -3,9 +3,9 @@
 package all
 
 import (
-	_ "github.com/idoo/garmin-mcp/internal/tools/connect"
-	_ "github.com/idoo/garmin-mcp/internal/tools/core"
-	_ "github.com/idoo/garmin-mcp/internal/tools/sdk"
-	_ "github.com/idoo/garmin-mcp/internal/tools/simulator"
-	_ "github.com/idoo/garmin-mcp/internal/tools/store"
+	_ "github.com/idoo/connect-iq-mcp/internal/tools/connect"
+	_ "github.com/idoo/connect-iq-mcp/internal/tools/core"
+	_ "github.com/idoo/connect-iq-mcp/internal/tools/sdk"
+	_ "github.com/idoo/connect-iq-mcp/internal/tools/simulator"
+	_ "github.com/idoo/connect-iq-mcp/internal/tools/store"
 )

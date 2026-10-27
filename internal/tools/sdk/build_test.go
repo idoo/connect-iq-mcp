@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/ciqsdk"
-	"github.com/idoo/garmin-mcp/internal/ciqsdk/ciqsdktest"
-	"github.com/idoo/garmin-mcp/internal/tool"
-	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk"
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk/ciqsdktest"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool/tooltest"
 )
 
 func TestLocalSDKToolsAvailableReadOnly(t *testing.T) {
@@ -31,7 +31,7 @@ func TestLocalSDKToolsAvailableReadOnly(t *testing.T) {
 	}
 }
 
-// exportFixture sets up a fake SDK (via GARMIN_MCP_SDK) and a fake java (via
+// exportFixture sets up a fake SDK (via CIQ_MCP_SDK) and a fake java (via
 // JAVA_HOME) that records its args and writes -o, and a project with manifest
 // version 1.2.3 and a key.
 func exportFixture(t *testing.T) (k *tooltest.Kit, argsFile, iq string) {
@@ -66,7 +66,7 @@ func exportFixtureWith(t *testing.T, pre, versionAttr string) (k *tooltest.Kit, 
 	if err := os.WriteFile(filepath.Join(javaHome, "bin", "java"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GARMIN_MCP_SDK", sdk)
+	t.Setenv("CIQ_MCP_SDK", sdk)
 	t.Setenv("CIQ_SDK", "")
 	t.Setenv("JAVA_HOME", javaHome)
 
@@ -147,7 +147,7 @@ func setBuildWait(k *tooltest.Kit, d time.Duration) {
 	r.mu.Unlock()
 }
 
-// The human-set GARMIN_MCP_KEY is used when key is omitted, even outside the
+// The human-set CIQ_MCP_KEY is used when key is omitted, even outside the
 // root, and is only read.
 func TestBuildUsesEnvKeyOutsideRoot(t *testing.T) {
 	k, argsFile, iq := exportFixture(t)
@@ -197,7 +197,7 @@ func TestBuildMissingKeyHintNamesEnv(t *testing.T) {
 func TestBuildWithoutJavaReturnsError(t *testing.T) {
 	k, argsFile, _ := exportFixture(t)
 	marker := filepath.Join(t.TempDir(), "ran")
-	if err := os.WriteFile(filepath.Join(os.Getenv("GARMIN_MCP_SDK"), "bin", "monkeyc"), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(os.Getenv("CIQ_MCP_SDK"), "bin", "monkeyc"), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("JAVA_HOME", t.TempDir()) // no bin/java: FindJava fails deterministically

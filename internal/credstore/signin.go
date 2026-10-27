@@ -7,9 +7,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/flock"
-	"github.com/idoo/garmin-mcp/internal/portal"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/flock"
+	"github.com/idoo/connect-iq-mcp/internal/portal"
 )
 
 // Browser drives the profile's dedicated browser directory. The store uses
@@ -63,8 +63,8 @@ type SignedIn struct {
 // ErrPortalFromEnv and ErrConnectFromEnv refuse a sign-in whose result a
 // read-only environment override would shadow.
 var (
-	ErrPortalFromEnv  = errors.New("the developer-portal session comes from GARMIN_MCP_PORTAL_COOKIES; unset it to sign in with the browser")
-	ErrConnectFromEnv = errors.New("the Garmin Connect token comes from GARMIN_MCP_CONNECT_REFRESH_TOKEN; unset it to sign in with the browser")
+	ErrPortalFromEnv  = errors.New("the developer-portal session comes from CIQ_MCP_PORTAL_COOKIES; unset it to sign in with the browser")
+	ErrConnectFromEnv = errors.New("the Garmin Connect token comes from CIQ_MCP_CONNECT_REFRESH_TOKEN; unset it to sign in with the browser")
 )
 
 // RefuseEnv rejects a sign-in whose result would be shadowed by a read-only

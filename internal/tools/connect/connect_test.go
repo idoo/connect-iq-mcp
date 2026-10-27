@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/idoo/garmin-mcp/internal/tool"
-	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool/tooltest"
 )
 
 func kit(t *testing.T, h http.HandlerFunc) *tooltest.Kit {
@@ -172,7 +172,7 @@ func TestForbiddenHintNamesProfile(t *testing.T) {
 	})
 	k.Env.Profile.Name = "work"
 	body := tooltest.MustFail(t, tooltest.Call(t, lookup(t, "connect_hrv"), k.Env, `{"date":"2026-10-02"}`), "api_error")
-	if !strings.Contains(body.Hint, "`garmin-mcp auth login --connect --profile work`") {
+	if !strings.Contains(body.Hint, "`connect-iq-mcp auth login --connect --profile work`") {
 		t.Fatalf("hint = %q", body.Hint)
 	}
 }

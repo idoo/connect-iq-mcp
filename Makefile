@@ -5,7 +5,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 .PHONY: build test vet lint tidy tidy-check vuln docs snapshot mcpb
 
 build:
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o bin/garmin-mcp ./cmd/garmin-mcp
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o bin/connect-iq-mcp ./cmd/connect-iq-mcp
 
 test:
 	$(GO) test -race ./...

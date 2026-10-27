@@ -11,11 +11,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 // ProjectFiles is the session's [tool.Files]. Its root is, in order: the
-// explicit root (--root or GARMIN_MCP_ROOT), the MCP client's first file://
+// explicit root (--root or CIQ_MCP_ROOT), the MCP client's first file://
 // root that is a local folder, or (only when the client sent no roots) the
 // git root of the cwd. Client roots that are all unusable make file access
 // unavailable. A root picked automatically that is the filesystem root or
@@ -33,7 +33,7 @@ type ProjectFiles struct {
 
 var _ tool.RootedFiles = (*ProjectFiles)(nil)
 
-// NewProjectFiles builds the session files. explicit is --root/GARMIN_MCP_ROOT
+// NewProjectFiles builds the session files. explicit is --root/CIQ_MCP_ROOT
 // ("" for none) and must be an existing directory. Without it the default root
 // is the git root of cwd; an unsafe default is not an error here, file tools
 // report it when used.
@@ -54,7 +54,7 @@ func NewProjectFiles(explicit, cwd, home string) (*ProjectFiles, error) {
 // open confines to dir unless it is / or the home directory.
 func (pf *ProjectFiles) open(dir string) (*Files, error) {
 	if unsafeRoot(dir, pf.home) {
-		return nil, fmt.Errorf("%w: file access is off because the project folder resolved to %s (the disk root, a top-level folder, or your home folder or one containing it); start garmin-mcp with --root <project folder> or set GARMIN_MCP_ROOT",
+		return nil, fmt.Errorf("%w: file access is off because the project folder resolved to %s (the disk root, a top-level folder, or your home folder or one containing it); start connect-iq-mcp with --root <project folder> or set CIQ_MCP_ROOT",
 			tool.ErrUnavailable, dir)
 	}
 	f, err := NewFiles(dir)
@@ -85,11 +85,11 @@ func (pf *ProjectFiles) ForRoots(uris []string, listErr error) (tool.Files, erro
 		return pf.cached(dir)
 	}
 	if listErr != nil {
-		return nil, fmt.Errorf("%w: none of the client's roots is a local folder (listing them failed: %v); pass --root <project folder> or set GARMIN_MCP_ROOT", tool.ErrUnavailable, listErr)
+		return nil, fmt.Errorf("%w: none of the client's roots is a local folder (listing them failed: %v); pass --root <project folder> or set CIQ_MCP_ROOT", tool.ErrUnavailable, listErr)
 	}
 	if len(uris) > 0 {
 		shown := uris[:min(len(uris), 3)]
-		return nil, fmt.Errorf("%w: none of the client's roots is a local folder (got %q); open a local project folder in the client, or pass --root <project folder> or set GARMIN_MCP_ROOT", tool.ErrUnavailable, shown)
+		return nil, fmt.Errorf("%w: none of the client's roots is a local folder (got %q); open a local project folder in the client, or pass --root <project folder> or set CIQ_MCP_ROOT", tool.ErrUnavailable, shown)
 	}
 	if pf.defErr != nil {
 		return nil, pf.defErr

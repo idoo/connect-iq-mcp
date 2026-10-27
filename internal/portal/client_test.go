@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/upstream"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/upstream"
 )
 
 type fakeCreds struct{}

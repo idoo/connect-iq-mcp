@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/idoo/garmin-mcp/internal/portal"
-	"github.com/idoo/garmin-mcp/internal/tool"
-	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
+	"github.com/idoo/connect-iq-mcp/internal/portal"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool/tooltest"
 )
 
 // jsonText is s as it appears inside the approval prompt's JSON.

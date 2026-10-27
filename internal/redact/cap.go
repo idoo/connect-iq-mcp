@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 // DefaultMaxResponseBytes is the default result byte cap
-// (GARMIN_MCP_MAX_RESPONSE_BYTES).
+// (CIQ_MCP_MAX_RESPONSE_BYTES).
 const DefaultMaxResponseBytes = 60 << 10
 
 // CapResult bounds the compact JSON encoding of v to maxBytes (≤ 0 disables

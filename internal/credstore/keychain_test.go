@@ -139,14 +139,14 @@ func TestKeychainFallbackRules(t *testing.T) {
 	}{
 		{"unsupported platform", keyring.ErrUnsupportedPlatform, "", true, "keychain unavailable"},
 		{"no dbus", errors.New("failed to open dbus connection: DBUS_SESSION_BUS_ADDRESS not set"), "", true, "keychain unavailable"},
-		{"env off", nil, "off", true, "GARMIN_MCP_KEYRING=off"},
+		{"env off", nil, "off", true, "CIQ_MCP_KEYRING=off"},
 		{"locked keychain", errors.New("User interaction is not allowed."), "", false, ""}, //nolint:revive // verbatim macOS keychain message
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			k := useFakeKeyring(t)
 			k.set(c.err, nil)
-			s := testStore(t, map[string]string{"GARMIN_MCP_KEYRING": c.env})
+			s := testStore(t, map[string]string{"CIQ_MCP_KEYRING": c.env})
 			werr := s.writeStored(blob{Portal: &portalCred{Cookies: "session=S"}})
 			_, src, rerr := s.readStored()
 			if !c.wantFile {
@@ -165,7 +165,7 @@ func TestKeychainFallbackRules(t *testing.T) {
 				t.Fatalf("source = %q", src)
 			}
 			if c.env == "off" && k.count() != 0 {
-				t.Fatal("keychain used despite GARMIN_MCP_KEYRING=off")
+				t.Fatal("keychain used despite CIQ_MCP_KEYRING=off")
 			}
 		})
 	}
@@ -217,12 +217,12 @@ func TestNewestCopyWins(t *testing.T) {
 	if err := s.writeStored(blob{Portal: &portalCred{Cookies: "session=KEYCHAIN"}}); err != nil {
 		t.Fatal(err)
 	}
-	env["GARMIN_MCP_KEYRING"] = "off" // keychain went away; a newer save lands in the file
+	env["CIQ_MCP_KEYRING"] = "off" // keychain went away; a newer save lands in the file
 	s.now = func() time.Time { return t0.Add(time.Minute) }
 	if err := s.writeStored(blob{Portal: &portalCred{Cookies: "session=FILE"}}); err != nil {
 		t.Fatal(err)
 	}
-	delete(env, "GARMIN_MCP_KEYRING") // keychain is back with its stale copy
+	delete(env, "CIQ_MCP_KEYRING") // keychain is back with its stale copy
 	b, src, err := s.readStored()
 	if err != nil || b.Portal.Cookies != "session=FILE" || src != srcFile+" (newer than the keychain copy)" {
 		t.Fatalf("read = %+v %q %v", b.Portal, src, err)

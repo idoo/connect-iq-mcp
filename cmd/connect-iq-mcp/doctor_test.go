@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/ciqsdk"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk"
 )
 
 type fakeStore struct{ auth.Store }
@@ -97,8 +97,8 @@ func TestLocalChecksNoDisplayWarns(t *testing.T) {
 	rep := &report{w: &b}
 	localChecks(context.Background(), rep, "work")
 	out := b.String()
-	if rep.failed || !strings.Contains(out, "warn  display:") || !strings.Contains(out, "GARMIN_MCP_PORTAL_COOKIES") ||
-		!strings.Contains(out, "`garmin-mcp auth login --paste --profile work`") || !strings.Contains(out, "Copy as cURL") {
+	if rep.failed || !strings.Contains(out, "warn  display:") || !strings.Contains(out, "CIQ_MCP_PORTAL_COOKIES") ||
+		!strings.Contains(out, "`connect-iq-mcp auth login --paste --profile work`") || !strings.Contains(out, "Copy as cURL") {
 		t.Fatalf("want a display warning naming --paste:\n%s", out)
 	}
 }
@@ -111,10 +111,10 @@ func TestCredLineConnectOptional(t *testing.T) {
 	credLine(rep, "work", "portal session", auth.CredStatus{}, false)
 	credLine(rep, "work", "Connect token", auth.CredStatus{}, true)
 	out := b.String()
-	if rep.failed || strings.Count(out, "warn") != 1 || !strings.Contains(out, "warn  portal session: missing; run `garmin-mcp auth login --profile work`") {
+	if rep.failed || strings.Count(out, "warn") != 1 || !strings.Contains(out, "warn  portal session: missing; run `connect-iq-mcp auth login --profile work`") {
 		t.Fatalf("portal line:\n%s", out)
 	}
-	if !strings.Contains(out, "info  Connect token: not enabled (optional; enable with garmin-mcp auth login --connect --profile work)") {
+	if !strings.Contains(out, "info  Connect token: not enabled (optional; enable with connect-iq-mcp auth login --connect --profile work)") {
 		t.Fatalf("connect line:\n%s", out)
 	}
 }
@@ -134,7 +134,7 @@ func TestShellNote(t *testing.T) {
 	shellNote(rep)
 	out := b.String()
 	if rep.failed || !strings.HasPrefix(out, "info  env:") || !strings.Contains(out, ciqsdk.EnvKeyVar) || !strings.Contains(out, "JAVA_HOME") ||
-		!strings.Contains(out, "garmin-mcp config install") || !strings.Contains(out, "restart the client") {
+		!strings.Contains(out, "connect-iq-mcp config install") || !strings.Contains(out, "restart the client") {
 		t.Fatalf("note: %s", out)
 	}
 }
@@ -163,7 +163,7 @@ func TestKeyCheck(t *testing.T) {
 	}
 
 	t.Setenv(ciqsdk.EnvKeyVar, "")
-	if out, failed := run(); failed || !strings.Contains(out, "info  developer key: GARMIN_MCP_KEY not set") || !strings.Contains(out, "config install <client> --key") {
+	if out, failed := run(); failed || !strings.Contains(out, "info  developer key: CIQ_MCP_KEY not set") || !strings.Contains(out, "config install <client> --key") {
 		t.Fatalf("unset: %s", out)
 	}
 

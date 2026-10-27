@@ -174,7 +174,7 @@ func run(ctx context.Context, o BuildOpts, export bool) (BuildResult, error) {
 	// monkeyc writes the artefact plus gen/, mir/ and debug files next to
 	// -o; build into a private temp dir so none of it can follow a repo
 	// symlink, then move only the top-level artefacts.
-	tmp, err := os.MkdirTemp("", "garmin-mcp-build-")
+	tmp, err := os.MkdirTemp("", "connect-iq-mcp-build-")
 	if err != nil {
 		return BuildResult{}, err
 	}

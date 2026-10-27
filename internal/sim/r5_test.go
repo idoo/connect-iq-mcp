@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/ciqsdk"
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk"
 )
 
 // J6: a launched simulator that never opens its port fails with its last

@@ -2,7 +2,7 @@
 // and Garmin Connect DI OAuth2 tokens kept in the OS keychain (or a 0600 file),
 // cross-process locked refresh, and the silent-renewal policy (stamps,
 // backoff) run through an injected [Browser]. Interactive sign-in lives in
-// internal/auth/login, the `garmin-mcp auth` CLI in cmd/garmin-mcp.
+// internal/auth/login, the `connect-iq-mcp auth` CLI in cmd/connect-iq-mcp.
 package credstore
 
 import (
@@ -17,11 +17,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/config"
-	"github.com/idoo/garmin-mcp/internal/flock"
-	"github.com/idoo/garmin-mcp/internal/portal"
-	"github.com/idoo/garmin-mcp/internal/state"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/config"
+	"github.com/idoo/connect-iq-mcp/internal/flock"
+	"github.com/idoo/connect-iq-mcp/internal/portal"
+	"github.com/idoo/connect-iq-mcp/internal/state"
 )
 
 const (
@@ -57,7 +57,7 @@ type connectCred struct {
 // Store implements auth.Store for one profile.
 type Store struct {
 	profile   string
-	dir       string // garmin-mcp state directory
+	dir       string // connect-iq-mcp state directory
 	autoRenew bool
 
 	hc            *http.Client
@@ -129,7 +129,7 @@ func New(profile, stateDir string, autoRenew bool, b Browser) (*Store, error) {
 // Profile is the store's profile name.
 func (s *Store) Profile() string { return s.profile }
 
-// HasEnvCredentials reports whether GARMIN_MCP_* environment variables
+// HasEnvCredentials reports whether CIQ_MCP_* environment variables
 // provide a credential (they survive Logout).
 func (s *Store) HasEnvCredentials() bool {
 	s.mu.Lock()
@@ -159,11 +159,11 @@ func newHTTPClient() *http.Client {
 
 // loadEnv reads the environment overrides into memory.
 func (s *Store) loadEnv() {
-	if v := s.getenv("GARMIN_MCP_PORTAL_COOKIES"); v != "" {
+	if v := s.getenv("CIQ_MCP_PORTAL_COOKIES"); v != "" {
 		s.envPortal = &portalCred{Cookies: portalSession(v)}
 	}
-	if v := s.getenv("GARMIN_MCP_CONNECT_REFRESH_TOKEN"); v != "" {
-		s.envConnect = &connectCred{RefreshToken: v, ClientID: s.getenv("GARMIN_MCP_CONNECT_CLIENT_ID")}
+	if v := s.getenv("CIQ_MCP_CONNECT_REFRESH_TOKEN"); v != "" {
+		s.envConnect = &connectCred{RefreshToken: v, ClientID: s.getenv("CIQ_MCP_CONNECT_CLIENT_ID")}
 	}
 }
 
@@ -188,8 +188,8 @@ func (s *Store) browserDir() string {
 
 // keyringOff reports why configuration disables the keychain ("" = use it).
 func (s *Store) keyringOff() string {
-	if strings.EqualFold(strings.TrimSpace(s.getenv("GARMIN_MCP_KEYRING")), "off") {
-		return "GARMIN_MCP_KEYRING=off"
+	if strings.EqualFold(strings.TrimSpace(s.getenv("CIQ_MCP_KEYRING")), "off") {
+		return "CIQ_MCP_KEYRING=off"
 	}
 	return ""
 }
@@ -306,7 +306,7 @@ func UnreadableState(c auth.CredStatus) string {
 }
 
 // writeStored persists b in the keychain (in chunks). Only an unavailable
-// keychain (no backend, no D-Bus session, GARMIN_MCP_KEYRING=off) falls back
+// keychain (no backend, no D-Bus session, CIQ_MCP_KEYRING=off) falls back
 // to the 0600 file; a locked keychain or any other error is returned.
 func (s *Store) writeStored(b blob) error {
 	b.SavedAt = s.now().UnixNano()
@@ -448,7 +448,7 @@ func (s *Store) Logout(ctx context.Context) error {
 
 // deleteAll removes the keychain items, the credentials file, the renewal
 // stamp and the browser profile (after closing any browser still using it).
-// The keychain is cleared even with GARMIN_MCP_KEYRING=off, so an old copy
+// The keychain is cleared even with CIQ_MCP_KEYRING=off, so an old copy
 // cannot come back once the variable is unset.
 func (s *Store) deleteAll() error {
 	var errs []error

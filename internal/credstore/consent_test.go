@@ -9,8 +9,8 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/flock"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/flock"
 )
 
 // A portal-only sign-in must never let ConnectToken mint a Connect token from

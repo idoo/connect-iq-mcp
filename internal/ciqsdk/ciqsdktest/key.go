@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/idoo/garmin-mcp/internal/ciqsdk"
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk"
 )
 
 var (

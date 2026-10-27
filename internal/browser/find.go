@@ -14,7 +14,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/idoo/garmin-mcp/internal/state"
+	"github.com/idoo/connect-iq-mcp/internal/state"
 )
 
 // ErrNoBrowser means no Chrome, Brave, Edge or Chromium executable was found.
@@ -22,13 +22,13 @@ var ErrNoBrowser = errors.New("no Chromium-based browser found")
 
 // EnvBrowser overrides browser auto-detection. The value "bundled" forces the
 // pinned Chrome for Testing build.
-const EnvBrowser = "GARMIN_MCP_BROWSER"
+const EnvBrowser = "CIQ_MCP_BROWSER"
 
-// Bundled is the browser path or $GARMIN_MCP_BROWSER value that selects Chrome for Testing.
+// Bundled is the browser path or $CIQ_MCP_BROWSER value that selects Chrome for Testing.
 const Bundled = "bundled"
 
 // Find resolves the browser executable: an explicit path first, then
-// $GARMIN_MCP_BROWSER ("bundled" forces Chrome for Testing), then the system
+// $CIQ_MCP_BROWSER ("bundled" forces Chrome for Testing), then the system
 // default browser if it is Chromium-based, then other installed Chromium
 // browsers, then an already downloaded Chrome for Testing. It never downloads.
 func Find(path string) (string, error) {
@@ -155,7 +155,7 @@ func locate(path, env string, def func() defaultBrowser, cands []string, vet fun
 func noBrowser(tried []string, cftPath, goos, goarch string) error {
 	msg := "no Chrome for Testing build for this platform"
 	if cftPath != "" {
-		msg = "Chrome for Testing " + cftVersion + " not downloaded yet (garmin-mcp auth login fetches it)"
+		msg = "Chrome for Testing " + cftVersion + " not downloaded yet (connect-iq-mcp auth login fetches it)"
 	}
 	return fmt.Errorf("%w (tried: %s; %s); %s, or point %s at a browser (Chromium only this way)", ErrNoBrowser, strings.Join(tried, ", "), msg, installHint(goos, goarch), EnvBrowser)
 }

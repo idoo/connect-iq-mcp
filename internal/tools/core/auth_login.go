@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/browser"
-	"github.com/idoo/garmin-mcp/internal/config"
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/browser"
+	"github.com/idoo/connect-iq-mcp/internal/config"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 type authLoginIn struct {
@@ -105,14 +105,14 @@ func authLogin(ctx context.Context, env *tool.Env, in authLoginIn) (*tool.Result
 		return nil, &tool.Error{
 			Code:    "login_unavailable",
 			Message: config.EnvCI + " is set: no human is present to sign in",
-			Hint:    "provide credentials through GARMIN_MCP_PORTAL_COOKIES / GARMIN_MCP_CONNECT_REFRESH_TOKEN in CI",
+			Hint:    "provide credentials through CIQ_MCP_PORTAL_COOKIES / CIQ_MCP_CONNECT_REFRESH_TOKEN in CI",
 		}
 	}
 	lg, ok := env.Credentials.(auth.Loginer)
 	if env.Credentials == nil || !ok {
 		return nil, &tool.Error{
 			Code:    "login_unavailable",
-			Message: "this garmin-mcp build has no interactive sign-in",
+			Message: "this connect-iq-mcp build has no interactive sign-in",
 			Hint:    "ask the user to run `" + tool.LoginCommand(env.Profile.Name) + "` in a terminal",
 		}
 	}

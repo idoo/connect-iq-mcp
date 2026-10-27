@@ -1,13 +1,13 @@
 # Contributing
 
-Garmin MCP is small on purpose. Open a short issue before a big PR. How the packages fit together is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Connect IQ MCP is small on purpose. Open a short issue before a big PR. How the packages fit together is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Setup
 
 Go 1.25+, plus golangci-lint v2 for linting.
 
 ```sh
-make build      # bin/garmin-mcp
+make build      # bin/connect-iq-mcp
 make test       # go test -race ./...
 make vet
 make lint

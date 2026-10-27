@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/config"
-	"github.com/idoo/garmin-mcp/internal/state"
+	"github.com/idoo/connect-iq-mcp/internal/config"
+	"github.com/idoo/connect-iq-mcp/internal/state"
 )
 
 // authTestEnv isolates the auth CLI in temp dirs with the keychain off and
@@ -19,16 +19,16 @@ func authTestEnv(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	for k, v := range map[string]string{
-		"HOME":                             home,
-		"USERPROFILE":                      home,
-		"XDG_CONFIG_HOME":                  filepath.Join(home, "cfg"),
-		"AppData":                          filepath.Join(home, "cfg"),
-		"XDG_STATE_HOME":                   filepath.Join(home, "state"),
-		"LocalAppData":                     filepath.Join(home, "state"),
-		"GARMIN_MCP_KEYRING":               "off",
-		"GARMIN_MCP_PROFILE":               "",
-		"GARMIN_MCP_PORTAL_COOKIES":        "",
-		"GARMIN_MCP_CONNECT_REFRESH_TOKEN": "",
+		"HOME":                          home,
+		"USERPROFILE":                   home,
+		"XDG_CONFIG_HOME":               filepath.Join(home, "cfg"),
+		"AppData":                       filepath.Join(home, "cfg"),
+		"XDG_STATE_HOME":                filepath.Join(home, "state"),
+		"LocalAppData":                  filepath.Join(home, "state"),
+		"CIQ_MCP_KEYRING":               "off",
+		"CIQ_MCP_PROFILE":               "",
+		"CIQ_MCP_PORTAL_COOKIES":        "",
+		"CIQ_MCP_CONNECT_REFRESH_TOKEN": "",
 	} {
 		t.Setenv(k, v)
 	}

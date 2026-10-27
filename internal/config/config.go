@@ -16,14 +16,14 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"github.com/idoo/garmin-mcp/internal/state"
+	"github.com/idoo/connect-iq-mcp/internal/state"
 )
 
-// Config is the user's config file (~/.config/garmin-mcp/config.toml).
+// Config is the user's config file (~/.config/connect-iq-mcp/config.toml).
 type Config struct {
 	// DefaultProfile names the profile used when nothing else selects one.
 	DefaultProfile string `toml:"default_profile,omitempty"`
-	// TrustedPins lists absolute directories whose .garmin-mcp.toml may select any profile.
+	// TrustedPins lists absolute directories whose .connect-iq-mcp.toml may select any profile.
 	TrustedPins []string `toml:"trusted_pins,omitempty"`
 	// Profiles maps profile names to settings. Credentials live in the OS
 	// keychain, or a 0600 state file when no keychain is available (see
@@ -36,7 +36,7 @@ type Config struct {
 type Profile struct {
 	AllowWrites   bool `toml:"allow_writes,omitempty"`
 	AllowNoElicit bool `toml:"allow_no_elicit,omitempty"`
-	// AutoRenew lets garmin-mcp silently renew expiring Garmin sessions with the
+	// AutoRenew lets connect-iq-mcp silently renew expiring Garmin sessions with the
 	// dedicated browser profile. nil means true.
 	AutoRenew *bool `toml:"auto_renew,omitempty"`
 }
@@ -44,16 +44,16 @@ type Profile struct {
 // AutoRenewEnabled reports the effective auto_renew setting (default true).
 func (p Profile) AutoRenewEnabled() bool { return p.AutoRenew == nil || *p.AutoRenew }
 
-// DefaultPath returns the config file path: $XDG_CONFIG_HOME/garmin-mcp/config.toml,
-// ~/.config/garmin-mcp/config.toml, or %AppData%\garmin-mcp\config.toml on Windows.
+// DefaultPath returns the config file path: $XDG_CONFIG_HOME/connect-iq-mcp/config.toml,
+// ~/.config/connect-iq-mcp/config.toml, or %AppData%\connect-iq-mcp\config.toml on Windows.
 func DefaultPath(getenv func(string) string) (string, error) {
 	if runtime.GOOS == "windows" {
 		if d := getenv("AppData"); d != "" {
-			return filepath.Join(d, "garmin-mcp", "config.toml"), nil
+			return filepath.Join(d, "connect-iq-mcp", "config.toml"), nil
 		}
 	}
 	if d := getenv("XDG_CONFIG_HOME"); d != "" && filepath.IsAbs(d) {
-		return filepath.Join(d, "garmin-mcp", "config.toml"), nil
+		return filepath.Join(d, "connect-iq-mcp", "config.toml"), nil
 	}
 	home := getenv("HOME")
 	if home == "" {
@@ -63,7 +63,7 @@ func DefaultPath(getenv func(string) string) (string, error) {
 		}
 		home = h
 	}
-	return filepath.Join(home, ".config", "garmin-mcp", "config.toml"), nil
+	return filepath.Join(home, ".config", "connect-iq-mcp", "config.toml"), nil
 }
 
 // Load reads the config at path. A missing file yields an empty Config.

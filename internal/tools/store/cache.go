@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/portal"
-	"github.com/idoo/garmin-mcp/internal/tool"
-	"github.com/idoo/garmin-mcp/internal/upstream"
+	"github.com/idoo/connect-iq-mcp/internal/portal"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/upstream"
 )
 
 // cacheTTL bounds how long the app list and manifest map are reused.

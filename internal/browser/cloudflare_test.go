@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
 )
 
 const (

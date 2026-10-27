@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/ciqsdk"
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk"
 )
 
 func refusedDial(context.Context, string, string) (net.Conn, error) {

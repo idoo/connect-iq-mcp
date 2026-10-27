@@ -9,7 +9,7 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/idoo/garmin-mcp/internal/portal"
+	"github.com/idoo/connect-iq-mcp/internal/portal"
 )
 
 func okVerify(_ context.Context, _ *http.Client, h string) (portal.Developer, string, error) {
@@ -44,11 +44,11 @@ func TestValidLockedSkipsBrowser(t *testing.T) {
 
 func TestRefuseEnv(t *testing.T) {
 	keyring.MockInit()
-	s := testStore(t, map[string]string{"GARMIN_MCP_PORTAL_COOKIES": cookies(time.Now().Add(time.Hour))})
+	s := testStore(t, map[string]string{"CIQ_MCP_PORTAL_COOKIES": cookies(time.Now().Add(time.Hour))})
 	if err := s.RefuseEnv(false); !errors.Is(err, ErrPortalFromEnv) {
 		t.Fatalf("err = %v", err)
 	}
-	s = testStore(t, map[string]string{"GARMIN_MCP_CONNECT_REFRESH_TOKEN": "rt"})
+	s = testStore(t, map[string]string{"CIQ_MCP_CONNECT_REFRESH_TOKEN": "rt"})
 	if err := s.RefuseEnv(false); err != nil {
 		t.Fatalf("portal-only err = %v", err)
 	}

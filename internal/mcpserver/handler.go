@@ -7,8 +7,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/idoo/garmin-mcp/internal/redact"
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/redact"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 type sessionKey struct{}

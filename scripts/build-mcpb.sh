@@ -1,17 +1,17 @@
 #!/bin/sh
 # Pack goreleaser's dist/ binaries into one cross-platform Claude Desktop
-# bundle: dist/garmin-mcp-<version>.mcpb plus dist/garmin-mcp-<version>.mcpb.sha256.
+# bundle: dist/connect-iq-mcp-<version>.mcpb plus dist/connect-iq-mcp-<version>.mcpb.sha256.
 #
 # Bundle layout (server/):
-#   garmin-mcp-darwin               universal (arm64 + amd64)
-#   garmin-mcp-linux                sh dispatcher on `uname -m`
-#   garmin-mcp-linux-amd64, garmin-mcp-linux-arm64
-#   garmin-mcp-windows-amd64.exe    win32 is amd64-only: mcpb's platform_overrides
+#   connect-iq-mcp-darwin               universal (arm64 + amd64)
+#   connect-iq-mcp-linux                sh dispatcher on `uname -m`
+#   connect-iq-mcp-linux-amd64, connect-iq-mcp-linux-arm64
+#   connect-iq-mcp-windows-amd64.exe    win32 is amd64-only: mcpb's platform_overrides
 #                                   are per OS, not per arch, and win32 needs a real
 #                                   .exe (no sh dispatcher). Windows 11 on Arm runs it
 #                                   under x64 emulation; Windows 10 on Arm can't, so
 #                                   there use the windows_arm64 release archive and
-#                                   `garmin-mcp config install claude-desktop`.
+#                                   `connect-iq-mcp config install claude-desktop`.
 # The manifest's tool list is generated from docs/tools.json (default
 # toolsets, tools listed in read-only mode).
 #
@@ -70,7 +70,7 @@ version=${version#v}
 # Find one binary in dist/ by goreleaser target directory prefix.
 find_bin() {
 	for d in "$dist"/$1; do
-		for f in "$d/garmin-mcp" "$d/garmin-mcp.exe"; do
+		for f in "$d/connect-iq-mcp" "$d/connect-iq-mcp.exe"; do
 			if [ -f "$f" ]; then
 				printf '%s\n' "$f"
 				return 0
@@ -85,21 +85,21 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT INT TERM
 mkdir -p "$stage/server"
 
-cp "$(find_bin 'garmin-mcp-universal_darwin_all')" "$stage/server/garmin-mcp-darwin"
-cp "$(find_bin 'garmin-mcp_linux_amd64*')" "$stage/server/garmin-mcp-linux-amd64"
-cp "$(find_bin 'garmin-mcp_linux_arm64*')" "$stage/server/garmin-mcp-linux-arm64"
-cp "$(find_bin 'garmin-mcp_windows_amd64*')" "$stage/server/garmin-mcp-windows-amd64.exe"
-cat >"$stage/server/garmin-mcp-linux" <<'EOF'
+cp "$(find_bin 'connect-iq-mcp-universal_darwin_all')" "$stage/server/connect-iq-mcp-darwin"
+cp "$(find_bin 'connect-iq-mcp_linux_amd64*')" "$stage/server/connect-iq-mcp-linux-amd64"
+cp "$(find_bin 'connect-iq-mcp_linux_arm64*')" "$stage/server/connect-iq-mcp-linux-arm64"
+cp "$(find_bin 'connect-iq-mcp_windows_amd64*')" "$stage/server/connect-iq-mcp-windows-amd64.exe"
+cat >"$stage/server/connect-iq-mcp-linux" <<'EOF'
 #!/bin/sh
 # mcpb platform overrides are per-OS; pick the Linux binary for this CPU.
 dir=$(dirname -- "$0")
 case $(uname -m) in
-aarch64 | arm64) exec "$dir/garmin-mcp-linux-arm64" "$@" ;;
-*) exec "$dir/garmin-mcp-linux-amd64" "$@" ;;
+aarch64 | arm64) exec "$dir/connect-iq-mcp-linux-arm64" "$@" ;;
+*) exec "$dir/connect-iq-mcp-linux-amd64" "$@" ;;
 esac
 EOF
-chmod 0755 "$stage/server/garmin-mcp-darwin" "$stage/server/garmin-mcp-linux" \
-	"$stage/server/garmin-mcp-linux-amd64" "$stage/server/garmin-mcp-linux-arm64"
+chmod 0755 "$stage/server/connect-iq-mcp-darwin" "$stage/server/connect-iq-mcp-linux" \
+	"$stage/server/connect-iq-mcp-linux-amd64" "$stage/server/connect-iq-mcp-linux-arm64"
 
 cp "$root/packaging/mcpb/icon.png" "$root/LICENSE" "$stage/"
 make_manifest "$version" "$stage/manifest.json"
@@ -108,7 +108,7 @@ if [ "${MCPB_SKIP_VALIDATE:-}" != 1 ]; then
 	validate_manifest "$stage/manifest.json"
 fi
 
-out="$dist/garmin-mcp-$version.mcpb"
+out="$dist/connect-iq-mcp-$version.mcpb"
 rm -f "$out" "$out.sha256"
 (cd "$stage" && zip -qrX "$out" manifest.json icon.png LICENSE server)
 if command -v sha256sum >/dev/null 2>&1; then
@@ -117,5 +117,5 @@ else
 	sum=$(shasum -a 256 "$out" | awk '{ print $1 }')
 fi
 # Same "<sha256>  <name>" format as checksums.txt, so `sha256sum -c` works.
-printf '%s  %s\n' "$sum" "garmin-mcp-$version.mcpb" >"$out.sha256"
+printf '%s  %s\n' "$sum" "connect-iq-mcp-$version.mcpb" >"$out.sha256"
 echo "$out"

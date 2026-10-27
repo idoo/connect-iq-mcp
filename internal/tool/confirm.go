@@ -190,7 +190,7 @@ const hiddenWarning = "WARNING: contains hidden characters (shown as \\u{XXXX})\
 // [ErrInvalidArgs] when the escaped prompt exceeds [MaxApprovalPrompt] runes.
 func ApprovalPrompt(toolName string, p PlanPreview) (string, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "garmin-mcp %s wants to: %s", toolName, p.Summary)
+	fmt.Fprintf(&b, "connect-iq-mcp %s wants to: %s", toolName, p.Summary)
 	if len(p.Affected) > 0 {
 		b.WriteString("\nTargets: " + strings.Join(p.Affected, ", "))
 	}

@@ -21,7 +21,7 @@ func profilePIDs(profile string) []int {
 // patterns travel in environment variables (UTF-16, so non-ASCII paths
 // survive), never in the PowerShell source.
 func queryPIDs(profile, filter string) []int {
-	script := `$pats = @($env:GARMIN_MCP_ARG0, $env:GARMIN_MCP_ARG1, $env:GARMIN_MCP_ARG2); $suf = $env:GARMIN_MCP_ARGEND; ` +
+	script := `$pats = @($env:CIQ_MCP_ARG0, $env:CIQ_MCP_ARG1, $env:CIQ_MCP_ARG2); $suf = $env:CIQ_MCP_ARGEND; ` +
 		`Get-CimInstance Win32_Process | Where-Object { $c = $_.CommandLine; $c -and ($c.EndsWith($suf) -or @($pats | Where-Object { $c.Contains($_) }).Count -gt 0) }`
 	if filter != "" {
 		script += ` | Where-Object { ` + filter + ` }`
@@ -30,8 +30,8 @@ func queryPIDs(profile, filter string) []int {
 	contains, suffix := profileArgForms(profile)
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script) //nolint:gosec // fixed program; script is built from constants, the path travels in env
 	cmd.Env = append(os.Environ(),
-		"GARMIN_MCP_ARG0="+contains[0], "GARMIN_MCP_ARG1="+contains[1], "GARMIN_MCP_ARG2="+contains[2],
-		"GARMIN_MCP_ARGEND="+suffix)
+		"CIQ_MCP_ARG0="+contains[0], "CIQ_MCP_ARG1="+contains[1], "CIQ_MCP_ARG2="+contains[2],
+		"CIQ_MCP_ARGEND="+suffix)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil

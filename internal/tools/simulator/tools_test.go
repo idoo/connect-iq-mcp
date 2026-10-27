@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/ciqsdk"
-	"github.com/idoo/garmin-mcp/internal/ciqsdk/ciqsdktest"
-	"github.com/idoo/garmin-mcp/internal/sim"
-	"github.com/idoo/garmin-mcp/internal/tool"
-	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk"
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk/ciqsdktest"
+	"github.com/idoo/connect-iq-mcp/internal/sim"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool/tooltest"
 )
 
 func TestRegistered(t *testing.T) {
@@ -64,7 +64,7 @@ func TestRunRefusesEscapingJungleBeforeMonkeyc(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(javaHome, "bin", "java"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GARMIN_MCP_SDK", sdk)
+	t.Setenv("CIQ_MCP_SDK", sdk)
 	t.Setenv("CIQ_SDK", "")
 	t.Setenv("JAVA_HOME", javaHome)
 	k := tooltest.New(t)

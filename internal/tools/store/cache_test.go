@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
+	"github.com/idoo/connect-iq-mcp/internal/tool/tooltest"
 )
 
 // Parallel lookups by manifest id race with a store write on the cache

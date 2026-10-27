@@ -430,7 +430,7 @@
     "toolset": "sdk",
     "class": "W",
     "title": "Build with monkeyc",
-    "description": "monkeyc build: one device PRG, or device \"all\" for the store .iq (never replaces an .iq without overwrite). Key defaults to GARMIN_MCP_KEY. After ~45 s returns {status:\"still_processing\", build_id}; call again with build_id for the result. Structured diagnostics.",
+    "description": "monkeyc build: one device PRG, or device \"all\" for the store .iq (never replaces an .iq without overwrite). Key defaults to CIQ_MCP_KEY. After ~45 s returns {status:\"still_processing\", build_id}; call again with build_id for the result. Structured diagnostics.",
     "annotations": {
       "destructiveHint": false,
       "idempotentHint": false,
@@ -454,7 +454,7 @@
           "type": "string"
         },
         "key": {
-          "description": "developer key (.der) inside the root (default: GARMIN_MCP_KEY, set by the human, may be outside the root)",
+          "description": "developer key (.der) inside the root (default: CIQ_MCP_KEY, set by the human, may be outside the root)",
           "type": "string"
         },
         "overwrite": {
@@ -470,7 +470,7 @@
           "type": "boolean"
         },
         "sdk": {
-          "description": "installed SDK version or dir name, e.g. 9.2.0 (default: GARMIN_MCP_SDK env, current-sdk.cfg, newest installed); a custom SDK outside the SDK Manager dir only via GARMIN_MCP_SDK",
+          "description": "installed SDK version or dir name, e.g. 9.2.0 (default: CIQ_MCP_SDK env, current-sdk.cfg, newest installed); a custom SDK outside the SDK Manager dir only via CIQ_MCP_SDK",
           "type": "string"
         },
         "test": {
@@ -582,7 +582,7 @@
       "additionalProperties": false,
       "properties": {
         "sdk": {
-          "description": "installed SDK version or dir name, e.g. 9.2.0; a custom SDK only via GARMIN_MCP_SDK",
+          "description": "installed SDK version or dir name, e.g. 9.2.0; a custom SDK only via CIQ_MCP_SDK",
           "type": "string"
         }
       },
@@ -607,7 +607,7 @@
       "additionalProperties": false,
       "properties": {
         "path": {
-          "description": "developer key (.der) inside the root (default: GARMIN_MCP_KEY)",
+          "description": "developer key (.der) inside the root (default: CIQ_MCP_KEY)",
           "type": "string"
         }
       },
@@ -621,7 +621,7 @@
     "toolset": "sdk",
     "class": "W",
     "title": "Generate developer key",
-    "description": "Create an RSA-4096 DER developer key (0600) only for a brand-new app; updates must be signed with the key of the first upload (use GARMIN_MCP_KEY). In a git repo the path must be gitignored. Never overwrites. Back it up.",
+    "description": "Create an RSA-4096 DER developer key (0600) only for a brand-new app; updates must be signed with the key of the first upload (use CIQ_MCP_KEY). In a git repo the path must be gitignored. Never overwrites. Back it up.",
     "annotations": {
       "destructiveHint": false,
       "idempotentHint": false,
@@ -851,7 +851,7 @@
           "type": "string"
         },
         "key": {
-          "description": "developer key (.der) inside the root; default GARMIN_MCP_KEY; needed when building",
+          "description": "developer key (.der) inside the root; default CIQ_MCP_KEY; needed when building",
           "type": "string"
         },
         "prg": {
@@ -863,7 +863,7 @@
           "type": "string"
         },
         "sdk": {
-          "description": "installed SDK version or dir name; custom SDK only via GARMIN_MCP_SDK",
+          "description": "installed SDK version or dir name; custom SDK only via CIQ_MCP_SDK",
           "type": "string"
         },
         "test": {

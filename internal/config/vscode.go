@@ -7,7 +7,7 @@ import (
 
 // VSCodeUserConfigs returns mcp.json in every existing VS Code User dir
 // (Code, Code - OSS, VSCodium, and on Linux their Flatpaks), or Code's when
-// none exists yet. These are the files `garmin-mcp config install vscode`
+// none exists yet. These are the files `connect-iq-mcp config install vscode`
 // writes; configDir is os.UserConfigDir.
 func VSCodeUserConfigs(goos, home, configDir string) []string {
 	dirs := []string{

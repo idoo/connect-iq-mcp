@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/ciqsdk"
-	"github.com/idoo/garmin-mcp/internal/sim"
-	"github.com/idoo/garmin-mcp/internal/tool"
-	"github.com/idoo/garmin-mcp/internal/tools/sdk"
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk"
+	"github.com/idoo/connect-iq-mcp/internal/sim"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tools/sdk"
 )
 
 func init() {
@@ -104,7 +104,7 @@ func simErr(err error) error {
 	case err != nil && err.Error() == "unsupported_on_"+runtime.GOOS:
 		return &tool.Error{Code: err.Error(), Message: "not implemented on " + runtime.GOOS + "; GUI automation is macOS-only for now"}
 	case errors.Is(err, sim.ErrNoDisplay):
-		return &tool.Error{Code: tool.ErrUnavailable.Code, Message: err.Error(), Hint: "run garmin-mcp inside a desktop session (or under xvfb-run; on WSL use WSLg), then retry"}
+		return &tool.Error{Code: tool.ErrUnavailable.Code, Message: err.Error(), Hint: "run connect-iq-mcp inside a desktop session (or under xvfb-run; on WSL use WSLg), then retry"}
 	case errors.Is(err, sim.ErrSimulatorExited):
 		return &tool.Error{Code: "sim_exited", Message: err.Error(), Hint: "fix what the simulator output names (display, missing libraries such as libwebkit2gtk), then retry sim_run"}
 	case errors.Is(err, sim.ErrTooManySessions):
@@ -160,11 +160,11 @@ func simStop(ctx context.Context, env *tool.Env, in stopIn) (*tool.Result, error
 // --- run / test ---
 
 type runIn struct {
-	SDK     string `json:"sdk,omitempty" jsonschema:"installed SDK version or dir name; custom SDK only via GARMIN_MCP_SDK"`
+	SDK     string `json:"sdk,omitempty" jsonschema:"installed SDK version or dir name; custom SDK only via CIQ_MCP_SDK"`
 	Device  string `json:"device" jsonschema:"device id, e.g. fenix7"`
 	PRG     string `json:"prg,omitempty" jsonschema:"PRG inside the root; omit to build project"`
 	Project string `json:"project,omitempty" jsonschema:"project dir inside the root to build (default: root)"`
-	Key     string `json:"key,omitempty" jsonschema:"developer key (.der) inside the root; default GARMIN_MCP_KEY; needed when building"`
+	Key     string `json:"key,omitempty" jsonschema:"developer key (.der) inside the root; default CIQ_MCP_KEY; needed when building"`
 	Test    bool   `json:"test,omitempty" jsonschema:"run (:test) unit tests: build with -t or take a test PRG, run monkeydo -t, return the parsed report (exit code ignored)"`
 	Filter  string `json:"filter,omitempty" jsonschema:"with test: run only this test name (letters, digits, _ . * : -; no leading -)"`
 }
@@ -186,7 +186,7 @@ func checkPRG(p string) error {
 }
 
 // simKey returns the build key: an agent-supplied key confined to the root,
-// else the human-set GARMIN_MCP_KEY (read only, may be outside the root).
+// else the human-set CIQ_MCP_KEY (read only, may be outside the root).
 func simKey(env *tool.Env, key string) (string, error) {
 	if key != "" {
 		return env.Root.Resolve(key)

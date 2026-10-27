@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/ciqsdk"
-	"github.com/idoo/garmin-mcp/internal/sim"
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk"
+	"github.com/idoo/connect-iq-mcp/internal/sim"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 // allDevices is the sdk_build device value that exports the store package.
@@ -26,11 +26,11 @@ const allDevices = "all"
 
 type buildIn struct {
 	BuildID   string `json:"build_id,omitempty" jsonschema:"wait for a build that returned still_processing; other args are ignored"`
-	SDK       string `json:"sdk,omitempty" jsonschema:"installed SDK version or dir name, e.g. 9.2.0 (default: GARMIN_MCP_SDK env, current-sdk.cfg, newest installed); a custom SDK outside the SDK Manager dir only via GARMIN_MCP_SDK"`
+	SDK       string `json:"sdk,omitempty" jsonschema:"installed SDK version or dir name, e.g. 9.2.0 (default: CIQ_MCP_SDK env, current-sdk.cfg, newest installed); a custom SDK outside the SDK Manager dir only via CIQ_MCP_SDK"`
 	Project   string `json:"project,omitempty" jsonschema:"project dir inside the root (default: root)"`
 	Jungle    string `json:"jungle,omitempty" jsonschema:"jungle file relative to the project (default monkey.jungle)"`
 	Device    string `json:"device,omitempty" jsonschema:"device id, e.g. fenix7 (writes <project>/bin/<device>.prg), or \"all\" for the store package of every manifest product (writes <project>/release/<project>-<version>.iq; slow)"`
-	Key       string `json:"key,omitempty" jsonschema:"developer key (.der) inside the root (default: GARMIN_MCP_KEY, set by the human, may be outside the root)"`
+	Key       string `json:"key,omitempty" jsonschema:"developer key (.der) inside the root (default: CIQ_MCP_KEY, set by the human, may be outside the root)"`
 	Release   bool   `json:"release,omitempty" jsonschema:"release build (-r); always on for device \"all\""`
 	Test      bool   `json:"test,omitempty" jsonschema:"unit-test build (-t) of one device; not with release"`
 	Version   string `json:"version,omitempty" jsonschema:"device \"all\": version for the .iq name (default: manifest version, else a YYYYMMDD-HHMMSS timestamp)"`
@@ -137,7 +137,7 @@ func jungleArgs(err error) error {
 }
 
 // resolveKey returns the developer key path: an agent-supplied key confined
-// to the root, else the human-set GARMIN_MCP_KEY (the only path allowed
+// to the root, else the human-set CIQ_MCP_KEY (the only path allowed
 // outside the root; it is only ever read).
 func resolveKey(env *tool.Env, key string) (string, error) {
 	if key != "" {
@@ -455,7 +455,7 @@ type keyGenIn struct {
 }
 
 type keyCheckIn struct {
-	Path string `json:"path,omitempty" jsonschema:"developer key (.der) inside the root (default: GARMIN_MCP_KEY)"`
+	Path string `json:"path,omitempty" jsonschema:"developer key (.der) inside the root (default: CIQ_MCP_KEY)"`
 }
 
 func sdkKeyGenerate(ctx context.Context, env *tool.Env, in keyGenIn) (*tool.Result, error) {

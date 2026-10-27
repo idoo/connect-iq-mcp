@@ -7,14 +7,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
 )
 
 // ProfileInfo describes the active profile (never secrets).
 type ProfileInfo struct {
 	Name        string `json:"name"`
 	AllowWrites bool   `json:"allow_writes"`
-	// PinSource is the path of the .garmin-mcp.toml pin that selected the profile, if any.
+	// PinSource is the path of the .connect-iq-mcp.toml pin that selected the profile, if any.
 	PinSource string `json:"pin_source,omitempty"`
 	// AllowNoElicit lets RequireHuman tools proceed on an agent confirmation
 	// when the client cannot elicit (config opt-in).
@@ -53,7 +53,7 @@ type Toolsets interface {
 	Disable(ctx context.Context, names ...Toolset) error
 }
 
-// Files gives tools confined filesystem access: an explicit --root/GARMIN_MCP_ROOT,
+// Files gives tools confined filesystem access: an explicit --root/CIQ_MCP_ROOT,
 // else the MCP client's roots, else (only when the client sent none) the git
 // root of the cwd. A fallback root of / or the home directory is refused.
 // Symlink escapes are refused.
@@ -115,9 +115,9 @@ type Env struct {
 	Root    Files
 	Clock   Clock
 	Profile ProfileInfo
-	// Version is the garmin-mcp build version.
+	// Version is the connect-iq-mcp build version.
 	Version string
-	// NoConfirm skips the preview step (CI only: --no-confirm with GARMIN_MCP_CI=1).
+	// NoConfirm skips the preview step (CI only: --no-confirm with CIQ_MCP_CI=1).
 	// RequireHuman tools still require approval.
 	NoConfirm bool
 	// SetWrites flips the session's write capability below the tool layer.

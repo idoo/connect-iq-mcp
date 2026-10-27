@@ -16,25 +16,25 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/auth/login"
-	"github.com/idoo/garmin-mcp/internal/config"
-	"github.com/idoo/garmin-mcp/internal/credstore"
-	"github.com/idoo/garmin-mcp/internal/portal"
-	"github.com/idoo/garmin-mcp/internal/state"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/auth/login"
+	"github.com/idoo/connect-iq-mcp/internal/config"
+	"github.com/idoo/connect-iq-mcp/internal/credstore"
+	"github.com/idoo/connect-iq-mcp/internal/portal"
+	"github.com/idoo/connect-iq-mcp/internal/state"
 )
 
 // authStdin is read by `auth login --paste` and the logout confirmation.
 var authStdin io.Reader = os.Stdin
 
 const authUsage = `usage:
-  garmin-mcp auth login  [--profile P] [--connect] [--browser PATH] [--paste]
-  garmin-mcp auth status [--profile P] [--json]
-  garmin-mcp auth renew  [--profile P]
-  garmin-mcp auth logout [--profile P]
-  garmin-mcp auth export --portal [--profile P]   (stdout must not be a terminal)`
+  connect-iq-mcp auth login  [--profile P] [--connect] [--browser PATH] [--paste]
+  connect-iq-mcp auth status [--profile P] [--json]
+  connect-iq-mcp auth renew  [--profile P]
+  connect-iq-mcp auth logout [--profile P]
+  connect-iq-mcp auth export --portal [--profile P]   (stdout must not be a terminal)`
 
-// authCLI runs `garmin-mcp auth ARGS` and returns the exit code.
+// authCLI runs `connect-iq-mcp auth ARGS` and returns the exit code.
 func authCLI(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprintln(stderr, authUsage)
@@ -289,7 +289,7 @@ func authLogout(ctx context.Context, s *credstore.Store, stdout, stderr io.Write
 	}
 	_, _ = fmt.Fprintf(stdout, "Signed out of profile %s.\n", s.Profile())
 	if s.HasEnvCredentials() {
-		_, _ = fmt.Fprintln(stdout, "Note: GARMIN_MCP_* environment variables still provide credentials.")
+		_, _ = fmt.Fprintln(stdout, "Note: CIQ_MCP_* environment variables still provide credentials.")
 	}
 	return nil
 }

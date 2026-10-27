@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	keyringService = "garmin-mcp"
+	keyringService = "connect-iq-mcp"
 	// keyringChunk keeps every item well under the smallest backend limit
 	// (Windows Credential Manager: 2560 bytes per blob).
 	keyringChunk = 2000
@@ -45,13 +45,13 @@ const (
 
 // errKeyringUnavailable marks a keychain that cannot be used at all (no
 // backend, no D-Bus session, a dead bus socket, no Windows logon session).
-// Only then (or with GARMIN_MCP_KEYRING=off) do credentials go to the file.
+// Only then (or with CIQ_MCP_KEYRING=off) do credentials go to the file.
 var errKeyringUnavailable = errors.New("keychain unavailable")
 
 // errKeyringLocked marks a keychain that exists but cannot be used right now
 // (locked, or its unlock prompt cannot be shown). It never falls back to the
 // file, on read or write.
-var errKeyringLocked = errors.New("the system keychain is locked or cannot show its unlock prompt; unlock it (Linux: log in to the desktop or `gnome-keyring-daemon --unlock`) and retry, or set GARMIN_MCP_KEYRING=off to use a 0600 file")
+var errKeyringLocked = errors.New("the system keychain is locked or cannot show its unlock prompt; unlock it (Linux: log in to the desktop or `gnome-keyring-daemon --unlock`) and retry, or set CIQ_MCP_KEYRING=off to use a 0600 file")
 
 // errStoredUnreadable marks a stored credential blob that was read but is
 // damaged (incomplete chunk set, checksum mismatch, bad JSON). Saves replace

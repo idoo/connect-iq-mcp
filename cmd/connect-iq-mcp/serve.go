@@ -8,9 +8,9 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/idoo/garmin-mcp/internal/app"
-	"github.com/idoo/garmin-mcp/internal/config"
-	"github.com/idoo/garmin-mcp/internal/mcpserver"
+	"github.com/idoo/connect-iq-mcp/internal/app"
+	"github.com/idoo/connect-iq-mcp/internal/config"
+	"github.com/idoo/connect-iq-mcp/internal/mcpserver"
 )
 
 // optionalBool is a flag that records whether it was given.
@@ -49,7 +49,7 @@ func (s *optionalString) String() string {
 
 func (s *optionalString) Set(v string) error { s.v = &v; return nil }
 
-// serveArgs is the parsed `garmin-mcp serve` command line.
+// serveArgs is the parsed `connect-iq-mcp serve` command line.
 type serveArgs struct {
 	flags    config.Flags
 	httpAddr string
@@ -61,14 +61,14 @@ type serveArgs struct {
 func parseServeArgs(args []string, out io.Writer) (*serveArgs, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(out)
-	profile := fs.String("profile", "", "profile name (overrides GARMIN_MCP_PROFILE and .garmin-mcp.toml)")
+	profile := fs.String("profile", "", "profile name (overrides CIQ_MCP_PROFILE and .connect-iq-mcp.toml)")
 	var writes, discovery optionalBool
 	var toolsets optionalString
 	fs.Var(&writes, "allow-writes", "enable write tools for this session")
 	fs.Var(&toolsets, "toolsets", `toolsets expression, e.g. "all" or "+connect,-simulator"`)
 	fs.Var(&discovery, "discovery", "list only core tools; enable others at runtime")
-	noConfirm := fs.Bool("no-confirm", false, "skip previews (honored only with GARMIN_MCP_CI=1)")
-	root := fs.String("root", "", "directory file tools may read and write (default: GARMIN_MCP_ROOT, the client's MCP roots, or the git root)")
+	noConfirm := fs.Bool("no-confirm", false, "skip previews (honored only with CIQ_MCP_CI=1)")
+	root := fs.String("root", "", "directory file tools may read and write (default: CIQ_MCP_ROOT, the client's MCP roots, or the git root)")
 	httpAddr := fs.String("http", "", "serve Streamable HTTP on ADDR (e.g. 127.0.0.1:8765) instead of stdio")
 	allowRemote := fs.Bool("allow-remote", false, "allow a non-loopback --http address (requires TLS)")
 	tlsCert := fs.String("tls-cert", "", "TLS certificate PEM for --http")

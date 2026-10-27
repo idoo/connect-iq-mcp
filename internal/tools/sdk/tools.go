@@ -10,9 +10,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/idoo/garmin-mcp/internal/ciqsdk"
-	"github.com/idoo/garmin-mcp/internal/sim"
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/ciqsdk"
+	"github.com/idoo/connect-iq-mcp/internal/sim"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 // maxManifest caps manifest.xml reads.
@@ -49,12 +49,12 @@ func init() {
 	tool.Register(tool.New(tool.Meta{
 		Name: "sdk_build", Toolset: Toolset, Class: tool.Write, Local: true, AvailableReadOnly: true,
 		Title:       "Build with monkeyc",
-		Description: "monkeyc build: one device PRG, or device \"all\" for the store .iq (never replaces an .iq without overwrite). Key defaults to GARMIN_MCP_KEY. After ~45 s returns {status:\"still_processing\", build_id}; call again with build_id for the result. Structured diagnostics.",
+		Description: "monkeyc build: one device PRG, or device \"all\" for the store .iq (never replaces an .iq without overwrite). Key defaults to CIQ_MCP_KEY. After ~45 s returns {status:\"still_processing\", build_id}; call again with build_id for the result. Structured diagnostics.",
 	}, sdkBuild))
 	tool.Register(tool.New(tool.Meta{
 		Name: "sdk_key_generate", Toolset: Toolset, Class: tool.Write, Local: true, AvailableReadOnly: true,
 		Title:       "Generate developer key",
-		Description: "Create an RSA-4096 DER developer key (0600) only for a brand-new app; updates must be signed with the key of the first upload (use GARMIN_MCP_KEY). In a git repo the path must be gitignored. Never overwrites. Back it up.",
+		Description: "Create an RSA-4096 DER developer key (0600) only for a brand-new app; updates must be signed with the key of the first upload (use CIQ_MCP_KEY). In a git repo the path must be gitignored. Never overwrites. Back it up.",
 	}, sdkKeyGenerate))
 	tool.Register(tool.New(tool.Meta{
 		Name: "sdk_key_check", Toolset: Toolset, Class: tool.Read, Idempotent: true, Local: true,
@@ -86,7 +86,7 @@ func resolveSDK(arg string) (sdkEnv, error) {
 // --- sdk_info ---
 
 type infoIn struct {
-	SDK string `json:"sdk,omitempty" jsonschema:"installed SDK version or dir name, e.g. 9.2.0; a custom SDK only via GARMIN_MCP_SDK"`
+	SDK string `json:"sdk,omitempty" jsonschema:"installed SDK version or dir name, e.g. 9.2.0; a custom SDK only via CIQ_MCP_SDK"`
 }
 
 type infoOut struct {

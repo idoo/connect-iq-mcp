@@ -22,8 +22,8 @@ const (
 	SourceNewest = "newest"
 )
 
-// EnvVars name an SDK (path or version); GARMIN_MCP_SDK wins over CIQ_SDK.
-var EnvVars = []string{"GARMIN_MCP_SDK", "CIQ_SDK"}
+// EnvVars name an SDK (path or version); CIQ_MCP_SDK wins over CIQ_SDK.
+var EnvVars = []string{"CIQ_MCP_SDK", "CIQ_SDK"}
 
 // SDK is one installed SDK.
 type SDK struct {
@@ -188,7 +188,7 @@ type ResolveOpts struct {
 	Getenv   func(string) string
 }
 
-// Resolve picks the SDK: explicit arg → GARMIN_MCP_SDK/CIQ_SDK → current-sdk.cfg →
+// Resolve picks the SDK: explicit arg → CIQ_MCP_SDK/CIQ_SDK → current-sdk.cfg →
 // newest installed. A source that is set but broken is an error, never a
 // silent fall-through.
 func Resolve(o ResolveOpts) (Resolved, error) {
@@ -239,7 +239,7 @@ func Resolve(o ResolveOpts) (Resolved, error) {
 		}
 		return Resolved{SDK: v, Source: SourceNewest}, nil
 	}
-	return Resolved{}, fmt.Errorf("no Connect IQ SDK found under %s; install one with SdkManager or set GARMIN_MCP_SDK", filepath.Join(o.DataRoot, "Sdks"))
+	return Resolved{}, fmt.Errorf("no Connect IQ SDK found under %s; install one with SdkManager or set CIQ_MCP_SDK", filepath.Join(o.DataRoot, "Sdks"))
 }
 
 // pick resolves a path or an installed version string. Unless trusted (set
@@ -278,7 +278,7 @@ var ErrUntrustedSDK = errors.New("SDK path is not an installed SDK")
 // under <dataRoot>/Sdks (the SDK Manager install dir).
 func insideSdks(ref, dataRoot string) error {
 	sdks := filepath.Join(dataRoot, "Sdks")
-	hint := fmt.Sprintf("only SDKs installed under %s can be selected (by version, dir name or path); to use another SDK, set GARMIN_MCP_SDK in the MCP server's environment", sdks)
+	hint := fmt.Sprintf("only SDKs installed under %s can be selected (by version, dir name or path); to use another SDK, set CIQ_MCP_SDK in the MCP server's environment", sdks)
 	if !filepath.IsAbs(ref) {
 		return fmt.Errorf("%w: %q is not absolute; %s", ErrUntrustedSDK, ref, hint)
 	}

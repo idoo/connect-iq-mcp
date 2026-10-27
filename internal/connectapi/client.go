@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/httpx"
-	"github.com/idoo/garmin-mcp/internal/upstream"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/httpx"
+	"github.com/idoo/connect-iq-mcp/internal/upstream"
 )
 
 // BaseURL is the Connect API host.

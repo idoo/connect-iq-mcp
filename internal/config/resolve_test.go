@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 func envMap(m map[string]string) func(string) string {
@@ -27,7 +27,7 @@ func writeFile(t *testing.T, path, body string) {
 func TestResolve(t *testing.T) {
 	home := t.TempDir()
 	proj := filepath.Join(home, "proj")
-	cfgPath := filepath.Join(home, ".config", "garmin-mcp", "config.toml")
+	cfgPath := filepath.Join(home, ".config", "connect-iq-mcp", "config.toml")
 	writeFile(t, cfgPath, "default_profile = \"rw\"\n[profiles.rw]\nallow_writes = true\n[profiles.ro]\n")
 	if err := os.Mkdir(filepath.Join(home, "proj"), 0o700); err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestResolve(t *testing.T) {
 		t.Fatalf("env = %+v toolsets=%v", r.Profile, r.Toolsets)
 	}
 	if r = resolve(map[string]string{EnvAllowWrites: "0"}, Flags{}); r.Profile.AllowWrites {
-		t.Fatal("GARMIN_MCP_ALLOW_WRITES=0 ignored")
+		t.Fatal("CIQ_MCP_ALLOW_WRITES=0 ignored")
 	}
 
 	// A pin can only narrow writes.
@@ -83,7 +83,7 @@ func TestOnlyOtherProfileKeepsDefault(t *testing.T) {
 	}
 }
 
-// N2: GARMIN_MCP_PROFILE=work with no section starts with read-only defaults.
+// N2: CIQ_MCP_PROFILE=work with no section starts with read-only defaults.
 func TestSectionlessProfileFromEnv(t *testing.T) {
 	home := t.TempDir()
 	r, err := Resolve(Options{Getenv: envMap(map[string]string{EnvProfile: "work"}), ConfigPath: filepath.Join(home, "none.toml"), Cwd: home, Home: home})

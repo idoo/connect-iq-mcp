@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idoo/garmin-mcp/internal/connectapi"
-	"github.com/idoo/garmin-mcp/internal/sim"
-	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/connect-iq-mcp/internal/connectapi"
+	"github.com/idoo/connect-iq-mcp/internal/sim"
+	"github.com/idoo/connect-iq-mcp/internal/tool"
 )
 
 // baseURL is the Connect API host; tests point it at a fake server.

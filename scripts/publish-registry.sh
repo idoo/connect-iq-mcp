@@ -21,10 +21,10 @@ jq --arg v "$version" --arg sha "$sha" '
   | .packages |= map(
       if .registryType == "mcpb" then
         .version = $v
-        | .identifier = "https://github.com/idoo/garmin-mcp/releases/download/v\($v)/garmin-mcp-\($v).mcpb"
+        | .identifier = "https://github.com/idoo/connect-iq-mcp/releases/download/v\($v)/connect-iq-mcp-\($v).mcpb"
         | .fileSha256 = $sha
       elif .registryType == "oci" then
-        .identifier = "ghcr.io/idoo/garmin-mcp:\($v)"
+        .identifier = "ghcr.io/idoo/connect-iq-mcp:\($v)"
       else . end)' server.json >server.release.json
 mv server.release.json server.json
 

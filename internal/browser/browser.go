@@ -18,13 +18,13 @@ import (
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/connect-iq-mcp/internal/auth"
 )
 
 var errClosed = errors.New("browser closed before sign-in finished")
 
 // signInHint is printed when the interactive window opens; %s is the browser.
-const signInHint = "Sign in to Garmin in the %s window that just opened (separate garmin-mcp profile). Keep “Remember me” ticked (garmin-mcp ticks it for you) so the session renews without you for up to 6 months."
+const signInHint = "Sign in to Garmin in the %s window that just opened (separate connect-iq-mcp profile). Keep “Remember me” ticked (connect-iq-mcp ticks it for you) so the session renews without you for up to 6 months."
 
 // Options configures the browser launch.
 type Options struct {
@@ -114,7 +114,7 @@ func Login(ctx context.Context, o Options, r Request) (Result, error) {
 		logw = io.Discard
 	}
 	if !o.Headless && !HasDisplay() {
-		return Result{}, errors.New("browser: no display (DISPLAY and WAYLAND_DISPLAY are unset); run `garmin-mcp auth login --paste` (with --profile NAME for a non-default profile) and paste the Cookie of a signed-in apps.garmin.com request (DevTools → Network → Copy as cURL), or sign in on a desktop session")
+		return Result{}, errors.New("browser: no display (DISPLAY and WAYLAND_DISPLAY are unset); run `connect-iq-mcp auth login --paste` (with --profile NAME for a non-default profile) and paste the Cookie of a signed-in apps.garmin.com request (DevTools → Network → Copy as cURL), or sign in on a desktop session")
 	}
 	if o.BinDir == "" {
 		o.BinDir = defaultBinDir()

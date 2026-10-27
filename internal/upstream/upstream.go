@@ -12,7 +12,7 @@ import (
 // Service names the upstream in messages and hints.
 type Service string
 
-// The upstreams garmin-mcp talks to.
+// The upstreams connect-iq-mcp talks to.
 const (
 	Portal  Service = "portal"
 	Connect Service = "Garmin Connect"
