@@ -108,13 +108,13 @@ func TestConfigErrorsNamePath(t *testing.T) {
 }
 
 func TestParseRejectsUnknownKeys(t *testing.T) {
-	if _, err := Parse([]byte("[profiles.a]\nkey_id = \"x\"\n")); err == nil {
+	if _, _, err := Parse([]byte("[profiles.a]\nkey_id = \"x\"\n")); err == nil {
 		t.Fatal("unknown key accepted")
 	}
-	if _, err := Parse([]byte("default_profile = \"Bad\"\n")); err == nil {
+	if _, _, err := Parse([]byte("default_profile = \"Bad\"\n")); err == nil {
 		t.Fatal("invalid default_profile accepted")
 	}
-	if _, err := Parse([]byte("default_profile = \"work\"\n")); err != nil {
+	if _, _, err := Parse([]byte("default_profile = \"work\"\n")); err != nil {
 		t.Fatalf("sectionless default_profile refused: %v", err)
 	}
 }

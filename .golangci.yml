@@ -15,6 +15,7 @@ linters:
     - revive
     - staticcheck
     - unparam
+    - unused
   settings:
     depguard:
       rules:

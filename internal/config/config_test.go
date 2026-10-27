@@ -23,8 +23,24 @@ func TestValidateProfileName(t *testing.T) {
 }
 
 func TestConfigRejectsBadProfileKeys(t *testing.T) {
-	if _, err := Parse([]byte("[profiles.\"..\"]\n")); err == nil || !strings.Contains(err.Error(), "invalid profile name") {
+	if _, _, err := Parse([]byte("[profiles.\"..\"]\n")); err == nil || !strings.Contains(err.Error(), "invalid profile name") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// SG-3: allow_profile_switch was removed; old config files must still load.
+func TestLegacyAllowProfileSwitchLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "garmin-mcp", "config.toml")
+	writeFile(t, path, "default_profile = \"work\"\nallow_profile_switch = true\n\n[profiles.work]\nallow_writes = true\n")
+	cfg, warnings, err := Load(path)
+	if err != nil {
+		t.Fatalf("legacy config refused: %v", err)
+	}
+	if cfg.DefaultProfile != "work" || !cfg.Profiles["work"].AllowWrites {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %q, want one for the retired key", warnings)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/idoo/garmin-mcp/internal/ciqsdk"
+	"github.com/idoo/garmin-mcp/internal/ciqsdk/ciqsdktest"
 	"github.com/idoo/garmin-mcp/internal/sim"
 	"github.com/idoo/garmin-mcp/internal/tool"
 	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
@@ -75,9 +76,22 @@ func TestRunRefusesEscapingJungleBeforeMonkeyc(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(proj, "monkey.jungle"), []byte("base.sourcePath = "+outside+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ciqsdk.GenerateKey(filepath.Join(k.Files.Root, "dev.der")); err != nil {
+	// sim_run checks the project and device before it builds.
+	if err := os.WriteFile(filepath.Join(proj, "manifest.xml"), []byte("<x/>"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	dr, err := ciqsdk.DataRoot(os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := filepath.Join(ciqsdk.DevicesDir(dr), "fenix7")
+	if err := os.MkdirAll(dev, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dev, "compiler.json"), []byte(`{"deviceId":"fenix7","displayName":"fēnix® 7"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ciqsdktest.Key(t, filepath.Join(k.Files.Root, "dev.der"))
 	for _, test := range []bool{false, true} {
 		_, err := simRun(context.Background(), k.Env, runIn{Project: "app", Device: "fenix7", Key: "dev.der", Test: test})
 		if !errors.Is(err, tool.ErrInvalidArgs) || !strings.Contains(err.Error(), "base.sourcePath = "+outside) {

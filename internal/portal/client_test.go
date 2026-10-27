@@ -115,16 +115,6 @@ func TestRateLimited(t *testing.T) {
 	}
 }
 
-func TestRetryAfterDate(t *testing.T) {
-	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
-	if got := retryAfter(now.Add(90*time.Second).Format(http.TimeFormat), now); got != 90*time.Second {
-		t.Fatalf("got %v", got)
-	}
-	if got := retryAfter("soon", now); got != 0 {
-		t.Fatalf("got %v", got)
-	}
-}
-
 // LF-4: only a 403 on /developers means "not signed in"; a 403 elsewhere is
 // an endpoint refusal and a Cloudflare page is a block, never auth_required.
 func TestForbiddenClassification(t *testing.T) {

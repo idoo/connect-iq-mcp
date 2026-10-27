@@ -82,7 +82,7 @@ func TestCurrentInstallEnvUsesUserConfigDir(t *testing.T) {
 
 func TestInstallClaudeDesktopUsesConfigDir(t *testing.T) {
 	e := testEnv(t, "windows")
-	if err := install("claude-desktop", `C:\bin\garmin-mcp.exe`, "", e, io.Discard); err != nil {
+	if err := install("claude-desktop", `C:\bin\garmin-mcp.exe`, entryOpts{}, e, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	mustContainServer(t, filepath.Join(e.configDir, "Claude", "claude_desktop_config.json"))
@@ -98,7 +98,7 @@ func TestInstallClaudeDesktopWritesMSIXCopy(t *testing.T) {
 	mkdir(t, msix)
 	mkdir(t, filepath.Join(e.localAppData, "Packages", "Other_123", "LocalCache", "Roaming", "Claude"))
 	var out bytes.Buffer
-	if err := install("claude-desktop", `C:\bin\garmin-mcp.exe`, "", e, &out); err != nil {
+	if err := install("claude-desktop", `C:\bin\garmin-mcp.exe`, entryOpts{}, e, &out); err != nil {
 		t.Fatal(err)
 	}
 	roaming := filepath.Join(e.configDir, "Claude", "claude_desktop_config.json")
@@ -128,7 +128,7 @@ func TestInstallVSCodeChoosesExistingForks(t *testing.T) {
 	codium := filepath.Join(e.configDir, "VSCodium", "User")
 	mkdir(t, oss)
 	mkdir(t, codium)
-	if err := install("vscode", "/usr/bin/garmin-mcp", "", e, io.Discard); err != nil {
+	if err := install("vscode", "/usr/bin/garmin-mcp", entryOpts{}, e, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	mustContainServer(t, filepath.Join(oss, "mcp.json"))
@@ -158,7 +158,7 @@ func TestInstallInWSLPrintsSnippet(t *testing.T) {
 		e.wslDistro = "Ubuntu-24.04"
 		mkdir(t, filepath.Join(e.configDir, "Code", "User"))
 		var out bytes.Buffer
-		if err := install(client, "/home/u/go/bin/garmin-mcp", "work", e, &out); err != nil {
+		if err := install(client, "/home/u/go/bin/garmin-mcp", entryOpts{Profile: "work"}, e, &out); err != nil {
 			t.Fatal(err)
 		}
 		s := out.String()
@@ -195,7 +195,7 @@ func TestInstallThroughSymlinkKeepsLinkAndNumbers(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if err := install("cursor", "/usr/local/bin/garmin-mcp", "", e, io.Discard); err != nil {
+	if err := install("cursor", "/usr/local/bin/garmin-mcp", entryOpts{}, e, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
@@ -226,7 +226,7 @@ func TestInstallRefusesDanglingSymlink(t *testing.T) {
 	if err := os.Symlink(filepath.Join(t.TempDir(), "gone", "mcp.json"), link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if err := install("cursor", "/usr/local/bin/garmin-mcp", "", e, io.Discard); err == nil {
+	if err := install("cursor", "/usr/local/bin/garmin-mcp", entryOpts{}, e, io.Discard); err == nil {
 		t.Fatal("dangling symlink overwritten")
 	}
 	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {

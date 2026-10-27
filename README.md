@@ -22,6 +22,8 @@ garmin-mcp config install claude-code   # or claude-desktop, codex, cursor, vsco
 garmin-mcp doctor
 ```
 
+Builds and the simulator need the Connect IQ SDK. Install Garmin's [SDK Manager](https://developer.garmin.com/connect-iq/sdk/) first and download an SDK and your devices in it; `garmin-mcp doctor` says whether it found the SDK.
+
 `garmin-mcp config install vscode` writes the user mcp.json (the one "MCP: Open User Configuration" opens) of every VS Code it finds: Code, Code - OSS, VSCodium, and their Flatpaks on Linux. There is no Docker image: sign-in needs a browser, and builds need your SDK and simulator.
 
 - macOS: after upgrading from an older version, run `garmin-mcp auth login` once more. The sign-in browser now encrypts its cookies with its own Safe Storage keychain key and can't read the old ones. Chrome for Testing still uses Chromium's fixed mock key.
@@ -49,11 +51,19 @@ Names are lowercase letters, digits, `-` and `_`, up to 63 characters. A config 
 
 ## Builds and signing
 
-Store builds must be signed with the key of your first upload. Set `GARMIN_MCP_KEY=/path/to/developer_key.der` in the `env` of the garmin-mcp entry in your MCP client's config, then restart the client. A shell export doesn't reach a client started from the Dock or Start menu, and `doctor` in your shell can't see the client's env. The key can live outside the repo and is only read. `sdk_key_generate` is for a brand-new app, and in a git repo it refuses unless the key path is git-ignored. `sdk_build device:"all"` writes `release/<project>-<version>.iq`; long builds return a `build_id` to poll. Asking again with the same arguments while it runs gives the same `build_id`; a different build writing the same file gets `conflict`.
+Store builds must be signed with the key of your first upload. `garmin-mcp config install <client> --key /abs/path/developer_key.der` puts it in the client entry's env as `GARMIN_MCP_KEY`; add `--java-home /abs/jdk` if Java isn't found. Both paths must be absolute. Restart the client afterwards. By hand it's the same `env` block: a shell export doesn't reach a client started from the Dock or Start menu. `doctor` in your shell can't see the client's env, so it shows an unset key as `info`, not an error. Without a key each build needs a key file inside the project. The key can live outside the repo and is only read. `sdk_key_generate` is for a brand-new app, and in a git repo it refuses unless the key path is git-ignored. `sdk_build device:"all"` writes `release/<project>-<version>.iq`; long builds return a `build_id` to poll. Asking again with the same arguments while it runs gives the same `build_id`; a different build writing the same file gets `conflict`.
+
+Devices can be named like people name them: "Fenix 7" becomes `fenix7`, and the result says so. A name that fits several devices gets the list of ids back instead of a guess.
 
 Builds and the simulator need Java 17+ (`JAVA_HOME` as an absolute path, set in that same client env, or `java` on PATH). Garmin MCP runs the SDK's jar itself, never its `monkeyc`/`monkeydo` scripts.
 
 Paths in `monkey.jungle` must be relative and stay inside the project root once symlinks are followed. `..` is fine; absolute, drive-letter and `~` paths are refused, even when they point inside. Jungles inside barrels are checked too. `sdk_build` and `sim_run` refuse before the compiler runs.
+
+`sim_stop` only stops the simulator this server started. One you or another agent started keeps running: the agent gets `conflict` and is told to ask you before calling `sim_stop` with `force:true`. Nothing but that instruction stops it from skipping the asking.
+
+## First upload of a new app
+
+Do it once by hand on [apps.garmin.com](https://apps.garmin.com). `store_app_create` exists, but it sits in the off-by-default `store_experimental` toolset and has never been run against the real portal, so you'd be its first tester. After that Garmin MCP takes over: `store_version_publish` ships every new version. The key you sign that first upload with must sign every update forever, so back it up somewhere that isn't this laptop.
 
 ## What you can ask
 

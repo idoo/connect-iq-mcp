@@ -17,6 +17,7 @@ import (
 	"github.com/idoo/garmin-mcp/internal/ciqsdk"
 	"github.com/idoo/garmin-mcp/internal/sim"
 	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/tools/sdk"
 )
 
 func init() {
@@ -28,7 +29,7 @@ func init() {
 		return tool.Meta{Name: name, Toolset: Toolset, Title: title, Description: desc, Class: tool.Write, Local: true, AvailableReadOnly: true}
 	}
 	tool.Register(tool.New(write("sim_stop", "Stop simulator",
-		"Kill monkeydo sessions, then the simulator, and wait for port 1234 to close. Also recovers a wedged simulator."), simStop))
+		"Kill this server's monkeydo sessions and the simulator it started; wait for port 1234 to close. Recovers a wedged simulator. Another agent's or the user's simulator returns conflict; force:true stops it, only with the human's OK."), simStop))
 	tool.Register(tool.New(write("sim_run", "Run app in simulator",
 		"Run a PRG (or build project+device) via monkeydo, starting the simulator if needed; returns a session id once the client prints or exits, inlining the newest crash entry on a crash. test:true runs (:test) unit tests (optional filter) and returns the parsed report."), simRun))
 	tool.Register(tool.New(read("sim_logs", "Session logs",
@@ -87,7 +88,11 @@ func lease(ctx context.Context) (func(), error) {
 func simErr(err error) error {
 	switch {
 	case errors.Is(err, sim.ErrSDKMismatch):
-		return &tool.Error{Code: "sdk_mismatch", Message: err.Error(), Hint: "call sim_stop, then sim_run with the wanted sdk"}
+		return &tool.Error{Code: "sdk_mismatch", Message: err.Error(), Hint: "stop the running simulator as the message says (sim_stop for one this server started; for any other, ask the human before stopping it, then call sim_stop with force:true), then sim_run with the wanted sdk"}
+	case errors.Is(err, sim.ErrForeignSimulator):
+		return &tool.Error{Code: "conflict", Message: err.Error(), Hint: "ask the human before stopping it, then call sim_stop with force:true"}
+	case errors.Is(err, sim.ErrNotReady):
+		return &tool.Error{Code: "sim_not_ready", Message: err.Error(), Hint: "do the next step the message names, then retry sim_run"}
 	case errors.Is(err, sim.ErrPortNotOurs):
 		return &tool.Error{Code: "port_in_use", Message: err.Error(), Hint: "stop whatever holds 127.0.0.1:1234 (or sim_stop), then retry"}
 	case errors.Is(err, sim.ErrFocusLost):
@@ -128,17 +133,19 @@ func sessionsOut() []sim.SessionInfo {
 
 // --- stop ---
 
-type noIn struct{}
+type stopIn struct {
+	Force bool `json:"force,omitempty" jsonschema:"also stop a simulator this server did not start (another agent's or the user's); only after the human agreed"`
+}
 
-func simStop(ctx context.Context, env *tool.Env, _ noIn) (*tool.Result, error) {
+func simStop(ctx context.Context, env *tool.Env, in stopIn) (*tool.Result, error) {
 	rel, err := lease(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer rel()
-	killed, was, err := sim.Stop(ctx, clock(env))
+	killed, was, err := sim.Stop(ctx, clock(env), in.Force)
 	if err != nil {
-		return nil, err
+		return nil, simErr(err)
 	}
 	out := map[string]any{"stopped": was, "killed_sessions": killed}
 	if !was && killed == 0 {
@@ -214,6 +221,9 @@ func prgFor(ctx context.Context, env *tool.Env, r ciqsdk.Resolved, java string, 
 	if err != nil {
 		return "", nil, err
 	}
+	if err := sdk.CheckProject(env, "project", in.Project, pdir); err != nil {
+		return "", nil, err
+	}
 	if _, err := ciqsdk.CheckKey(kabs); err != nil {
 		return "", nil, tool.InvalidArgs("key: %v", err)
 	}
@@ -264,20 +274,22 @@ type started struct {
 	s          *sim.Session
 	br         *ciqsdk.BuildResult
 	simStarted bool
+	// note names the device a free-text device argument resolved to.
+	note string
 }
 
 // startSession builds (or takes) the PRG, starts the simulator of the
 // resolved SDK when none is ready, and launches monkeydo.
 func startSession(ctx context.Context, env *tool.Env, in runIn, extra ...string) (started, *tool.Result, error) {
 	var out started
-	if !ciqsdk.ValidDeviceID(in.Device) {
-		return out, nil, tool.InvalidArgs("invalid device id %q", in.Device)
-	}
 	if err := sim.Sessions.CheckRoom(); err != nil {
 		return out, nil, simErr(err)
 	}
-	_, r, err := resolveSDK(in.SDK)
+	dr, r, err := resolveSDK(in.SDK)
 	if err != nil {
+		return out, nil, err
+	}
+	if in.Device, out.note, err = sdk.ResolveDevice(dr, in.Device); err != nil {
 		return out, nil, err
 	}
 	// monkeydo needs java too: fail before building or starting anything.
@@ -369,6 +381,9 @@ func simRun(ctx context.Context, env *tool.Env, in runIn) (*tool.Result, error) 
 		}
 	}
 	r := tool.OK(out)
+	if st.note != "" {
+		r.Warn(st.note)
+	}
 	for _, w := range warns {
 		r.Warn(w)
 	}
@@ -510,13 +525,15 @@ func simScreenshot(ctx context.Context, env *tool.Env, in shotIn) (*tool.Result,
 	if err != nil {
 		return nil, err
 	}
-	dev := in.Device
-	if dev == "" {
-		if s, ok := sim.Sessions.Latest(); ok {
-			dev = s.Device
-		} else {
-			dev = sim.LastUsedDevice(dr)
+	dev, note := in.Device, ""
+	if dev != "" {
+		if dev, note, err = sdk.ResolveDevice(dr, dev); err != nil {
+			return nil, err
 		}
+	} else if s, ok := sim.Sessions.Latest(); ok {
+		dev = s.Device
+	} else {
+		dev = sim.LastUsedDevice(dr)
 	}
 	if dev != "" && !ciqsdk.ValidDeviceID(dev) {
 		return nil, tool.InvalidArgs("invalid device id %q", dev)
@@ -570,6 +587,9 @@ func simScreenshot(ctx context.Context, env *tool.Env, in shotIn) (*tool.Result,
 		return nil, err
 	}
 	r := tool.OK(map[string]any{"path": abs, "device": dev, "cropped": cropped, "window_id": w.ID, "bytes": len(data)}).WithImage("image/png", data)
+	if note != "" {
+		r.Warn(note)
+	}
 	if warn != "" {
 		r.Warn(warn)
 	}

@@ -30,6 +30,7 @@ Use [private vulnerability reporting](https://github.com/idoo/garmin-mcp/securit
 - **Git.** `sdk_key_generate` asks git whether the key is ignored with `core.fsmonitor` off, `core.hooksPath` set to the null device, `check-ignore --no-index`, no `GIT_*` variables and no system config (`GIT_CONFIG_NOSYSTEM=1`), so a cloned repo's `.git/config` can't run commands. Your global git config still applies.
 - **Local files.** Builds and screenshots are written inside the project root (`--root` or `GARMIN_MCP_ROOT`, else the client's MCP roots, else the git root); paths that escape it are rejected. The git root is used only when the client sends no roots: if it sends roots and none is a local folder (a remote or virtual workspace, a deleted folder), or listing them fails, file tools return `unavailable` and ask for `--root`.
 - **Uploads.** Screenshots, icons and `.iq` files must be regular files inside the root, with no symlink anywhere below it, and must start with the bytes their extension promises (PNG, JPEG, GIF, ZIP for `.iq`). The approval preview shows the root-relative path.
+- **Other people's simulators.** `sim_stop` ends only the simulator this server launched (it remembers the pid). Anything else returns `conflict` unless the call has `force:true`, and the tool tells the agent to ask you first. That's an instruction to the model, not an approval dialog.
 
 ## Credentials
 
@@ -37,7 +38,7 @@ Garmin MCP keeps the developer-portal `session` cookie (nothing else from the ap
 
 While a keychain write is in flight, a `<profile>#pending` item records its chunk generation, so the next save or `auth logout` removes chunks left behind by a crash or timeout. Cleanup leaves a generation recorded less than 30 seconds ago alone, in case another garmin-mcp process with a different state directory is still writing it.
 
-`GARMIN_MCP_KEY` names your Connect IQ signing key. It is the only path tools may use outside the project root, and it is only read.
+`GARMIN_MCP_KEY` names your Connect IQ signing key. It is the only path tools may use outside the project root, and it is only read. `config install --key` writes that path, never the key itself, into the client entry. Losing the key means you can't ship updates to your app, so keep a backup.
 
 HTTP mode (`serve --http`) needs a bearer token of at least 32 characters (`GARMIN_MCP_HTTP_TOKEN`, or one is generated and printed). The token is checked first, so the right one always gets in. Only requests with a wrong `Authorization` header count as failures and get a growing backoff, per IP (per /64 for IPv6); a missing header is a plain 401. Loopback peers are never throttled. The failure table has a fixed size and drops the oldest entries.
 

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
 )
@@ -34,7 +36,45 @@ func decodeArgs(raw json.RawMessage, s *jsonschema.Schema, rs *jsonschema.Resolv
 	if err := rs.Validate(args); err != nil {
 		return nil, err
 	}
+	if name := blankRequired(s, args, ""); name != "" {
+		return nil, fmt.Errorf("%s is required and must not be blank", name)
+	}
 	return args, nil
+}
+
+// blankRequired returns the path of the first required string property that
+// is empty or only whitespace, recursively, or "".
+func blankRequired(s *jsonschema.Schema, v any, path string) string {
+	if s == nil {
+		return ""
+	}
+	switch x := v.(type) {
+	case map[string]any:
+		for _, name := range s.Required {
+			if str, ok := x[name].(string); ok && strings.TrimSpace(str) == "" {
+				return join(path, name)
+			}
+		}
+		for _, k := range slices.Sorted(maps.Keys(x)) {
+			if p := blankRequired(s.Properties[k], x[k], join(path, k)); p != "" {
+				return p
+			}
+		}
+	case []any:
+		for i, el := range x {
+			if p := blankRequired(s.Items, el, fmt.Sprintf("%s[%d]", path, i)); p != "" {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+func join(path, name string) string {
+	if path == "" {
+		return name
+	}
+	return path + "." + name
 }
 
 // coerce replaces string values with their parsed JSON where the schema

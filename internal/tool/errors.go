@@ -3,7 +3,6 @@ package tool
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 )
 
@@ -208,24 +207,4 @@ func BodyFor(err error) ErrorBody {
 // message ("invalid arguments: <msg>"). %w in format wraps as in fmt.Errorf.
 func InvalidArgs(format string, args ...any) error {
 	return fmt.Errorf("%w: "+format, append([]any{ErrInvalidArgs}, args...)...)
-}
-
-// APIStatus returns the HTTP status of the [APIError] in err's chain, or 0.
-func APIStatus(err error) int {
-	var ae *APIError
-	if errors.As(err, &ae) {
-		return ae.Status
-	}
-	return 0
-}
-
-// IsNotFound reports an upstream 404.
-func IsNotFound(err error) bool {
-	return APIStatus(err) == http.StatusNotFound
-}
-
-// IsConflict reports an upstream 409. Callers must read the state back before
-// trusting it.
-func IsConflict(err error) bool {
-	return APIStatus(err) == http.StatusConflict
 }

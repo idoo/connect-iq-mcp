@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/idoo/garmin-mcp/internal/ciqsdk"
+	"github.com/idoo/garmin-mcp/internal/ciqsdk/ciqsdktest"
 	"github.com/idoo/garmin-mcp/internal/tool"
 	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
 )
@@ -87,9 +88,7 @@ func exportFixtureWith(t *testing.T, pre, versionAttr string) (k *tooltest.Kit, 
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ciqsdk.GenerateKey(filepath.Join(root, "dev.der")); err != nil {
-		t.Fatal(err)
-	}
+	ciqsdktest.Key(t, filepath.Join(root, "dev.der"))
 	return k, argsFile, filepath.Join(proj, "release", "app-1.2.3.iq")
 }
 
@@ -151,9 +150,7 @@ func setBuildWait(t *testing.T, d time.Duration) {
 func TestBuildUsesEnvKeyOutsideRoot(t *testing.T) {
 	k, argsFile, iq := exportFixture(t)
 	envKey := filepath.Join(t.TempDir(), "outside.der")
-	if _, err := ciqsdk.GenerateKey(envKey); err != nil {
-		t.Fatal(err)
-	}
+	ciqsdktest.Key(t, envKey)
 	before, _ := os.ReadFile(envKey)
 	st0, _ := os.Stat(envKey)
 	t.Setenv(ciqsdk.EnvKeyVar, envKey)
@@ -449,9 +446,7 @@ func TestDevicesListRejectsBadMinAPI(t *testing.T) {
 func TestBuildSameOutputOtherOptionsConflicts(t *testing.T) {
 	runs := filepath.Join(t.TempDir(), "runs")
 	k, _, _ := exportFixtureWith(t, "echo x >> '"+runs+"'; sleep 1", ` version="1.2.3"`)
-	if _, err := ciqsdk.GenerateKey(filepath.Join(k.Files.Root, "other.der")); err != nil {
-		t.Fatal(err)
-	}
+	ciqsdktest.Key(t, filepath.Join(k.Files.Root, "other.der"))
 	setBuildWait(t, 50*time.Millisecond)
 	a := tooltest.Decode[pendingOut](t, tooltest.MustOK(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`)))
 	for _, args := range []string{

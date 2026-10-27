@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // AppType is one app type a device supports with its memory limit (bytes).
@@ -167,4 +168,50 @@ func ListDevices(dataRoot string) ([]Device, []string, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, warn, nil
+}
+
+// foldAccents maps accented Latin letters in device names to plain ones.
+var foldAccents = strings.NewReplacer(
+	"ā", "a", "á", "a", "à", "a", "â", "a", "ä", "a", "ã", "a", "å", "a",
+	"ē", "e", "é", "e", "è", "e", "ê", "e", "ë", "e",
+	"ī", "i", "í", "i", "ì", "i", "î", "i", "ï", "i",
+	"ō", "o", "ó", "o", "ò", "o", "ô", "o", "ö", "o", "õ", "o", "ø", "o",
+	"ū", "u", "ú", "u", "ù", "u", "û", "u", "ü", "u", "ñ", "n", "ç", "c", "ý", "y",
+)
+
+// NormDeviceName folds a device id or display name for matching: lower
+// case, no accents (fēnix → fenix), and only letters and digits, so ®, ™,
+// spaces and punctuation never matter ("fēnix® 7" → "fenix7").
+func NormDeviceName(s string) string {
+	s = foldAccents.Replace(strings.ToLower(s))
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || (r > 0x7f && unicode.IsLetter(r)) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// MatchDevices returns the devices a free-text name q selects: those whose
+// folded id or display name equals q's, else those containing it.
+func MatchDevices(devs []Device, q string) []Device {
+	n := NormDeviceName(q)
+	if n == "" {
+		return nil
+	}
+	var exact, part []Device
+	for _, d := range devs {
+		id, name := NormDeviceName(d.ID), NormDeviceName(d.DisplayName)
+		switch {
+		case id == n || name == n:
+			exact = append(exact, d)
+		case strings.Contains(id, n) || strings.Contains(name, n):
+			part = append(part, d)
+		}
+	}
+	if len(exact) > 0 {
+		return exact
+	}
+	return part
 }

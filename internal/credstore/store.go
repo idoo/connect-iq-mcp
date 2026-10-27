@@ -19,6 +19,7 @@ import (
 	"github.com/idoo/garmin-mcp/internal/auth"
 	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/config"
+	"github.com/idoo/garmin-mcp/internal/flock"
 	"github.com/idoo/garmin-mcp/internal/portal"
 	"github.com/idoo/garmin-mcp/internal/state"
 )
@@ -389,7 +390,7 @@ func (s *Store) saveConnect(c *connectCred) error {
 // cannot write the session back afterwards. An interactive sign-in in
 // progress loses its window (deleteAll closes the browser) and saves nothing.
 func (s *Store) logout(ctx context.Context) error {
-	unlock, err := lockPath(ctx, s.lockFile())
+	unlock, err := flock.Lock(ctx, s.lockFile())
 	if err != nil {
 		return fmt.Errorf("lock credentials: %w", err)
 	}

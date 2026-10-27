@@ -11,6 +11,7 @@ import (
 
 	"github.com/idoo/garmin-mcp/internal/auth"
 	"github.com/idoo/garmin-mcp/internal/browser"
+	"github.com/idoo/garmin-mcp/internal/flock"
 )
 
 // A portal-only sign-in must never let ConnectToken mint a Connect token from
@@ -70,7 +71,7 @@ func TestLogoutWaitsForLock(t *testing.T) {
 	if err := s.writeStored(blob{Portal: &portalCred{Cookies: cookies(time.Now().Add(time.Hour))}}); err != nil {
 		t.Fatal(err)
 	}
-	unlock, err := lockPath(context.Background(), s.lockFile())
+	unlock, err := flock.Lock(context.Background(), s.lockFile())
 	if err != nil {
 		t.Fatal(err)
 	}

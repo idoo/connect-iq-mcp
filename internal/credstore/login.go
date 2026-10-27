@@ -9,6 +9,7 @@ import (
 
 	"github.com/idoo/garmin-mcp/internal/auth"
 	"github.com/idoo/garmin-mcp/internal/browser"
+	"github.com/idoo/garmin-mcp/internal/flock"
 	"github.com/idoo/garmin-mcp/internal/portal"
 )
 
@@ -25,13 +26,13 @@ func (s *Store) Login(ctx context.Context, o auth.LoginOptions) (auth.LoginResul
 	if err := s.refuseEnv(o.Connect); err != nil {
 		return auth.LoginResult{}, err
 	}
-	unlockLogin, err := lockPath(ctx, s.loginLockFile())
+	unlockLogin, err := flock.Lock(ctx, s.loginLockFile())
 	if err != nil {
 		return auth.LoginResult{}, fmt.Errorf("lock browser profile: %w", err)
 	}
 	defer unlockLogin()
 	if o.SkipIfValid {
-		unlock, err := lockPath(ctx, s.lockFile())
+		unlock, err := flock.Lock(ctx, s.lockFile())
 		if err != nil {
 			return auth.LoginResult{}, fmt.Errorf("lock credentials: %w", err)
 		}
@@ -46,7 +47,7 @@ func (s *Store) Login(ctx context.Context, o auth.LoginOptions) (auth.LoginResul
 	if err != nil {
 		return auth.LoginResult{}, loginError(ctx, err, o.Timeout)
 	}
-	unlock, err := lockPath(ctx, s.lockFile())
+	unlock, err := flock.Lock(ctx, s.lockFile())
 	if err != nil {
 		return auth.LoginResult{}, fmt.Errorf("lock credentials: %w; nothing was saved", err)
 	}

@@ -10,12 +10,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/httpx"
 )
 
 // BaseURL is the Connect API host.
@@ -135,7 +135,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values) (*http.Resp
 		case res.StatusCode == http.StatusUnauthorized:
 			return nil, fmt.Errorf("%w: Garmin Connect rejected the token (HTTP 401)", auth.ErrAuthRequired)
 		case res.StatusCode == http.StatusTooManyRequests:
-			return nil, &RateLimitError{Path: path, RetryAfter: retryAfter(res.Header.Get("Retry-After"), time.Now())}
+			return nil, &RateLimitError{Path: path, RetryAfter: httpx.RetryAfter(res.Header.Get("Retry-After"), time.Now())}
 		default:
 			return nil, &StatusError{Status: res.StatusCode, Path: path}
 		}
@@ -154,20 +154,6 @@ func redactErr(err error, tok string) error {
 		return err
 	}
 	return errors.New(strings.ReplaceAll(err.Error(), tok, "[redacted]"))
-}
-
-func retryAfter(v string, now time.Time) time.Duration {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return 0
-	}
-	if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-		return time.Duration(n) * time.Second
-	}
-	if t, err := http.ParseTime(v); err == nil && t.After(now) {
-		return t.Sub(now).Round(time.Second)
-	}
-	return 0
 }
 
 // GetJSON decodes GET path?q into out. A 204 leaves out untouched.

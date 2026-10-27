@@ -543,7 +543,7 @@
           "type": "string"
         },
         "query": {
-          "description": "case-insensitive substring of id or display name",
+          "description": "part of the id or display name; case, accents, ® and spaces are ignored (\"Fenix 7\" finds fenix7)",
           "type": "string"
         },
         "shape": {
@@ -918,7 +918,7 @@
     "toolset": "simulator",
     "class": "W",
     "title": "Stop simulator",
-    "description": "Kill monkeydo sessions, then the simulator, and wait for port 1234 to close. Also recovers a wedged simulator.",
+    "description": "Kill this server's monkeydo sessions and the simulator it started; wait for port 1234 to close. Recovers a wedged simulator. Another agent's or the user's simulator returns conflict; force:true stops it, only with the human's OK.",
     "annotations": {
       "destructiveHint": false,
       "idempotentHint": false,
@@ -928,6 +928,12 @@
     },
     "input_schema": {
       "additionalProperties": false,
+      "properties": {
+        "force": {
+          "description": "also stop a simulator this server did not start (another agent's or the user's); only after the human agreed",
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "default_toolset": true,

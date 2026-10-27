@@ -1,6 +1,7 @@
 //go:build windows
 
-package sim
+// Package flock takes exclusive cross-process file locks.
+package flock
 
 import (
 	"context"
@@ -12,12 +13,13 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// lockPath takes an exclusive LockFileEx lock on path, polling until ctx ends.
-func lockPath(ctx context.Context, path string) (unlock func(), err error) {
+// Lock takes an exclusive LockFileEx lock on path, polling until ctx ends.
+// It tries once before it looks at ctx.
+func Lock(ctx context.Context, path string) (unlock func(), err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: path is the fixed sim.lock under the state dir
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: callers pass lock files under our own state dir
 	if err != nil {
 		return nil, err
 	}

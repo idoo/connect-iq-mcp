@@ -94,8 +94,8 @@ func prepare(ctx context.Context, env *tool.Env, sdkArg, project, jungle, key st
 	if err != nil {
 		return prepared{}, err
 	}
-	if st, err := os.Stat(pdir); err != nil || !st.IsDir() {
-		return prepared{}, tool.InvalidArgs("project %s is not a directory", pdir)
+	if err := CheckProject(env, "project", project, pdir); err != nil {
+		return prepared{}, err
 	}
 	if jungle == "" {
 		jungle = "monkey.jungle"
@@ -186,8 +186,15 @@ func sdkBuild(ctx context.Context, env *tool.Env, in buildIn) (*tool.Result, err
 		return waitJob(ctx, env, j)
 	}
 	all := in.Device == allDevices
-	if !all && !ciqsdk.ValidDeviceID(in.Device) {
-		return nil, tool.InvalidArgs("invalid device id %q (or \"all\" for the store package)", in.Device)
+	note := ""
+	if !all {
+		dr, err := dataRoot()
+		if err != nil {
+			return nil, err
+		}
+		if in.Device, note, err = ResolveDevice(dr, in.Device); err != nil {
+			return nil, err
+		}
 	}
 	if in.Test && (in.Release || all) {
 		return nil, tool.InvalidArgs("test builds one device in debug mode; not with release or device \"all\"")
@@ -208,9 +215,6 @@ func sdkBuild(ctx context.Context, env *tool.Env, in buildIn) (*tool.Result, err
 		// concurrent export of the same name cannot replace this one.
 		p.opts.NoClobber = !in.Overwrite
 	} else {
-		if _, err := ciqsdk.LoadDevice(p.se.DataRoot, in.Device); errors.Is(err, os.ErrNotExist) {
-			return nil, missingDevice(p.se.DataRoot, in.Device)
-		}
 		suffix := ""
 		if in.Test {
 			suffix = "-test"
@@ -236,7 +240,11 @@ func sdkBuild(ctx context.Context, env *tool.Env, in buildIn) (*tool.Result, err
 	if err != nil {
 		return nil, err
 	}
-	return waitJob(ctx, env, j)
+	res, err := waitJob(ctx, env, j)
+	if err != nil {
+		return nil, err
+	}
+	return withNote(res, note), nil
 }
 
 // buildIdentity names everything that reaches monkeyc's argv, plus the key
@@ -352,7 +360,8 @@ func waitJob(ctx context.Context, env *tool.Env, j *buildJob) (*tool.Result, err
 			jobsMu.Lock()
 			delete(jobs, j.id)
 			jobsMu.Unlock()
-			return j.res, j.err
+			// Every joined caller writes its own Meta and render state.
+			return j.res.Clone(), j.err
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-tick.C:

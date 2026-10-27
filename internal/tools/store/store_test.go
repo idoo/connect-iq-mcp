@@ -43,6 +43,8 @@ type fakePortal struct {
 	published string
 	// validManifest overrides the manifest id validate reports.
 	validManifest string
+	// onAppsList, when set, runs while an apps-list request is in flight.
+	onAppsList func()
 }
 
 // day is local midnight of YYYY-MM-DD in epoch ms, as the portal sends dates.
@@ -72,6 +74,9 @@ func (f *fakePortal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/api/ciq-developerservices/developers":
 		js(map[string]any{"developer": true, "userId": dev})
 	case r.URL.Path == devBase+"/apps" && r.Method == http.MethodGet:
+		if f.onAppsList != nil {
+			f.onAppsList()
+		}
 		js([]any{
 			map[string]any{"appId": appID, "localizedAppName": "Bike Guide", "status": "APPROVED", "typeId": 2},
 			map[string]any{"appId": appID2, "localizedAppName": "Run Coach", "status": "APPROVED"},

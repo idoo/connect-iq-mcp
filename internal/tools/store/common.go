@@ -30,8 +30,6 @@ const (
 	maxScreenshots = 5
 )
 
-const appDesc = "store UUID, manifest id, or exact app title"
-
 var versionRE = regexp.MustCompile(`^[vV]?\d+(\.\d+)*([-+][0-9A-Za-z.-]+)?$`)
 
 // listingKeys are the listing text keys of app metadata.

@@ -56,7 +56,7 @@
 |[`sim_logs`](#sim_logs)|R|none|Simulator state (running, pid, SDK, device) and a monkeydo session's lines after a cursor (next_token), with exit and crash flags. Default: newest session. crash:true returns the newest parsed CIQ_LOG.YML entries.|
 |[`sim_run`](#sim_run)|W|none|Run a PRG (or build project+device) via monkeydo, starting the simulator if needed; returns a session id once the client prints or exits, inlining the newest crash entry on a crash. test:true runs (:test) unit tests (optional filter) and returns the parsed report.|
 |[`sim_screenshot`](#sim_screenshot)|W|none|macOS only. Capture the simulator window (works behind other windows; needs Screen Recording and an unlocked screen), crop to the device display at native size, save PNG under the root and return it as an image.|
-|[`sim_stop`](#sim_stop)|W|none|Kill monkeydo sessions, then the simulator, and wait for port 1234 to close. Also recovers a wedged simulator.|
+|[`sim_stop`](#sim_stop)|W|none|Kill this server's monkeydo sessions and the simulator it started; wait for port 1234 to close. Recovers a wedged simulator. Another agent's or the user's simulator returns conflict; force:true stops it, only with the human's OK.|
 
 ## connect
 
@@ -203,7 +203,7 @@ No arguments.
 |`in_manifest`|string|||manifest.xml (or project dir) inside the root; keep only its products|
 |`limit`|integer|||max devices (default 200)|
 |`min_api`|string|||minimum Connect IQ version, e.g. 4.2.0|
-|`query`|string|||case-insensitive substring of id or display name|
+|`query`|string|||part of the id or display name; case, accents, ® and spaces are ignored ("Fenix 7" finds fenix7)|
 |`shape`|string||`round`, `semiround`, `rectangle`, `semioctagon`|screen shape|
 |`touch`|boolean|||only touch (true) or non-touch (false) devices|
 
@@ -277,7 +277,9 @@ No arguments.
 
 ### sim_stop
 
-No arguments.
+|Name|Type|Required|Enum|Description|
+|---|---|---|---|---|
+|`force`|boolean|||also stop a simulator this server did not start (another agent's or the user's); only after the human agreed|
 
 ### store_app_create
 

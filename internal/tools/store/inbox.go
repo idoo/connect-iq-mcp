@@ -75,7 +75,7 @@ func storeReviewsInbox(ctx context.Context, env *tool.Env, in inboxIn) (*tool.Re
 	c := client(env)
 	var apps []portal.App
 	if len(in.Apps) == 0 {
-		all, err := listApps(ctx, c)
+		all, _, err := listApps(ctx, c)
 		if err != nil {
 			return nil, wrap(err)
 		}

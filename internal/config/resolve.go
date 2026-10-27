@@ -17,7 +17,6 @@ const (
 	EnvToolsets         = "GARMIN_MCP_TOOLSETS"
 	EnvDiscovery        = "GARMIN_MCP_DISCOVERY"
 	EnvMaxResponseBytes = "GARMIN_MCP_MAX_RESPONSE_BYTES"
-	EnvMaxRetries       = "GARMIN_MCP_MAX_RETRIES"
 	EnvCI               = "GARMIN_MCP_CI"
 	EnvRoot             = "GARMIN_MCP_ROOT"
 )
@@ -30,8 +29,6 @@ const (
 	DefaultMaxResponseBytes = 60000
 	MinMaxResponseBytes     = 4096
 	MaxMaxResponseBytes     = 10 << 20
-	DefaultMaxRetries       = 3
-	MaxMaxRetries           = 10
 )
 
 // Flags are command-line overrides; nil or empty means "not given".
@@ -78,15 +75,13 @@ func (p ResolvedProfile) Info() tool.ProfileInfo {
 
 // Resolved is the effective runtime configuration.
 type Resolved struct {
-	Profile            ResolvedProfile
-	Toolsets           []tool.Toolset
-	Discovery          bool
-	MaxResponseBytes   int
-	MaxRetries         int
-	CI                 bool
-	NoConfirm          bool
-	AllowProfileSwitch bool
-	// Config is the loaded config file, for per-call profile switching.
+	Profile          ResolvedProfile
+	Toolsets         []tool.Toolset
+	Discovery        bool
+	MaxResponseBytes int
+	CI               bool
+	NoConfirm        bool
+	// Config is the loaded config file (credstore reads auto_renew from it).
 	Config *Config
 	// ConfigPath is the config file Resolve read (it may not exist).
 	ConfigPath string
@@ -121,7 +116,7 @@ func Resolve(opts Options) (*Resolved, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Resolved{Config: cfg, ConfigPath: path, AllowProfileSwitch: cfg.AllowProfileSwitch, Warnings: warnings}
+	r := &Resolved{Config: cfg, ConfigPath: path, Warnings: warnings}
 	if err := r.resolveProfile(opts.Flags, getenv, cfg, pin); err != nil {
 		return nil, fmt.Errorf("%w (config file: %s)", err, path)
 	}
@@ -263,9 +258,6 @@ func (r *Resolved) resolveModes(f Flags, getenv func(string) string) error {
 	r.Discovery = discovery
 
 	if r.MaxResponseBytes, err = envInt(getenv, EnvMaxResponseBytes, DefaultMaxResponseBytes, MinMaxResponseBytes, MaxMaxResponseBytes); err != nil {
-		return err
-	}
-	if r.MaxRetries, err = envInt(getenv, EnvMaxRetries, DefaultMaxRetries, 0, MaxMaxRetries); err != nil {
 		return err
 	}
 	if r.CI, _, err = envBool(getenv, EnvCI); err != nil {

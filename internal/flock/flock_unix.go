@@ -1,6 +1,7 @@
 //go:build !windows
 
-package credstore
+// Package flock takes exclusive cross-process file locks.
+package flock
 
 import (
 	"context"
@@ -11,14 +12,15 @@ import (
 	"time"
 )
 
-// lockPath takes an exclusive flock on path, polling until ctx ends. flock
-// locks belong to the open file description, so goroutines of one process
-// exclude each other as well as other processes.
-func lockPath(ctx context.Context, path string) (unlock func(), err error) {
+// Lock takes an exclusive flock on path, polling until ctx ends. It tries
+// once before it looks at ctx. flock locks belong to the open file
+// description, so goroutines of one process exclude each other as well as
+// other processes.
+func Lock(ctx context.Context, path string) (unlock func(), err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: lock file path is derived from our own state dir and profile name
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: callers pass lock files under our own state dir
 	if err != nil {
 		return nil, err
 	}

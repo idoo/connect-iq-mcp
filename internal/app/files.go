@@ -80,6 +80,11 @@ func (f *Files) Resolve(p string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("files: empty path")
 	}
+	// The shell expands ~, garmin-mcp does not: "~/k.der" would otherwise
+	// name a "~" folder inside the root. Home is outside the root anyway.
+	if strings.HasPrefix(p, "~") {
+		return "", fmt.Errorf("files: %q: %w; ~ is not expanded; use a path relative to the project or an absolute path inside the root", p, ErrOutsideRoot)
+	}
 	abs := p
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(f.root, abs)

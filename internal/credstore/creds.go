@@ -15,6 +15,7 @@ import (
 
 	"github.com/idoo/garmin-mcp/internal/auth"
 	"github.com/idoo/garmin-mcp/internal/browser"
+	"github.com/idoo/garmin-mcp/internal/flock"
 	"github.com/idoo/garmin-mcp/internal/portal"
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
@@ -116,7 +117,7 @@ func (s *Store) lockProfile(ctx context.Context, live bool) (unlock func(), busy
 		lctx, cancel = context.WithTimeout(ctx, profileLockWait)
 		defer cancel()
 	}
-	unlock, err = lockPath(lctx, s.lockFile())
+	unlock, err = flock.Lock(lctx, s.lockFile())
 	if err != nil {
 		if live && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
 			return nil, true, nil
@@ -130,8 +131,8 @@ func (s *Store) lockProfile(ctx context.Context, live bool) (unlock func(), busy
 // interactive sign-in holds it.
 func (s *Store) tryLoginLock() (unlock func(), busy bool, err error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // lockPath tries once before it looks at ctx
-	unlock, err = lockPath(ctx, s.loginLockFile())
+	cancel() // flock.Lock tries once before it looks at ctx
+	unlock, err = flock.Lock(ctx, s.loginLockFile())
 	if errors.Is(err, context.Canceled) {
 		return nil, true, nil
 	}
@@ -218,7 +219,7 @@ func (s *Store) portalDead(p *portalCred) bool {
 // A header renewed or removed by another process meanwhile is left alone.
 // Only the `session` cookie is kept.
 func (s *Store) SavePortalCookies(ctx context.Context, sent string, setCookie []string) error {
-	unlock, err := lockPath(ctx, s.lockFile())
+	unlock, err := flock.Lock(ctx, s.lockFile())
 	if err != nil {
 		return fmt.Errorf("lock credentials: %w", err)
 	}

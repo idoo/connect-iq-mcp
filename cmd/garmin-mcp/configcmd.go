@@ -18,6 +18,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/idoo/garmin-mcp/internal/ciqsdk"
 	"github.com/idoo/garmin-mcp/internal/config"
 	"github.com/idoo/garmin-mcp/internal/state"
 	"github.com/idoo/garmin-mcp/internal/tool"
@@ -35,7 +36,19 @@ const serverName = "garmin-mcp"
 var sessionTools = []string{"toolsets"}
 
 // configUsage is printed for `garmin-mcp config --help` and misuse.
-var configUsage = "usage: garmin-mcp config <snippet|install> <client> [--profile NAME]\nclients: " + strings.Join(clients, ", ")
+var configUsage = "usage: garmin-mcp config <snippet|install> <client> [--profile NAME] [--key /abs/developer_key.der] [--java-home /abs/jdk]\nclients: " + strings.Join(clients, ", ")
+
+// entryOpts is what a client entry pins besides the binary: the profile,
+// and the env the server needs to build (the developer key and Java).
+type entryOpts struct {
+	Profile  string
+	Key      string
+	JavaHome string
+}
+
+// keyNote tells the human how to give the server the app's developer key
+// when the entry does not carry one.
+const keyNote = "developer key: add --key /absolute/path/developer_key.der to put GARMIN_MCP_KEY in this entry (until then each build needs a key file inside the project)"
 
 // credentialsNote reminds that credentials come from `garmin-mcp auth`, for
 // the profile the entry pins.
@@ -51,6 +64,8 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("config "+sub, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	profile := fs.String("profile", "", "pin the server to this profile via GARMIN_MCP_PROFILE")
+	key := fs.String("key", "", "absolute path of the app's developer key; written as GARMIN_MCP_KEY in the entry's env")
+	javaHome := fs.String("java-home", "", "absolute path of a JDK 17+; written as JAVA_HOME in the entry's env")
 	if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
 		return usageErr(configUsage)
 	}
@@ -70,34 +85,70 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
+	o := entryOpts{Profile: *profile, Key: *key, JavaHome: *javaHome}
+	if err := checkAbs("--key", o.Key, false); err != nil {
+		return usageErr(err.Error())
+	}
+	if err := checkAbs("--java-home", o.JavaHome, true); err != nil {
+		return usageErr(err.Error())
+	}
 	bin, err := binaryPath()
 	if err != nil {
 		return err
 	}
 	switch sub {
 	case "snippet":
-		s, err := snippet(client, bin, *profile, readToolPermissions())
+		s, err := snippet(client, bin, o, readToolPermissions())
 		if err != nil {
 			return err
 		}
 		if _, err = io.WriteString(stdout, s); err != nil {
 			return err
 		}
-		fmt.Fprintln(stderr, credentialsNote(*profile)) // stderr keeps stdout pasteable
+		fmt.Fprintln(stderr, credentialsNote(o.Profile)) // stderr keeps stdout pasteable
+		if o.Key == "" {
+			fmt.Fprintln(stderr, keyNote)
+		}
 		return nil
 	case "install":
 		env, err := currentInstallEnv()
 		if err != nil {
 			return err
 		}
-		if err := install(client, bin, *profile, env, stdout); err != nil {
+		if err := install(client, bin, o, env, stdout); err != nil {
 			return err
 		}
-		fmt.Fprintln(stdout, credentialsNote(*profile))
+		fmt.Fprintln(stdout, credentialsNote(o.Profile))
+		if o.Key == "" {
+			fmt.Fprintln(stdout, keyNote)
+		}
 		return nil
 	default:
 		return usageErr(fmt.Sprintf("unknown config subcommand %q (snippet, install)", sub))
 	}
+}
+
+// checkAbs refuses a non-empty flag value that is not an absolute path to
+// an existing file (dir false) or directory (dir true). The client starts
+// the server elsewhere, so a relative path would name another file.
+func checkAbs(flag, p string, dir bool) error {
+	if p == "" {
+		return nil
+	}
+	if !filepath.IsAbs(p) {
+		return fmt.Errorf("%s %q must be an absolute path (the MCP client starts garmin-mcp in another directory)", flag, p)
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		return fmt.Errorf("%s: %w", flag, err)
+	}
+	if dir && !st.IsDir() {
+		return fmt.Errorf("%s %s is not a directory", flag, p)
+	}
+	if !dir && !st.Mode().IsRegular() {
+		return fmt.Errorf("%s %s is not a regular file", flag, p)
+	}
+	return nil
 }
 
 // wantsHelp reports whether args ask for help; such calls never run the command.
@@ -147,13 +198,30 @@ func stableBinaryPath(exe string, lookPath func(string) (string, error)) string 
 	return exe
 }
 
-// profileEnv returns the server env: only profile selection, never key material.
-func profileEnv(profile string) map[string]string {
+// serverEnv returns the server env: profile selection and the paths of the
+// developer key and Java, never key material.
+func serverEnv(o entryOpts) map[string]string {
 	env := map[string]string{}
-	if profile != "" {
-		env[config.EnvProfile] = profile
+	if o.Profile != "" {
+		env[config.EnvProfile] = o.Profile
+	}
+	if o.Key != "" {
+		env[ciqsdk.EnvKeyVar] = o.Key
+	}
+	if o.JavaHome != "" {
+		env["JAVA_HOME"] = o.JavaHome
 	}
 	return env
+}
+
+// envPairs returns serverEnv as sorted NAME=value strings.
+func envPairs(o entryOpts) []string {
+	var out []string
+	for k, v := range serverEnv(o) {
+		out = append(out, k+"="+v)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // readToolPermissions lists `mcp__garmin-mcp__<tool>` for every read-class tool.
@@ -172,12 +240,12 @@ func readToolPermissions() []string {
 }
 
 // serverEntry is the JSON server entry for client.
-func serverEntry(client, bin, profile string) map[string]any {
+func serverEntry(client, bin string, o entryOpts) map[string]any {
 	e := map[string]any{"command": bin, "args": []string{}}
 	if client == "vscode" {
 		e["type"] = "stdio"
 	}
-	if env := profileEnv(profile); len(env) > 0 {
+	if env := serverEnv(o); len(env) > 0 {
 		e["env"] = env
 	}
 	return e
@@ -193,12 +261,12 @@ func serversKey(client string) string {
 
 // snippet renders the config for client; perms is the claude-code
 // permissions allow list.
-func snippet(client, bin, profile string, perms []string) (string, error) {
+func snippet(client, bin string, o entryOpts, perms []string) (string, error) {
 	switch client {
 	case "claude-code":
 		var b strings.Builder
 		b.WriteString("# Register garmin-mcp for every project:\n")
-		b.WriteString(shellJoin(claudeAddArgs(bin, profile)...) + "\n\n")
+		b.WriteString(shellJoin(claudeAddArgs(bin, o)...) + "\n\n")
 		b.WriteString("# Optional: pre-approve read-only tools in ~/.claude/settings.json:\n")
 		perm, err := json.MarshalIndent(map[string]any{"permissions": map[string]any{"allow": perms}}, "", "  ")
 		if err != nil {
@@ -208,9 +276,9 @@ func snippet(client, bin, profile string, perms []string) (string, error) {
 		b.WriteString("\n")
 		return b.String(), nil
 	case "codex":
-		return "# ~/.codex/config.toml\n" + codexBlock(bin, profile), nil
+		return "# ~/.codex/config.toml\n" + codexBlock(bin, o), nil
 	default:
-		doc := map[string]any{serversKey(client): map[string]any{serverName: serverEntry(client, bin, profile)}}
+		doc := map[string]any{serversKey(client): map[string]any{serverName: serverEntry(client, bin, o)}}
 		out, err := json.MarshalIndent(doc, "", "  ")
 		if err != nil {
 			return "", fmt.Errorf("encode snippet: %w", err)
@@ -219,10 +287,10 @@ func snippet(client, bin, profile string, perms []string) (string, error) {
 	}
 }
 
-func claudeAddArgs(bin, profile string) []string {
+func claudeAddArgs(bin string, o entryOpts) []string {
 	args := []string{"claude", "mcp", "add", serverName, "-s", "user"}
-	if profile != "" {
-		args = append(args, "-e", config.EnvProfile+"="+profile)
+	for _, kv := range envPairs(o) {
+		args = append(args, "-e", kv)
 	}
 	return append(args, "--", bin)
 }
@@ -247,11 +315,16 @@ const (
 )
 
 // codexBlock renders the [mcp_servers.garmin-mcp] table.
-func codexBlock(bin, profile string) string {
+func codexBlock(bin string, o entryOpts) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[mcp_servers.%s]\ncommand = %s\nargs = []\n%s\n%s\n", serverName, tomlString(bin), codexStartupTimeout, codexToolTimeout)
-	if profile != "" {
-		fmt.Fprintf(&b, "env = { %s = %s }\n", config.EnvProfile, tomlString(profile))
+	if pairs := envPairs(o); len(pairs) > 0 {
+		kv := make([]string, len(pairs))
+		for i, p := range pairs {
+			k, v, _ := strings.Cut(p, "=")
+			kv[i] = k + " = " + tomlString(v)
+		}
+		fmt.Fprintf(&b, "env = { %s }\n", strings.Join(kv, ", "))
 	}
 	return b.String()
 }
@@ -342,11 +415,15 @@ func msixClaudeConfigs(e installEnv) []string {
 
 // wslSnippet is the config for a Windows-side client launching the server
 // inside this WSL distro (env vars don't cross into WSL, so the profile is
-// a serve flag).
-func wslSnippet(client, distro, bin, profile string) (string, error) {
-	args := []string{"-d", distro, "--", bin}
-	if profile != "" {
-		args = append(args, "serve", "--profile", profile)
+// a serve flag and the key and Java paths are set through env).
+func wslSnippet(client, distro, bin string, o entryOpts) (string, error) {
+	args := []string{"-d", distro, "--"}
+	if o.Key != "" || o.JavaHome != "" {
+		args = append(append(args, "env"), envPairs(entryOpts{Key: o.Key, JavaHome: o.JavaHome})...)
+	}
+	args = append(args, bin)
+	if o.Profile != "" {
+		args = append(args, "serve", "--profile", o.Profile)
 	}
 	e := map[string]any{"command": "wsl.exe", "args": args}
 	if client == "vscode" {
@@ -369,8 +446,8 @@ var runClaude = func(ctx context.Context, args []string, stdout, stderr io.Write
 	return cmd.Run()
 }
 
-func installClaudeCode(bin, profile string, stdout io.Writer) error {
-	args := claudeAddArgs(bin, profile)
+func installClaudeCode(bin string, o entryOpts, stdout io.Writer) error {
+	args := claudeAddArgs(bin, o)
 	ctx, cancel := context.WithTimeout(context.Background(), claudeTimeout)
 	defer cancel()
 	err := runClaude(ctx, args, stdout, os.Stderr)
@@ -389,12 +466,12 @@ func installClaudeCode(bin, profile string, stdout io.Writer) error {
 	}
 }
 
-func install(client, bin, profile string, e installEnv, stdout io.Writer) error {
+func install(client, bin string, o entryOpts, e installEnv, stdout io.Writer) error {
 	if client == "claude-code" {
-		return installClaudeCode(bin, profile, stdout)
+		return installClaudeCode(bin, o, stdout)
 	}
 	if e.wslDistro != "" && (client == "claude-desktop" || client == "vscode") {
-		s, err := wslSnippet(client, e.wslDistro, bin, profile)
+		s, err := wslSnippet(client, e.wslDistro, bin, o)
 		if err != nil {
 			return err
 		}
@@ -407,10 +484,10 @@ func install(client, bin, profile string, e installEnv, stdout io.Writer) error 
 			err error
 		)
 		if client == "codex" {
-			res, err = mergeFile(path, func(old []byte) ([]byte, error) { return mergeCodexTOML(old, codexBlock(bin, profile)) })
+			res, err = mergeFile(path, func(old []byte) ([]byte, error) { return mergeCodexTOML(old, codexBlock(bin, o)) })
 		} else {
 			res, err = mergeFile(path, func(old []byte) ([]byte, error) {
-				return mergeJSONServer(old, serversKey(client), serverName, serverEntry(client, bin, profile))
+				return mergeJSONServer(old, serversKey(client), serverName, serverEntry(client, bin, o))
 			})
 		}
 		if err != nil {

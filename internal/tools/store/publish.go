@@ -531,11 +531,11 @@ func storeAppCreate(ctx context.Context, env *tool.Env, in createIn) (*tool.Resu
 	// A confirm retried after a lost CreateApp response must not submit a
 	// second app: refuse when an app with this manifest id already exists.
 	if mid := portal.NormalizeID(v.ManifestAppID()); mid != "" {
-		apps, err := listApps(ctx, c)
+		apps, gen, err := listApps(ctx, c)
 		if err != nil {
 			return nil, wrap(err)
 		}
-		m, err := manifestMap(ctx, c, apps)
+		m, err := manifestMap(ctx, c, apps, gen)
 		if err != nil {
 			return nil, wrap(err)
 		}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/httpx"
 )
 
 // maxBody caps how much of a portal response is read.
@@ -117,21 +118,6 @@ func (e *RateLimitError) Error() string {
 	return s
 }
 
-// retryAfter parses Retry-After as delay-seconds or an HTTP date.
-func retryAfter(v string, now time.Time) time.Duration {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return 0
-	}
-	if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-		return time.Duration(n) * time.Second
-	}
-	if t, err := http.ParseTime(v); err == nil && t.After(now) {
-		return t.Sub(now).Round(time.Second)
-	}
-	return 0
-}
-
 // ErrBlocked is a Cloudflare block page (WAF rule, bot check, IP ban) in
 // front of the portal. The session is fine; signing in again does not help.
 var ErrBlocked = errors.New("blocked by Cloudflare in front of the developer portal (the session itself is fine; signing in again will not help); wait a few minutes and retry, or open apps.garmin.com in a browser to clear the check")
@@ -171,7 +157,7 @@ func statusError(res *http.Response, body []byte) error {
 		switch cloudflareCode(res, body) {
 		case "":
 		case "1015":
-			return &RateLimitError{Status: c, RetryAfter: retryAfter(res.Header.Get("Retry-After"), time.Now()), Cloudflare: true}
+			return &RateLimitError{Status: c, RetryAfter: httpx.RetryAfter(res.Header.Get("Retry-After"), time.Now()), Cloudflare: true}
 		default:
 			return fmt.Errorf("%w (HTTP %d)", ErrBlocked, c)
 		}
@@ -183,7 +169,7 @@ func statusError(res *http.Response, body []byte) error {
 		return &APIError{Status: c, Code: "forbidden", Message: "forbidden for this endpoint: the session is valid but the portal refused this action (no permission for this app or operation)"}
 	}
 	if ra := res.Header.Get("Retry-After"); c == http.StatusTooManyRequests || (c == http.StatusServiceUnavailable && ra != "") {
-		return &RateLimitError{Status: c, RetryAfter: retryAfter(ra, time.Now())}
+		return &RateLimitError{Status: c, RetryAfter: httpx.RetryAfter(ra, time.Now())}
 	}
 	if c < 400 {
 		return nil

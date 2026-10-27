@@ -195,7 +195,7 @@ func localChecks(ctx context.Context, rep *report, profile string) {
 func keyCheck(rep *report) {
 	raw := os.Getenv(ciqsdk.EnvKeyVar)
 	if raw == "" {
-		rep.ok("developer key: %s not set (builds need a key argument inside the root)", ciqsdk.EnvKeyVar)
+		rep.info("developer key: %s not set; to sign builds with your app's key, run `garmin-mcp config install <client> --key /absolute/path/developer_key.der` (until then each build needs a key file inside the project)", ciqsdk.EnvKeyVar)
 		return
 	}
 	p, ok := ciqsdk.EnvKey()
@@ -223,7 +223,7 @@ func shellNote(rep *report) {
 	if !fromShell() {
 		return
 	}
-	rep.info("env: these checks use this shell's environment; your MCP client starts the server with its own, so set %s and JAVA_HOME in the env block of the client's garmin-mcp entry (written by `garmin-mcp config install <client>`), then restart the client", ciqsdk.EnvKeyVar)
+	rep.info("env: these checks use this shell's environment; your MCP client starts the server with its own, so set %s and JAVA_HOME in the client's garmin-mcp entry (`garmin-mcp config install <client> --key <abs path> --java-home <abs path>`), then restart the client", ciqsdk.EnvKeyVar)
 }
 
 // credLine reports one credential. Garmin Connect is opt-in, so a missing

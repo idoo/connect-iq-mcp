@@ -19,6 +19,7 @@ import (
 	"github.com/idoo/garmin-mcp/internal/auth"
 	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/config"
+	"github.com/idoo/garmin-mcp/internal/flock"
 	"github.com/idoo/garmin-mcp/internal/portal"
 	"github.com/idoo/garmin-mcp/internal/state"
 )
@@ -203,7 +204,7 @@ func (s *Store) pasteLogin(ctx context.Context) (auth.LoginResult, error) {
 	if err != nil {
 		return auth.LoginResult{}, err
 	}
-	unlock, err := lockPath(ctx, s.lockFile())
+	unlock, err := flock.Lock(ctx, s.lockFile())
 	if err != nil {
 		return auth.LoginResult{}, fmt.Errorf("lock credentials: %w", err)
 	}
@@ -297,7 +298,7 @@ func (s *Store) cliRenew(ctx context.Context, stdout io.Writer) error {
 	if !wantPortal && !wantConnect {
 		return errors.New("credentials come from environment variables; nothing to renew")
 	}
-	unlock, err := lockPath(ctx, s.lockFile())
+	unlock, err := flock.Lock(ctx, s.lockFile())
 	if err != nil {
 		return fmt.Errorf("lock credentials: %w", err)
 	}

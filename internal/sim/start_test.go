@@ -29,12 +29,15 @@ func openDial(context.Context, string, string) (net.Conn, error) {
 func fakeLauncher(st Status, dial DialFunc, launches *atomic.Int32, exited <-chan error) launcher {
 	return launcher{
 		status: func(context.Context) (Status, error) { return st, nil },
-		launch: func(context.Context, ciqsdk.SDK) (<-chan error, error) {
+		launch: func(context.Context, ciqsdk.SDK) (launched, error) {
 			launches.Add(1)
-			return exited, nil
+			return launched{exited: exited, path: "/sdk/bin/simulator"}, nil
 		},
 		alive:   func(context.Context) bool { return st.Running },
 		verify:  func(context.Context, int) error { return nil },
+		pid:     func(context.Context) (int, error) { return st.PID, nil },
+		kill:    func(context.Context, int) {},
+		owned:   &owner{},
 		dial:    dial,
 		timeout: 5 * time.Second,
 	}
@@ -88,13 +91,13 @@ func TestSpawnReportsExitWithOutput(t *testing.T) {
 	if err := os.WriteFile(exe, []byte("#!/bin/sh\necho starting\necho 'error while loading shared libraries: libwebkit2gtk-4.0.so' >&2\nexit 3\n"), 0o700); err != nil { //nolint:gosec // G306: test script must be executable
 		t.Fatal(err)
 	}
-	exited, err := spawn(exe, filepath.Dir(exe))
+	la, err := spawn(exe, filepath.Dir(exe))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	err = WaitReady(ctx, &fakeClock{t: time.Unix(0, 0)}, refusedDial, Addr, func() bool { return false }, exited, 100*time.Millisecond, time.Hour)
+	err = WaitReady(ctx, &fakeClock{t: time.Unix(0, 0)}, refusedDial, Addr, func() bool { return false }, la.exited, 100*time.Millisecond, time.Hour)
 	if !errors.Is(err, ErrSimulatorExited) || !strings.Contains(err.Error(), "exit status 3") || !strings.Contains(err.Error(), "libwebkit2gtk") {
 		t.Fatalf("err = %v", err)
 	}

@@ -25,8 +25,6 @@ type Config struct {
 	DefaultProfile string `toml:"default_profile,omitempty"`
 	// TrustedPins lists absolute directories whose .garmin-mcp.toml may select any profile.
 	TrustedPins []string `toml:"trusted_pins,omitempty"`
-	// AllowProfileSwitch exposes a per-call profile argument on tools.
-	AllowProfileSwitch bool `toml:"allow_profile_switch,omitempty"`
 	// Profiles maps profile names to settings. Credentials live in the OS
 	// keychain, or a 0600 state file when no keychain is available (see
 	// internal/credstore), never here.
@@ -84,23 +82,38 @@ func Load(path string) (*Config, []string, error) {
 		return nil, nil, err
 	}
 	warnings := permWarnings(path, info)
-	cfg, err := Parse(data)
+	cfg, legacy, err := Parse(data)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s: %w", path, err)
+	}
+	for _, w := range legacy {
+		warnings = append(warnings, path+": "+w)
 	}
 	return cfg, warnings, nil
 }
 
-// Parse decodes and validates config TOML.
-func Parse(data []byte) (*Config, error) {
-	var cfg Config
-	if err := decodeStrict(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse: %w", err)
+// fileConfig is Config plus retired keys that still load so old config
+// files keep working; each one present yields a warning.
+type fileConfig struct {
+	Config
+	AllowProfileSwitch *bool `toml:"allow_profile_switch"`
+}
+
+// Parse decodes and validates config TOML. The warnings name retired keys
+// the file still sets.
+func Parse(data []byte) (*Config, []string, error) {
+	var fc fileConfig
+	if err := decodeStrict(data, &fc); err != nil {
+		return nil, nil, fmt.Errorf("parse: %w", err)
 	}
-	if err := cfg.Validate(); err != nil {
-		return nil, err
+	if err := fc.Validate(); err != nil {
+		return nil, nil, err
 	}
-	return &cfg, nil
+	var warnings []string
+	if fc.AllowProfileSwitch != nil {
+		warnings = append(warnings, "allow_profile_switch is not supported and has no effect; remove it")
+	}
+	return &fc.Config, warnings, nil
 }
 
 // decodeStrict decodes TOML rejecting unknown keys, naming them in the error.

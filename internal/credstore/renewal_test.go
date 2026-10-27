@@ -16,6 +16,7 @@ import (
 
 	"github.com/idoo/garmin-mcp/internal/auth"
 	"github.com/idoo/garmin-mcp/internal/browser"
+	"github.com/idoo/garmin-mcp/internal/flock"
 )
 
 type fakeClock struct {
@@ -178,7 +179,7 @@ func TestRenewDuringOpenSignIn(t *testing.T) {
 	if err := s.writeStored(blob{Portal: &portalCred{Cookies: cookies(clk.now().Add(time.Hour))}}); err != nil {
 		t.Fatal(err)
 	}
-	unlockLogin, err := lockPath(context.Background(), s.loginLockFile())
+	unlockLogin, err := flock.Lock(context.Background(), s.loginLockFile())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +263,7 @@ func TestHeldLocksDoNotBlockValidCredential(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	unlockLogin, err := lockPath(context.Background(), s.loginLockFile())
+	unlockLogin, err := flock.Lock(context.Background(), s.loginLockFile())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +276,7 @@ func TestHeldLocksDoNotBlockValidCredential(t *testing.T) {
 	}
 	unlockLogin()
 
-	unlock, err := lockPath(context.Background(), s.lockFile())
+	unlock, err := flock.Lock(context.Background(), s.lockFile())
 	if err != nil {
 		t.Fatal(err)
 	}

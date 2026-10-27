@@ -152,13 +152,3 @@ func TestDisplayNameCached(t *testing.T) {
 		t.Fatalf("socialProfile fetched %d times", hits.Load())
 	}
 }
-
-func TestRetryAfterDate(t *testing.T) {
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	if d := retryAfter(now.Add(30*time.Second).Format(http.TimeFormat), now); d != 30*time.Second {
-		t.Fatalf("got %v", d)
-	}
-	if d := retryAfter("junk", now); d != 0 {
-		t.Fatalf("got %v", d)
-	}
-}

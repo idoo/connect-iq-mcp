@@ -1,6 +1,6 @@
 # Contributing
 
-Garmin MCP is small on purpose. Open a short issue before a big PR.
+Garmin MCP is small on purpose. Open a short issue before a big PR. How the packages fit together is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Setup
 

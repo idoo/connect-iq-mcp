@@ -3,6 +3,7 @@ package sdk
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -139,7 +140,7 @@ func sdkInfo(ctx context.Context, _ *tool.Env, in infoIn) (*tool.Result, error) 
 // --- sdk_devices_list ---
 
 type devicesIn struct {
-	Query      string `json:"query,omitempty" jsonschema:"case-insensitive substring of id or display name"`
+	Query      string `json:"query,omitempty" jsonschema:"part of the id or display name; case, accents, ® and spaces are ignored (\"Fenix 7\" finds fenix7)"`
 	Shape      string `json:"shape,omitempty" jsonschema:"screen shape"`
 	Touch      *bool  `json:"touch,omitempty" jsonschema:"only touch (true) or non-touch (false) devices"`
 	MinAPI     string `json:"min_api,omitempty" jsonschema:"minimum Connect IQ version, e.g. 4.2.0"`
@@ -198,7 +199,7 @@ func sdkDevicesList(_ context.Context, env *tool.Env, in devicesIn) (*tool.Resul
 	if limit <= 0 {
 		limit = 200
 	}
-	q := strings.ToLower(in.Query)
+	q := ciqsdk.NormDeviceName(in.Query)
 	rows := []deviceRow{}
 	total := 0
 	for _, d := range FilterDevices(devs, q, in.Shape, in.Touch, in.MinAPI, only) {
@@ -217,11 +218,12 @@ func sdkDevicesList(_ context.Context, env *tool.Env, in devicesIn) (*tool.Resul
 	return tool.OK(out), nil
 }
 
-// FilterDevices applies the sdk_devices_list filters (q lowercased).
+// FilterDevices applies the sdk_devices_list filters (q folded by
+// ciqsdk.NormDeviceName).
 func FilterDevices(devs []ciqsdk.Device, q, shape string, touch *bool, minAPI string, only map[string]bool) []ciqsdk.Device {
 	var out []ciqsdk.Device
 	for _, d := range devs {
-		if q != "" && !strings.Contains(strings.ToLower(d.ID), q) && !strings.Contains(strings.ToLower(d.DisplayName), q) {
+		if q != "" && !strings.Contains(ciqsdk.NormDeviceName(d.ID), q) && !strings.Contains(ciqsdk.NormDeviceName(d.DisplayName), q) {
 			continue
 		}
 		if shape != "" && !strings.EqualFold(d.Shape, shape) {
@@ -252,17 +254,65 @@ func sdkDeviceGet(_ context.Context, _ *tool.Env, in deviceIn) (*tool.Result, er
 	if err != nil {
 		return nil, err
 	}
-	if !ciqsdk.ValidDeviceID(in.ID) {
-		return nil, tool.InvalidArgs("invalid device id %q", in.ID)
+	id, note, err := ResolveDevice(dr, in.ID)
+	if err != nil {
+		return nil, err
 	}
-	d, err := ciqsdk.LoadDevice(dr, in.ID)
+	d, err := ciqsdk.LoadDevice(dr, id)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, missingDevice(dr, in.ID)
+		return nil, missingDevice(dr, id)
 	}
 	if err != nil {
 		return nil, err
 	}
-	return tool.OK(d), nil
+	return withNote(tool.OK(d), note), nil
+}
+
+// maxCandidates caps the device ids an ambiguous name lists.
+const maxCandidates = 8
+
+// ResolveDevice maps a device argument to an installed device id. An
+// installed id is taken as is (note ""). Otherwise a free-text name ("Fenix
+// 7") selecting exactly one installed device is accepted, with a note naming
+// the mapping; several matches or none are invalid arguments. A well-formed id
+// that matches nothing goes through missingDevice (unknown, or not downloaded).
+func ResolveDevice(dr, arg string) (id, note string, err error) {
+	if ciqsdk.ValidDeviceID(arg) {
+		if _, err := ciqsdk.LoadDevice(dr, arg); err == nil {
+			return arg, "", nil
+		}
+	}
+	devs, _, err := ciqsdk.ListDevices(dr)
+	if err != nil {
+		return "", "", err
+	}
+	m := ciqsdk.MatchDevices(devs, arg)
+	switch {
+	case len(m) == 1:
+		return m[0].ID, fmt.Sprintf("device %q → %s", arg, m[0].ID), nil
+	case len(m) > 1:
+		ids := make([]string, 0, maxCandidates)
+		for _, d := range m[:min(len(m), maxCandidates)] {
+			ids = append(ids, d.ID)
+		}
+		more := ""
+		if len(m) > maxCandidates {
+			more = fmt.Sprintf(" (and %d more)", len(m)-maxCandidates)
+		}
+		return "", "", tool.WithNext(tool.InvalidArgs("device %q matches %d devices: %s%s; pass one id", arg, len(m), strings.Join(ids, ", "), more), tool.NextStep{Tool: "sdk_devices_list", Args: map[string]any{"query": arg}})
+	case ciqsdk.ValidDeviceID(arg):
+		return "", "", missingDevice(dr, arg)
+	}
+	return "", "", tool.WithNext(tool.InvalidArgs("unknown device %q; list ids with sdk_devices_list", arg), tool.NextStep{Tool: "sdk_devices_list"})
+}
+
+// withNote adds note (if any) as a result warning, so the agent sees which
+// device a free-text name became.
+func withNote(r *tool.Result, note string) *tool.Result {
+	if note != "" {
+		r.Warn(note)
+	}
+	return r
 }
 
 // missingDevice explains a device with no compiler.json: an id the SDK
@@ -281,7 +331,8 @@ type manifestIn struct {
 	Path string `json:"path,omitempty" jsonschema:"manifest.xml or project dir inside the root (default: root)"`
 }
 
-// manifestPath resolves a manifest.xml path (a dir means <dir>/manifest.xml).
+// manifestPath resolves a manifest.xml path (a dir means <dir>/manifest.xml,
+// and must be a Connect IQ project).
 func manifestPath(env *tool.Env, p string) (string, error) {
 	if p == "" {
 		p = "."
@@ -291,9 +342,73 @@ func manifestPath(env *tool.Env, p string) (string, error) {
 		return "", err
 	}
 	if st, err := os.Stat(abs); err == nil && st.IsDir() {
+		if err := CheckProject(env, "path", p, abs); err != nil {
+			return "", err
+		}
 		abs = filepath.Join(abs, "manifest.xml")
 	}
 	return abs, nil
+}
+
+// maxProjectHints caps the project dirs a not-a-project error lists.
+const maxProjectHints = 5
+
+// CheckProject refuses a project dir (argument arg, value val, resolved
+// pdir) that is missing or has no manifest.xml, naming the dirs under the
+// root that are projects. A value repeating the root's own name (the agent
+// passing the project's name from inside it) is told to leave arg out.
+func CheckProject(env *tool.Env, arg, val, pdir string) error {
+	root, err := env.Root.Resolve(".")
+	if err != nil {
+		return err
+	}
+	st, err := os.Stat(pdir)
+	if err == nil && st.IsDir() {
+		if _, err := os.Stat(filepath.Join(pdir, "manifest.xml")); err == nil {
+			return nil
+		}
+	}
+	if val != "" && val != "." && filepath.Clean(val) == filepath.Base(root) {
+		if _, err := os.Stat(filepath.Join(root, "manifest.xml")); err == nil {
+			return tool.InvalidArgs("%s %q names the root folder itself; paths are relative to the root %s, so leave %s out", arg, val, root, arg)
+		}
+	}
+	what := fmt.Sprintf("%s is not a Connect IQ project (no manifest.xml)", pdir)
+	if err != nil || !st.IsDir() {
+		what = fmt.Sprintf("%s %s is not a directory (paths are relative to the root %s)", arg, pdir, root)
+	}
+	found := projectDirs(root)
+	if len(found) == 0 {
+		return tool.InvalidArgs("%s; no folder under %s has a manifest.xml: open the project folder (the one with manifest.xml) as the workspace root", what, root)
+	}
+	return tool.InvalidArgs("%s; pass %s:\"<subdir>\", projects under the root: %s", what, arg, strings.Join(found, ", "))
+}
+
+// projectDirs lists up to maxProjectHints dirs (relative to root, at most
+// two levels down) that contain manifest.xml, skipping hidden and build dirs.
+func projectDirs(root string) []string {
+	var out []string
+	var walk func(rel string, depth int)
+	walk = func(rel string, depth int) {
+		ents, err := os.ReadDir(filepath.Join(root, rel))
+		if err != nil {
+			return
+		}
+		for _, e := range ents {
+			n := e.Name()
+			if len(out) >= maxProjectHints || !e.IsDir() || strings.HasPrefix(n, ".") || n == "bin" || n == "node_modules" {
+				continue
+			}
+			sub := filepath.Join(rel, n)
+			if _, err := os.Stat(filepath.Join(root, sub, "manifest.xml")); err == nil {
+				out = append(out, filepath.ToSlash(sub))
+			} else if depth < 2 {
+				walk(sub, depth+1)
+			}
+		}
+	}
+	walk("", 1)
+	return out
 }
 
 func readManifest(env *tool.Env, p string) (ciqsdk.Manifest, []byte, error) {

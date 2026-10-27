@@ -68,6 +68,21 @@ func TestSchemaInference(t *testing.T) {
 	}
 }
 
+// SG-8: a blank required string is invalid_arguments before the handler runs.
+func TestBlankRequiredArgRejected(t *testing.T) {
+	tl := tool.New(exampleMeta, exampleHandler)
+	for _, args := range []string{`{"app":""}`, `{"app":"  \t"}`} {
+		k := newKit(t)
+		b := tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, args), "invalid_arguments")
+		if !strings.Contains(b.Message, "app is required") {
+			t.Errorf("%s: message = %q", args, b.Message)
+		}
+		if n := len(k.HTTP.Mutations()); n != 0 {
+			t.Fatalf("%s: handler ran", args)
+		}
+	}
+}
+
 func TestCoercionAndValidation(t *testing.T) {
 	k := newKit(t)
 	tl := tool.New(exampleMeta, exampleHandler)

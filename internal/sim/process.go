@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/idoo/garmin-mcp/internal/ciqsdk"
+	"github.com/idoo/garmin-mcp/internal/flock"
 	"github.com/idoo/garmin-mcp/internal/state"
 )
 
@@ -107,7 +109,7 @@ func Lease(ctx context.Context) (release func(), err error) {
 	if err != nil {
 		return nil, err
 	}
-	return lockPath(ctx, filepath.Join(dir, "sim.lock"))
+	return flock.Lock(ctx, filepath.Join(dir, "sim.lock"))
 }
 
 // Status describes the simulator process.
@@ -326,12 +328,54 @@ var ErrNoDisplay = errors.New("no graphical display: the Connect IQ simulator is
 // ErrSimulatorExited means the launched simulator exited before it listened.
 var ErrSimulatorExited = errors.New("simulator exited before opening its port")
 
-// launcher holds Start's process and network hooks; tests replace them.
+// ErrForeignSimulator means a simulator this server did not start is
+// running: another agent's or the user's. sim_stop leaves it alone unless forced.
+var ErrForeignSimulator = errors.New("a Connect IQ simulator not started by this server is running")
+
+// foreignErr is the [ErrForeignSimulator] for pid with the one next step.
+func foreignErr(pid int) error {
+	return fmt.Errorf("%w (pid %d); ask the human before stopping it, then call sim_stop with force:true", ErrForeignSimulator, pid)
+}
+
+// owner remembers the pid of the simulator this server process launched.
+type owner struct {
+	mu  sync.Mutex
+	pid int
+}
+
+func (o *owner) set(pid int) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.pid = pid
+}
+
+func (o *owner) is(pid int) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return pid > 0 && o.pid == pid
+}
+
+// ours is the simulator this server launched (production launcher).
+var ours owner
+
+// launched is a simulator being started: exited delivers the child's exit
+// (nil = never, as for macOS `open -a`), output returns its newest output,
+// and path is what a human opens by hand.
+type launched struct {
+	exited <-chan error
+	output func() string
+	path   string
+}
+
+// launcher holds Start's and Stop's process and network hooks; tests replace them.
 type launcher struct {
 	status  func(context.Context) (Status, error)
-	launch  func(context.Context, ciqsdk.SDK) (<-chan error, error)
+	launch  func(context.Context, ciqsdk.SDK) (launched, error)
 	alive   func(context.Context) bool
 	verify  func(context.Context, int) error
+	pid     func(context.Context) (int, error)
+	kill    func(context.Context, int)
+	owned   *owner
 	dial    DialFunc // nil = Dial
 	timeout time.Duration
 }
@@ -341,7 +385,19 @@ var defaultLauncher = launcher{
 	launch:  launch,
 	alive:   func(ctx context.Context) bool { pid, _ := FindPID(ctx); return pid > 0 },
 	verify:  verifyListener,
+	pid:     FindPID,
+	kill:    killVerified,
+	owned:   &ours,
 	timeout: 60 * time.Second,
+}
+
+// stopAdvice is the next step for a simulator (pid) in the way: sim_stop
+// for this server's own, the human's approval for anyone else's.
+func (l launcher) stopAdvice(pid int) string {
+	if l.owned.is(pid) {
+		return "call sim_stop, then retry"
+	}
+	return foreignErr(pid).Error()
 }
 
 // Start launches the simulator of sdk (no-op if one is ready) and waits for
@@ -357,7 +413,7 @@ func (l launcher) start(ctx context.Context, clk Clock, sdk ciqsdk.SDK) (st Stat
 		return st, false, err
 	}
 	if st.Running && st.SDKPath != "" && !SameSDK(st.SDKPath, sdk.Path) {
-		return st, false, fmt.Errorf("%w: running %s, requested %s (sim_stop first)", ErrSDKMismatch, st.SDKPath, sdk.Path)
+		return st, false, fmt.Errorf("%w: running %s, requested %s; %s", ErrSDKMismatch, st.SDKPath, sdk.Path, l.stopAdvice(st.PID))
 	}
 	if st.Ready {
 		if err := l.verify(ctx, st.PID); err != nil {
@@ -370,21 +426,29 @@ func (l launcher) start(ctx context.Context, clk Clock, sdk ciqsdk.SDK) (st Stat
 		dial = Dial
 	}
 	alive := func() bool { return l.alive(ctx) }
+	launchedNow := !st.Running
 	if st.Running {
 		// Still booting, or hung after an earlier timeout: a second binary
 		// would fight it for the port.
 		if err := WaitReady(ctx, clk, dial, Addr, alive, nil, 100*time.Millisecond, l.timeout); err != nil {
 			if errors.Is(err, ErrNotReady) {
-				return st, false, fmt.Errorf("simulator (pid %d) is running but not listening on %s after %s; call sim_stop, then retry", st.PID, Addr, l.timeout)
+				return st, false, fmt.Errorf("simulator (pid %d) is running but not listening on %s after %s; %s", st.PID, Addr, l.timeout, l.stopAdvice(st.PID))
 			}
 			return st, false, err
 		}
 	} else {
-		exited, err := l.launch(ctx, sdk)
+		la, err := l.launch(ctx, sdk)
 		if err != nil {
 			return st, false, err
 		}
-		if err := WaitReady(ctx, clk, dial, Addr, alive, exited, 100*time.Millisecond, l.timeout); err != nil {
+		if err := WaitReady(ctx, clk, dial, Addr, alive, la.exited, 100*time.Millisecond, l.timeout); err != nil {
+			// Whatever came up is the one we launched: sim_stop may end it.
+			if now, serr := l.status(ctx); serr == nil && now.PID > 0 {
+				l.owned.set(now.PID)
+			}
+			if errors.Is(err, ErrNotReady) {
+				return st, false, notStarted(la, l.timeout)
+			}
 			return st, false, err
 		}
 	}
@@ -392,30 +456,124 @@ func (l launcher) start(ctx context.Context, clk Clock, sdk ciqsdk.SDK) (st Stat
 	if err != nil {
 		return st, false, err
 	}
-	return st, false, l.verify(ctx, st.PID)
+	if err := l.verify(ctx, st.PID); err != nil {
+		return st, false, err
+	}
+	// A simulator that was already booting keeps its owner; the one this
+	// call launched is ours, so sim_stop may end it without force.
+	if launchedNow {
+		l.owned.set(st.PID)
+	}
+	return st, false, nil
+}
+
+// notStarted explains a launched simulator that never opened its port:
+// its last output lines and the next step for this OS.
+func notStarted(la launched, timeout time.Duration) error {
+	out := ""
+	if la.output != nil {
+		out = lastLines(la.output(), 10)
+	}
+	shown := out
+	if shown == "" {
+		shown = "none captured"
+	}
+	return fmt.Errorf("%w: the simulator garmin-mcp launched (%s) never opened %s within %s; last output: %s; next: %s",
+		ErrNotReady, la.path, Addr, timeout, shown, launchHint(runtime.GOOS, out, la.path))
+}
+
+// launchHint picks the next step for a simulator that never listened from
+// its output: display, Java or SDK problems, else opening it once by hand
+// (a first launch can wait on a permission or first-run dialog).
+func launchHint(goos, out, path string) string {
+	lo := strings.ToLower(out)
+	switch {
+	case strings.Contains(lo, "display") || strings.Contains(lo, "gtk") || strings.Contains(lo, "x11"):
+		return "the simulator could not open a window: run garmin-mcp inside a desktop session (DISPLAY or WAYLAND_DISPLAY set; xvfb-run, or WSLg on WSL), then retry sim_run"
+	case strings.Contains(lo, "java") || strings.Contains(lo, "jvm") || strings.Contains(lo, "jdk"):
+		return "the output names Java: set JAVA_HOME to a JDK 17+ in the MCP client's garmin-mcp env (config install <client> --java-home <dir>), then retry sim_run"
+	case strings.Contains(lo, "incompatible") || strings.Contains(lo, "unsupported"):
+		return "the output names the SDK: pick another installed SDK with sim_run's sdk argument (sdk_info lists them) or update it with SdkManager, then retry"
+	}
+	if goos == "darwin" {
+		return "open the simulator once by hand: open -a " + path + " (accept any first-run or security prompt), then retry sim_run"
+	}
+	return "open the simulator once by hand: " + path + ", then retry sim_run"
+}
+
+// lastLines returns the last n non-empty lines of s, joined by " | ".
+func lastLines(s string, n int) string {
+	var lines []string
+	for _, ln := range strings.Split(s, "\n") {
+		if ln = strings.TrimSpace(ln); ln != "" {
+			lines = append(lines, ln)
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, " | ")
 }
 
 // launch starts the simulator of sdk. On macOS `open -a` hands the app to
-// launchd (nil channel). Elsewhere the child's output tail is kept and the
-// channel delivers an [ErrSimulatorExited] naming it once the child exits.
-func launch(ctx context.Context, sdk ciqsdk.SDK) (<-chan error, error) {
+// launchd (nil exit channel) with its output sent to a log in the state dir.
+// Elsewhere the child's output tail is kept and the channel delivers an
+// [ErrSimulatorExited] naming it once the child exits.
+func launch(ctx context.Context, sdk ciqsdk.SDK) (launched, error) {
 	bin := sdk.Bin()
 	if runtime.GOOS == "darwin" {
 		app := filepath.Join(bin, "ConnectIQ.app")
-		if out, err := exec.CommandContext(ctx, "open", "-a", app).CombinedOutput(); err != nil { //nolint:gosec // G204: fixed program; app is the resolved SDK's bundled ConnectIQ.app
-			return nil, fmt.Errorf("open -a %s: %v: %s", app, err, strings.TrimSpace(string(out)))
+		args := []string{"-a", app}
+		la := launched{path: app}
+		if log, err := launchLog(); err == nil {
+			args = append(args, "--stdout", log, "--stderr", log)
+			la.output = func() string { return fileTail(log, 4<<10) }
 		}
-		return nil, nil
+		if out, err := exec.CommandContext(ctx, "open", args...).CombinedOutput(); err != nil { //nolint:gosec // G204: fixed program; app is the resolved SDK's bundled ConnectIQ.app, log is under the state dir
+			return launched{}, fmt.Errorf("open -a %s: %v: %s", app, err, strings.TrimSpace(string(out)))
+		}
+		return la, nil
 	}
 	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
-		return nil, ErrNoDisplay
+		return launched{}, ErrNoDisplay
 	}
 	return spawn(filepath.Join(bin, processName()), bin)
 }
 
+// launchLog returns an emptied sim-launch.log under the state dir for the
+// output of a simulator started by `open -a`.
+func launchLog() (string, error) {
+	dir, err := state.DefaultDir()
+	if err != nil {
+		return "", err
+	}
+	p := filepath.Join(dir, "sim-launch.log")
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600) //nolint:gosec // G304: fixed name under the state dir
+	if err != nil {
+		return "", err
+	}
+	return p, f.Close()
+}
+
+// fileTail returns the last limit bytes of the file at p ("" if unreadable).
+func fileTail(p string, limit int64) string {
+	f, err := os.Open(p) //nolint:gosec // G304: the launch log under the state dir
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	if st, err := f.Stat(); err == nil && st.Size() > limit {
+		if _, err := f.Seek(st.Size()-limit, io.SeekStart); err != nil {
+			return ""
+		}
+	}
+	b, _ := io.ReadAll(io.LimitReader(f, limit))
+	return string(b)
+}
+
 // spawn starts exe in dir, detached from the request, and reports its exit
 // with the last 4 KiB of its stdout and stderr.
-func spawn(exe, dir string) (<-chan error, error) {
+func spawn(exe, dir string) (launched, error) {
 	cmd := exec.Command(exe) //nolint:gosec // G204: exe is the simulator binary inside the resolved SDK's bin dir
 	cmd.Dir = dir
 	ownGroup(cmd)
@@ -424,7 +582,7 @@ func spawn(exe, dir string) (<-chan error, error) {
 	// A grandchild holding the output pipe must not hide the exit.
 	cmd.WaitDelay = time.Second
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start %s: %w", exe, err)
+		return launched{}, fmt.Errorf("start %s: %w", exe, err)
 	}
 	exited := make(chan error, 1)
 	go func() {
@@ -438,7 +596,7 @@ func spawn(exe, dir string) (<-chan error, error) {
 		}
 		exited <- fmt.Errorf("%w (%s): %s", ErrSimulatorExited, status, tail)
 	}()
-	return exited, nil
+	return launched{exited: exited, output: out.String, path: exe}, nil
 }
 
 // tailBuffer keeps the last max bytes written to it.
@@ -464,19 +622,32 @@ func (t *tailBuffer) String() string {
 	return string(t.b)
 }
 
-// Stop kills monkeydo clients, then the simulator, and waits for the port
-// to close.
-func Stop(ctx context.Context, clk Clock) (killedClients int, wasRunning bool, err error) {
+// Stop kills this server's monkeydo clients, then the simulator, and waits
+// for the port to close. A simulator this server did not launch is left
+// running with an [ErrForeignSimulator], unless force.
+func Stop(ctx context.Context, clk Clock, force bool) (killedClients int, wasRunning bool, err error) {
+	return defaultLauncher.stop(ctx, clk, force)
+}
+
+func (l launcher) stop(ctx context.Context, clk Clock, force bool) (killedClients int, wasRunning bool, err error) {
 	killedClients = Sessions.KillAll()
-	pid, err := FindPID(ctx)
+	pid, err := l.pid(ctx)
 	if err != nil {
 		return killedClients, false, err
 	}
+	if pid > 0 && !force && !l.owned.is(pid) {
+		return killedClients, false, foreignErr(pid)
+	}
 	if pid > 0 {
 		wasRunning = true
-		killVerified(ctx, pid)
+		l.kill(ctx, pid)
+		l.owned.set(0)
 	}
-	return killedClients, wasRunning, WaitClosed(ctx, clk, Dial, Addr, 20*time.Second)
+	dial := l.dial
+	if dial == nil {
+		dial = Dial
+	}
+	return killedClients, wasRunning, WaitClosed(ctx, clk, dial, Addr, 20*time.Second)
 }
 
 // killVerified terminates pid only when its executable is a Connect IQ SDK

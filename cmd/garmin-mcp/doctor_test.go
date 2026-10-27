@@ -163,7 +163,7 @@ func TestKeyCheck(t *testing.T) {
 	}
 
 	t.Setenv(ciqsdk.EnvKeyVar, "")
-	if out, failed := run(); failed || !strings.Contains(out, "ok    developer key: GARMIN_MCP_KEY not set") {
+	if out, failed := run(); failed || !strings.Contains(out, "info  developer key: GARMIN_MCP_KEY not set") || !strings.Contains(out, "config install <client> --key") {
 		t.Fatalf("unset: %s", out)
 	}
 

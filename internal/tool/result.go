@@ -1,6 +1,9 @@
 package tool
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"slices"
+)
 
 // Image is binary image content returned alongside structured data.
 type Image struct {
@@ -52,6 +55,24 @@ type Result struct {
 
 // OK returns a successful result carrying v.
 func OK(v any) *Result { return &Result{Data: v} }
+
+// Clone returns a copy of r that a caller may modify without touching r:
+// Meta, Next, Images and Warnings are copied. Data is shared and must be
+// treated as read-only (render replaces it, never edits it).
+func (r *Result) Clone() *Result {
+	if r == nil {
+		return nil
+	}
+	c := *r
+	c.Images = slices.Clone(r.Images)
+	c.Next = slices.Clone(r.Next)
+	c.Meta.Warnings = slices.Clone(r.Meta.Warnings)
+	if r.Meta.Truncated != nil {
+		t := *r.Meta.Truncated
+		c.Meta.Truncated = &t
+	}
+	return &c
+}
 
 // WithImage appends an image to r and returns r.
 func (r *Result) WithImage(mime string, data []byte) *Result {

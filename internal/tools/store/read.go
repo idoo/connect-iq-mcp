@@ -109,7 +109,7 @@ func storeAppsList(ctx context.Context, env *tool.Env, _ noIn) (*tool.Result, er
 	if err != nil {
 		return nil, wrap(err)
 	}
-	apps, err := listApps(ctx, c)
+	apps, _, err := listApps(ctx, c)
 	if err != nil {
 		return nil, wrap(err)
 	}

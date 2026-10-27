@@ -12,31 +12,7 @@ import (
 	"github.com/idoo/garmin-mcp/internal/tool/tooltest"
 )
 
-func TestSharedErrorHelpers(t *testing.T) {
-	api := func(s int) error { return fmt.Errorf("wrapped: %w", &tool.APIError{Status: s}) }
-	tests := []struct {
-		name               string
-		err                error
-		status             int
-		notFound, conflict bool
-	}{
-		{"nil", nil, 0, false, false},
-		{"plain", errors.New("x"), 0, false, false},
-		{"api404", api(404), 404, true, false},
-		{"api409", api(409), 409, false, true},
-		{"api500", api(500), 500, false, false},
-	}
-	for _, tc := range tests {
-		if got := tool.APIStatus(tc.err); got != tc.status {
-			t.Errorf("%s: APIStatus = %d", tc.name, got)
-		}
-		if got := tool.IsNotFound(tc.err); got != tc.notFound {
-			t.Errorf("%s: IsNotFound = %v", tc.name, got)
-		}
-		if got := tool.IsConflict(tc.err); got != tc.conflict {
-			t.Errorf("%s: IsConflict = %v", tc.name, got)
-		}
-	}
+func TestInvalidArgsHelper(t *testing.T) {
 	inner := errors.New("inner")
 	err := tool.InvalidArgs("bad %s: %w", "limit", inner)
 	if !errors.Is(err, tool.ErrInvalidArgs) || !errors.Is(err, inner) || err.Error() != "invalid arguments: bad limit: inner" {
