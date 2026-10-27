@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/idoo/garmin-mcp/internal/config"
@@ -135,7 +136,7 @@ func (s *session) enableWritesAction(ctx context.Context, env *tool.Env) (*tool.
 	if isElicitUnavailable(err) {
 		return tool.OK(map[string]any{
 			"writes":       false,
-			"instructions": writesInstructions(clientName(ctx)),
+			"instructions": writesInstructions(clientName(ctx), env.Profile.Name),
 		}), nil
 	}
 	if err != nil {
@@ -161,13 +162,21 @@ func clientName(ctx context.Context) string {
 }
 
 // writesInstructions returns copy-paste steps to restart garmin-mcp with writes on
-// for the detected MCP client.
-func writesInstructions(client string) string {
+// for the detected MCP client. They only run for clients that cannot elicit,
+// so they also name allow_no_elicit: without it every publish, listing edit and
+// review reply fails with human_approval_required and needs a second restart.
+func writesInstructions(client, profile string) string {
 	cfgPath, err := config.DefaultPath(os.Getenv)
 	if err != nil {
 		cfgPath = "the garmin-mcp config.toml"
 	}
-	tail := " Then restart the client. Alternatively set allow_writes = true in the profile in " + cfgPath + "."
+	if profile == "" {
+		profile = config.DefaultProfileName
+	}
+	tail := " Publishing, listing edits and review replies also need allow_no_elicit = true under [profiles." + profile + "] in " + cfgPath +
+		", because this client can't show the approval; set both " + config.EnvAllowWrites + "=1 and allow_no_elicit before one restart." +
+		" With allow_no_elicit on, those public actions go through on the agent's confirm alone, without a human yes." +
+		" Then restart the client. Alternatively set allow_writes = true in that same section instead of the env variable."
 	c := strings.ToLower(client)
 	switch {
 	case strings.Contains(c, "claude-code") || strings.Contains(c, "claude code"):
@@ -179,10 +188,29 @@ func writesInstructions(client string) string {
 	case strings.Contains(c, "codex"):
 		return `Ask the user to add GARMIN_MCP_ALLOW_WRITES = "1" to env of [mcp_servers.garmin-mcp] in ~/.codex/config.toml.` + tail
 	case strings.Contains(c, "visual studio code") || strings.Contains(c, "vscode"):
-		return `Ask the user to add "GARMIN_MCP_ALLOW_WRITES": "1" to servers.garmin-mcp.env in .vscode/mcp.json.` + tail
+		where := `the user mcp.json (run "MCP: Open User Configuration")`
+		if paths := vscodeUserConfigs(); len(paths) > 0 {
+			where = `the user mcp.json that "garmin-mcp config install vscode" writes, ` + strings.Join(paths, " or ") + ` (run "MCP: Open User Configuration")`
+		}
+		return `Ask the user to add "GARMIN_MCP_ALLOW_WRITES": "1" to servers.garmin-mcp.env in ` + where + `.` + tail
 	case strings.Contains(c, "windsurf"):
 		return `Ask the user to add "GARMIN_MCP_ALLOW_WRITES": "1" to mcpServers.garmin-mcp.env in ~/.codeium/windsurf/mcp_config.json.` + tail
 	default:
 		return "Ask the user to set the environment variable GARMIN_MCP_ALLOW_WRITES=1 in this client's garmin-mcp server config (or start garmin-mcp with --allow-writes)." + tail
 	}
+}
+
+// vscodeUserConfigs lists the VS Code user mcp.json files `garmin-mcp config
+// install vscode` writes on this machine (nil when the dirs are unknown);
+// tests replace it.
+var vscodeUserConfigs = func() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	cfg, err := os.UserConfigDir()
+	if err != nil {
+		return nil
+	}
+	return config.VSCodeUserConfigs(runtime.GOOS, home, cfg)
 }

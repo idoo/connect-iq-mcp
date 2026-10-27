@@ -66,6 +66,28 @@ func resolveBrowser(ctx context.Context, path, binDir string, log io.Writer) (ex
 	return p.exe, "Chrome for Testing", p.note, nil
 }
 
+// Preflight reports, without downloading anything, why the browser sign-in
+// would fail before it starts: on Linux, when Chrome for Testing is the pick,
+// an AppArmor-blocked sandbox or (if already extracted) missing shared
+// libraries. It is nil elsewhere and for any other browser.
+func Preflight(ctx context.Context) error {
+	p, _ := locateHere("", defaultBinDir())
+	return preflight(ctx, runtime.GOOS, p, readSysctl, cftRuns)
+}
+
+func preflight(ctx context.Context, goos string, p pick, read func(string) (string, error), runs func(context.Context, string) error) error {
+	if goos != "linux" || !p.cft || p.exe == "" {
+		return nil
+	}
+	if err := cftSandboxBlocked(goos, read); err != nil {
+		return err
+	}
+	if isFile(p.exe) {
+		return runs(ctx, p.exe)
+	}
+	return nil
+}
+
 func locateHere(path, binDir string) (pick, []string) {
 	home, _ := os.UserHomeDir()
 	return locate(path, os.Getenv(EnvBrowser), detectDefault, candidates(runtime.GOOS, home, os.Getenv), vetCandidate, cftExe(binDir, cftPlatform(runtime.GOOS, runtime.GOARCH)))

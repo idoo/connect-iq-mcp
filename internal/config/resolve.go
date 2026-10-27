@@ -87,8 +87,10 @@ type Resolved struct {
 	NoConfirm          bool
 	AllowProfileSwitch bool
 	// Config is the loaded config file, for per-call profile switching.
-	Config   *Config
-	Warnings []string
+	Config *Config
+	// ConfigPath is the config file Resolve read (it may not exist).
+	ConfigPath string
+	Warnings   []string
 	// WritesLocked forbids turning writes on at runtime: a pin sets
 	// allow_writes = false, or an untrusted pin chose the profile.
 	WritesLocked bool
@@ -119,9 +121,9 @@ func Resolve(opts Options) (*Resolved, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Resolved{Config: cfg, AllowProfileSwitch: cfg.AllowProfileSwitch, Warnings: warnings}
+	r := &Resolved{Config: cfg, ConfigPath: path, AllowProfileSwitch: cfg.AllowProfileSwitch, Warnings: warnings}
 	if err := r.resolveProfile(opts.Flags, getenv, cfg, pin); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w (config file: %s)", err, path)
 	}
 	if err := r.resolveModes(opts.Flags, getenv); err != nil {
 		return nil, err
@@ -156,13 +158,10 @@ func (r *Resolved) resolveProfile(f Flags, getenv func(string) string, cfg *Conf
 	case getenv(EnvProfile) != "":
 		name = strings.TrimSpace(getenv(EnvProfile))
 	case pin != nil && pin.Profile != "":
-		target, ok := cfg.Profiles[pin.Profile]
-		switch {
-		case !ok:
-			return fmt.Errorf("pin %s: profile %q is not defined in the config", pin.Path, pin.Profile)
-		case trusted || !target.AllowWrites:
+		// A profile without a [profiles.X] section has defaults (read-only).
+		if trusted || !cfg.Profiles[pin.Profile].AllowWrites {
 			name, pinSelected = pin.Profile, true
-		default:
+		} else {
 			r.Warnings = append(r.Warnings, fmt.Sprintf("ignoring profile %q from untrusted pin %s: it allows writes; add the directory to trusted_pins to allow this", pin.Profile, pin.Path))
 		}
 	}
@@ -194,14 +193,12 @@ func (r *Resolved) resolveProfile(f Flags, getenv func(string) string, cfg *Conf
 	return nil
 }
 
-// loadProfile sets r.Profile to the named profile; "" selects the default
-// profile, the only one, or an implicit "default" profile.
+// loadProfile sets r.Profile to the named profile; "" selects default_profile
+// or "default". Any valid name works without a [profiles.X] section: a missing
+// section means default settings, and credentials are keyed by the name.
 func (r *Resolved) loadProfile(name string, cfg *Config) error {
 	if name == "" {
 		name = cfg.DefaultProfile
-	}
-	if name == "" && len(cfg.Profiles) == 1 {
-		name = cfg.ProfileNames()[0]
 	}
 	if name == "" {
 		name = DefaultProfileName
@@ -209,10 +206,7 @@ func (r *Resolved) loadProfile(name string, cfg *Config) error {
 	if err := ValidateProfileName(name); err != nil {
 		return err
 	}
-	prof, ok := cfg.Profiles[name]
-	if !ok && name != DefaultProfileName {
-		return fmt.Errorf("profile %q is not defined (known: %s)", name, strings.Join(cfg.ProfileNames(), ", "))
-	}
+	prof := cfg.Profiles[name]
 	r.Profile = ResolvedProfile{
 		Name:          name,
 		AllowWrites:   prof.AllowWrites,

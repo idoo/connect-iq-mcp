@@ -65,7 +65,7 @@ func Serve(ctx context.Context, opts ServeOptions) error {
 	defer life.Close(5 * time.Second)
 	env.Lifetime = life
 	if env.Credentials == nil {
-		logger.Warn("no Connect IQ credentials configured; run `garmin-mcp auth login`")
+		logger.Warn("no Connect IQ credentials configured; run `" + tool.LoginCommand(env.Profile.Name) + "`")
 	}
 	deps := mcpserver.Deps{
 		Env:            *env,

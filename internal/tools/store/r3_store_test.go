@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/idoo/garmin-mcp/internal/tool"
@@ -122,6 +123,34 @@ func TestVersionPublishLostResponseUnknown(t *testing.T) {
 	res := tooltest.Call(t, lookup(t, "store_version_publish"), k.Env, args)
 	if body := tooltest.MustFail(t, res, "outcome_unknown").Message; !strings.Contains(body, "Do NOT bump") {
 		t.Fatalf("unknown publish: %s", body)
+	}
+}
+
+// RS-4: once the version POST succeeded, a failed metadata read for what's
+// new is a warning on a published result, never a plain error.
+func TestVersionPublishReadFailureAfterPost(t *testing.T) {
+	k, f := setup(t)
+	writeIQ(t, k, "IQ")
+	args, _ := publishPlan(t, k, `{"app":"Bike Guide","path":"app.iq","version":"1.1.0","whats_new":{"en":"new"},"other_locales":"keep"}`)
+	var posted atomic.Bool
+	k.Env.HTTP = &http.Client{Transport: tool.GuardWrites(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if isPost("/version")(r) {
+			res, err := k.HTTP.RoundTrip(r)
+			posted.Store(err == nil)
+			return res, err
+		}
+		if posted.Load() && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/metadata") {
+			return nil, errors.New("timeout")
+		}
+		return k.HTTP.RoundTrip(r)
+	}))}
+	res := tooltest.MustOK(t, tooltest.Call(t, lookup(t, "store_version_publish"), k.Env, args))
+	body := tooltest.JSON(t, res.Data)
+	if !posted.Load() || !strings.Contains(body, `"published":true`) || !strings.Contains(body, `"whats_new_updated":0`) || f.putBody != nil {
+		t.Fatalf("published result: %s (put %v)", body, f.putBody != nil)
+	}
+	if w := strings.Join(res.Meta.Warnings, "\n"); !strings.Contains(w, "1.1.0 is published") || !strings.Contains(w, "re-run store_version_publish with the same version") {
+		t.Fatalf("warnings: %q", res.Meta.Warnings)
 	}
 }
 

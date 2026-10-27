@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/zalando/go-keyring"
 )
@@ -59,6 +60,231 @@ func TestKeychainInterruptedWriteKeepsOldBlob(t *testing.T) {
 	}
 	if k.count() != before {
 		t.Fatalf("items = %d, want %d (new chunks cleaned up)", k.count(), before)
+	}
+}
+
+// r4: a crash or timeout after the new chunks but before item 0 leaves
+// orphans; the "#pending" marker lets the next save and logout delete them.
+func TestKeychainOrphanChunksRecovered(t *testing.T) {
+	k := useFakeKeyring(t)
+	s := testStore(t, nil)
+	clk := markerClock(t)
+	bigBlob(t, s, bigCookies(5000))
+	if _, ok := k.items["test#pending"]; ok {
+		t.Fatal("marker left after a clean save")
+	}
+
+	// "Crash": item 0 fails and the cleanup of the new chunks fails too.
+	set, del := keyringSet, keyringDel
+	keyringSet = func(svc, user, v string) error {
+		if user == "test" {
+			return errors.New("access denied")
+		}
+		return set(svc, user, v)
+	}
+	keyringDel = func(svc, user string) error {
+		if strings.HasPrefix(user, "test#") && user != "test#pending" {
+			return errors.New("access denied")
+		}
+		return del(svc, user)
+	}
+	if err := s.writeStored(blob{Portal: &portalCred{Cookies: bigCookies(6000)}}); err == nil {
+		t.Fatal("write succeeded despite item 0 failure")
+	}
+	keyringSet, keyringDel = set, del
+	head, _ := keyringGet(keyringService, "test")
+	cur, _, _ := parseHead("test", head)
+	var orphans []string
+	for u := range k.items {
+		if strings.HasPrefix(u, "test#") && u != "test#pending" && !strings.HasPrefix(u, "test#"+cur.gen+".") {
+			orphans = append(orphans, u)
+		}
+	}
+	if len(orphans) == 0 || k.items["test#pending"] == "" {
+		t.Fatalf("crash left no orphans/marker: %v", k.items)
+	}
+
+	clk.add(pendingGrace + time.Second) // RC-2: young entries may be a peer's
+	want := bigCookies(7000)
+	bigBlob(t, s, want)
+	head, _ = keyringGet(keyringService, "test")
+	cur, _, _ = parseHead("test", head)
+	for u := range k.items {
+		if u != "test" && !strings.HasPrefix(u, "test#"+cur.gen+".") {
+			t.Errorf("after the next save, %q remains", u)
+		}
+	}
+	if b, _, err := s.readStored(); err != nil || b.Portal.Cookies != want {
+		t.Fatalf("read after recovery: %v", err)
+	}
+
+	// A second crash, then logout: nothing remains.
+	keyringSet = func(svc, user, v string) error {
+		if user == "test" {
+			return errors.New("access denied")
+		}
+		return set(svc, user, v)
+	}
+	keyringDel = func(svc, user string) error {
+		if strings.HasPrefix(user, "test#") && user != "test#pending" {
+			return errors.New("access denied")
+		}
+		return del(svc, user)
+	}
+	_ = s.writeStored(blob{Portal: &portalCred{Cookies: bigCookies(6500)}})
+	keyringSet, keyringDel = set, del
+	clk.add(pendingGrace + time.Second)
+	if err := s.deleteAll(); err != nil {
+		t.Fatal(err)
+	}
+	if k.count() != 0 {
+		t.Fatalf("after logout: %v", k.items)
+	}
+}
+
+// markerClock drives the "#pending" marker's clock.
+func markerClock(t *testing.T) *fakeClock {
+	t.Helper()
+	clk := &fakeClock{t: time.Now()}
+	old := keyringNow
+	keyringNow = clk.now
+	t.Cleanup(func() { keyringNow = old })
+	return clk
+}
+
+// RC-1: gmcp1 chunks past the head's count (an interrupted gmcp1 write) go
+// on migration and on logout.
+func TestKeychainV1ChunksPastCountRemoved(t *testing.T) {
+	seed := func(k *fakeKeyring) {
+		d := `{"portal":{"cookies":"session=OLD` + strings.Repeat("x", 100) + `"}}`
+		k.items["test"] = chunkPrefixV1 + "2:" + digest(d) + ":" + d[:30]
+		k.items["test#1"] = d[30:]
+		k.items["test#2"] = "STALE-1"
+		k.items["test#3"] = "STALE-2"
+	}
+	k := useFakeKeyring(t)
+	s := testStore(t, nil)
+	seed(k)
+	if err := s.writeStored(blob{Portal: &portalCred{Cookies: "session=NEW"}}); err != nil {
+		t.Fatal(err)
+	}
+	if k.count() != 1 {
+		t.Fatalf("after migration: %v", k.items)
+	}
+	if err := s.deleteAll(); err != nil || k.count() != 0 {
+		t.Fatalf("logout: %v, %v", err, k.items)
+	}
+	seed(k)
+	if err := s.deleteAll(); err != nil || k.count() != 0 {
+		t.Fatalf("logout of a gmcp1 blob: %v, %v", err, k.items)
+	}
+}
+
+// RC-2: a generation recorded less than 30 s ago may be another writer's in
+// flight (one that does not share our lock): save and logout leave it, and
+// its item 0 switch still reads; later cleanup removes it.
+func TestPendingGraceSparesPeerWrite(t *testing.T) {
+	k := useFakeKeyring(t)
+	s := testStore(t, nil)
+	clk := markerClock(t)
+	bigBlob(t, s, bigCookies(5000))
+	peer := func() (string, []string) {
+		pd := `{"portal":{"cookies":"` + bigCookies(4500) + `"}}`
+		pc := splitChunks(pd)
+		k.items["test#pending"] = "deadbeef:" + strconv.Itoa(len(pc)) + ":" + strconv.FormatInt(clk.now().Unix(), 10)
+		for i := 1; i < len(pc); i++ {
+			k.items[genChunkUser("test", "deadbeef", i)] = pc[i]
+		}
+		return pd, pc
+	}
+	pd, pc := peer()
+	bigBlob(t, s, bigCookies(5200)) // this process saves meanwhile
+	if !strings.Contains(k.items["test#pending"], "deadbeef:") {
+		t.Fatalf("young peer entry dropped: %q", k.items["test#pending"])
+	}
+	k.items["test"] = chunkPrefix + "deadbeef:" + strconv.Itoa(len(pc)) + ":" + digest(pd) + ":" + pc[0]
+	if _, _, err := s.readStored(); err != nil {
+		t.Fatalf("peer's committed blob: %v", err)
+	}
+	clk.add(pendingGrace + time.Second)
+	bigBlob(t, s, bigCookies(5100)) // old enough: item 0 owns deadbeef now, then replaced
+	if _, ok := k.items[genChunkUser("test", "deadbeef", 1)]; ok {
+		t.Fatalf("replaced generation kept: %v", k.items)
+	}
+	if _, ok := k.items["test#pending"]; ok {
+		t.Fatalf("marker left: %q", k.items["test#pending"])
+	}
+
+	// Logout with a young entry keeps it and the marker; later logout clears
+	// all. Start clean: the simulated peer above replaced item 0 without
+	// knowing our 5200 generation, which no record covers.
+	clear(k.items)
+	bigBlob(t, s, bigCookies(5000))
+	peer()
+	if err := s.deleteAll(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := k.items["test#pending"]; !ok || k.items[genChunkUser("test", "deadbeef", 1)] == "" {
+		t.Fatalf("logout removed a young generation: %v", k.items)
+	}
+	clk.add(pendingGrace + time.Second)
+	if err := s.deleteAll(); err != nil || k.count() != 0 {
+		t.Fatalf("later logout: %v, %v", err, k.items)
+	}
+}
+
+// RC-4: an item 0 Set that reports failure but landed (a late timeout)
+// keeps the new chunks; a failed read-back keeps them too.
+func TestItem0LateLandingKeepsNewChunks(t *testing.T) {
+	k := useFakeKeyring(t)
+	s := testStore(t, nil)
+	bigBlob(t, s, bigCookies(5000))
+	set, get := keyringSet, keyringGet
+	keyringSet = func(svc, user, v string) error {
+		if user == "test" {
+			_ = set(svc, user, v)
+			return errors.New("timed out")
+		}
+		return set(svc, user, v)
+	}
+	want := bigCookies(6000)
+	if err := s.writeStored(blob{Portal: &portalCred{Cookies: want}}); err == nil {
+		t.Fatal("write reported success")
+	}
+	keyringSet = set
+	if b, _, err := s.readStored(); err != nil || b.Portal.Cookies != want {
+		t.Fatalf("landed blob unreadable: %v", err)
+	}
+	if k.items["test#pending"] == "" {
+		t.Fatal("marker dropped")
+	}
+
+	// Set fails and the read-back fails: nothing is deleted.
+	before := k.count()
+	keyringSet = func(svc, user, v string) error {
+		if user == "test" {
+			return errors.New("timed out")
+		}
+		return set(svc, user, v)
+	}
+	heads := 0
+	keyringGet = func(svc, user string) (string, error) {
+		if user == "test" {
+			if heads++; heads == 2 {
+				return "", errors.New("timed out")
+			}
+		}
+		return get(svc, user)
+	}
+	if err := s.writeStored(blob{Portal: &portalCred{Cookies: bigCookies(6100)}}); err == nil {
+		t.Fatal("write reported success")
+	}
+	keyringSet, keyringGet = set, get
+	if k.count() <= before {
+		t.Fatalf("new chunks deleted without a read-back: %d <= %d", k.count(), before)
+	}
+	if b, _, err := s.readStored(); err != nil || b.Portal.Cookies != want {
+		t.Fatalf("old blob: %v", err)
 	}
 }
 

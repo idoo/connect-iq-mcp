@@ -35,6 +35,22 @@ func mustContainServer(t *testing.T, path string) {
 	}
 }
 
+// N2: --profile work with no [profiles.work] section is valid, and the note
+// signs in that profile.
+func TestConfigSnippetSectionlessProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "cfg"))
+	t.Setenv("AppData", filepath.Join(home, "cfg"))
+	var out, errOut bytes.Buffer
+	if err := runConfig([]string{"snippet", "cursor", "--profile", "work"}, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"work"`) || !strings.Contains(errOut.String(), "`garmin-mcp auth login --profile work`") {
+		t.Fatalf("stdout:\n%s\nstderr:\n%s", out.String(), errOut.String())
+	}
+}
+
 // WD-7/LD-10: the per-user config dir comes from os.UserConfigDir
 // (%AppData%, XDG_CONFIG_HOME, ~/Library/Application Support), not home.
 func TestCurrentInstallEnvUsesUserConfigDir(t *testing.T) {

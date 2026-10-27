@@ -257,12 +257,22 @@ func sdkDeviceGet(_ context.Context, _ *tool.Env, in deviceIn) (*tool.Result, er
 	}
 	d, err := ciqsdk.LoadDevice(dr, in.ID)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, tool.InvalidArgs("device %q is not installed under %s; download it with SdkManager", in.ID, ciqsdk.DevicesDir(dr))
+		return nil, missingDevice(dr, in.ID)
 	}
 	if err != nil {
 		return nil, err
 	}
 	return tool.OK(d), nil
+}
+
+// missingDevice explains a device with no compiler.json: an id the SDK
+// Manager knows (its Devices/<id> folder exists) needs a download; any other
+// id is unknown, e.g. a guessed "fenix8".
+func missingDevice(dr, id string) error {
+	if st, err := os.Stat(filepath.Join(ciqsdk.DevicesDir(dr), id)); err == nil && st.IsDir() {
+		return tool.InvalidArgs("device %q is not installed under %s; download it with SdkManager", id, ciqsdk.DevicesDir(dr))
+	}
+	return tool.WithNext(tool.InvalidArgs("unknown device %s; list valid ids with sdk_devices_list", id), tool.NextStep{Tool: "sdk_devices_list"})
 }
 
 // --- manifest ---

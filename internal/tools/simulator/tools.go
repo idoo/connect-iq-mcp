@@ -113,7 +113,7 @@ func simErr(err error) error {
 func findJava(ctx context.Context) (string, error) {
 	j, err := ciqsdk.FindJava(ctx, os.Getenv)
 	if err != nil {
-		return "", fmt.Errorf("%w: java: %v; install a JDK 17+ and set JAVA_HOME to its absolute path (or put java on PATH), then retry", tool.ErrUnavailable, err)
+		return "", fmt.Errorf("%w: java: %v; install a JDK 17+ and set JAVA_HOME to its absolute path (or put java on PATH) %s", tool.ErrUnavailable, err, ciqsdk.ClientEnvHint)
 	}
 	return j.Path, nil
 }
@@ -185,9 +185,9 @@ func simKey(env *tool.Env, key string) (string, error) {
 		return p, nil
 	}
 	if v := os.Getenv(ciqsdk.EnvKeyVar); v != "" {
-		return "", tool.InvalidArgs("%s=%q is not an absolute path to an existing key file; ask the human to fix it", ciqsdk.EnvKeyVar, v)
+		return "", tool.InvalidArgs("%s=%q is not an absolute path to an existing key file; ask the human to fix it %s", ciqsdk.EnvKeyVar, v, ciqsdk.ClientEnvHint)
 	}
-	return "", tool.InvalidArgs("give prg, or build one: ask the human to set %s to the app's developer key, or pass key inside the root", ciqsdk.EnvKeyVar)
+	return "", tool.InvalidArgs("give prg, or build one: ask the human to set %s to the app's developer key %s, or pass key inside the root", ciqsdk.EnvKeyVar, ciqsdk.ClientEnvHint)
 }
 
 // prgFor returns a PRG: the given one, or a fresh build of project with java.
@@ -228,11 +228,21 @@ func prgFor(ctx context.Context, env *tool.Env, r ciqsdk.Resolved, java string, 
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil { //nolint:gosec // G301: build output dir in the user's project; normal project-dir permissions
 		return "", nil, err
 	}
+	root, err := env.Root.Resolve(".")
+	if err != nil {
+		return "", nil, err
+	}
+	// ciqsdk.Build refuses a jungle that names paths outside the root
+	// before monkeyc runs.
 	br, err := ciqsdk.Build(ctx, ciqsdk.BuildOpts{
-		SDK: r.SDK, Java: java, ProjectDir: pdir, Device: in.Device, Key: kabs,
+		SDK: r.SDK, Java: java, ProjectDir: pdir, Root: root, Device: in.Device, Key: kabs,
 		Output: out, Test: test, Warnings: true,
 	})
 	if err != nil {
+		var je *ciqsdk.JungleError
+		if errors.As(err, &je) {
+			return "", nil, tool.InvalidArgs("%v", je)
+		}
 		return "", nil, err
 	}
 	if !br.OK {

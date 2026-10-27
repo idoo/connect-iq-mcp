@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/idoo/garmin-mcp/internal/state"
 )
 
 // Config is the user's config file (~/.config/garmin-mcp/config.toml).
@@ -144,8 +146,8 @@ func (c *Config) Validate() error {
 		}
 	}
 	if c.DefaultProfile != "" {
-		if _, ok := c.Profiles[c.DefaultProfile]; !ok {
-			errs = append(errs, fmt.Errorf("default_profile %q is not defined", c.DefaultProfile))
+		if err := ValidateProfileName(c.DefaultProfile); err != nil {
+			errs = append(errs, fmt.Errorf("default_profile: %w", err))
 		}
 	}
 	for _, p := range c.TrustedPins {
@@ -208,7 +210,7 @@ func writeAtomic(path string, data []byte) error {
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("save config: close: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := state.Rename(tmp, path); err != nil {
 		return fmt.Errorf("save config: rename: %w", err)
 	}
 	ok = true

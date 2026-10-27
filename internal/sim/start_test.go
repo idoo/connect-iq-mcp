@@ -141,3 +141,50 @@ func TestManagerCapsRunningSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// RS-5: parallel starts never run more than MaxRunningSessions clients, and
+// a failed launch gives its reserved slot back.
+func TestManagerCapHoldsUnderParallelStarts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/sh")
+	}
+	m := &Manager{sessions: map[string]*Session{}}
+	for range 2 * MaxRunningSessions {
+		if _, err := m.Start([]string{"/nonexistent/monkeydo"}, "", "", false); err == nil || errors.Is(err, ErrTooManySessions) {
+			t.Fatalf("failed launch: err = %v", err)
+		}
+	}
+	if m.pending != 0 {
+		t.Fatalf("failed launches leaked %d slots", m.pending)
+	}
+	t.Cleanup(func() { m.KillAll() })
+	const n = 16
+	var ok, busy atomic.Int32
+	start := make(chan struct{})
+	done := make(chan struct{})
+	for range n {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			<-start
+			_, err := m.Start([]string{"/bin/sh", "-c", "sleep 30"}, "", "", false)
+			switch {
+			case err == nil:
+				ok.Add(1)
+			case errors.Is(err, ErrTooManySessions):
+				busy.Add(1)
+			default:
+				t.Error(err)
+			}
+		}()
+	}
+	close(start)
+	for range n {
+		<-done
+	}
+	if ok.Load() != MaxRunningSessions || busy.Load() != n-MaxRunningSessions {
+		t.Fatalf("started %d, refused %d; want %d and %d", ok.Load(), busy.Load(), MaxRunningSessions, n-MaxRunningSessions)
+	}
+	if m.pending != 0 {
+		t.Fatalf("pending = %d after all starts", m.pending)
+	}
+}

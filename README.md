@@ -22,32 +22,38 @@ garmin-mcp config install claude-code   # or claude-desktop, codex, cursor, vsco
 garmin-mcp doctor
 ```
 
-`garmin-mcp config install vscode` writes to every VS Code it finds: Code, Code - OSS, VSCodium, and their Flatpaks on Linux. There is no Docker image: sign-in needs a browser, and builds need your SDK and simulator.
+`garmin-mcp config install vscode` writes the user mcp.json (the one "MCP: Open User Configuration" opens) of every VS Code it finds: Code, Code - OSS, VSCodium, and their Flatpaks on Linux. There is no Docker image: sign-in needs a browser, and builds need your SDK and simulator.
 
 - macOS: after upgrading from an older version, run `garmin-mcp auth login` once more. The sign-in browser now encrypts its cookies with its own Safe Storage keychain key and can't read the old ones. Chrome for Testing still uses Chromium's fixed mock key.
 - Linux over SSH: the keyring is usually there but locked, and that's an error, not a reason to fall back to the file. Unlock it (`gnome-keyring-daemon --unlock`) or set `GARMIN_MCP_KEYRING=off`. With no D-Bus session at all, the 0600 file is used.
-- Ubuntu 24.04: AppArmor won't let the downloaded Chrome for Testing start, so install Chrome, Brave or Edge from their .deb. On arm64 Linux use the distro's `chromium` package (not the snap) or Brave.
+- Ubuntu 24.04: AppArmor won't let the downloaded Chrome for Testing start, so install Chrome, Brave or Edge from their .deb. On arm64 Linux use the distro's `chromium` package (not the snap) or Brave. `garmin-mcp doctor` warns when Chrome for Testing is blocked like that or is missing shared libraries.
 - Linux: the simulator is a GUI app. With no desktop, start the server under `xvfb-run`.
 - Windows: the installer works in Git Bash, or grab the zip from [releases](https://github.com/idoo/garmin-mcp/releases). The `.mcpb` bundle is x64 only: Windows 11 on Arm runs it emulated, and on Windows 10 on Arm you take the arm64 zip and run `garmin-mcp config install claude-desktop`, which also finds the MSIX build of Claude Desktop.
 - WSL: `config install claude-desktop` and `vscode` write nothing and print a `wsl.exe` snippet for the Windows app's config.
 
 ## Sign-in
 
-`garmin-mcp auth login` opens a separate profile of a Chromium browser (Chrome, Brave, Edge; on macOS only vendor-signed copies), or a downloaded Chrome for Testing if you have none. Safari and Firefox can't be driven. Sign in once and tick Remember me. The portal session (about 15 days) then renews in the background in a headless browser. If renewal fails, tools return `auth_required`: run `garmin-mcp auth login` again. If Garmin rate-limits sign-ins instead (Cloudflare 1015), renewal pauses for 90 minutes and tools return `rate_limited` with the time to wait until. Don't sign in during that wait; it hits the same limit.
+`garmin-mcp auth login` opens a separate profile of a Chromium browser (Chrome, Brave, Edge; on macOS only vendor-signed copies), or a downloaded Chrome for Testing if you have none. Safari and Firefox can't be driven. Sign in once and tick Remember me. The portal session (about 15 days) then renews in the background in a headless browser. If renewal fails, tools return `auth_required`: run `garmin-mcp auth login` again. If Garmin rate-limits sign-ins instead (Cloudflare 1015), renewal pauses for 90 minutes and tools return `rate_limited` with the time to wait until. Don't sign in during that wait; it hits the same limit. A renewal that didn't extend the session pauses it for 12 hours. `garmin-mcp auth status` shows either pause and when it ends.
 
-Agents can open the same window with the `auth_login` tool, one window at a time, with a 10 minute pause after a window closes without a sign-in.
+No display (SSH, a server)? `garmin-mcp auth login --paste` takes the Cookie header, or the Copy as cURL text, of any apps.garmin.com request in a browser where you're signed in (DevTools → Network).
 
-Garmin Connect health data is a separate opt-in: `garmin-mcp auth login --connect`.
+Agents can open the same window with the `auth_login` tool, one window at a time, with a 10 minute pause after a window closes without a sign-in. `garmin-mcp auth renew` while that window is open says so; close or finish it, then retry.
+
+Garmin Connect health data is a separate opt-in: `garmin-mcp auth login --connect`. Until then `doctor` lists it as not enabled, which is fine.
 
 The portal session cookie and Connect tokens go to the OS keychain. Without one (no Secret Service or no D-Bus session on Linux, or `GARMIN_MCP_KEYRING=off`) they go to a 0600 file instead, DPAPI-encrypted on Windows. A keychain that is there but locked is an error until you unlock it or set that variable. `garmin-mcp auth status` says which and why. The browser profile in `~/.local/state/garmin-mcp/browser/` holds the long-lived Garmin session; how its cookies are protected is in [SECURITY.md](SECURITY.md).
 
-Profiles (`--profile`, `[profiles.<name>]` in the config) are named with lowercase letters, digits, `-` and `_`, up to 63 characters. A config with a profile called `Work` no longer loads: rename it to `work` and sign in again under the new name.
+Profiles keep separate Garmin accounts. Any name works without a config section: `garmin-mcp auth login --profile work`, then `garmin-mcp config install <client> --profile work`. Settings (`allow_writes`, `allow_no_elicit`, `auto_renew`) go under `[profiles.work]` in `~/.config/garmin-mcp/config.toml` (`$XDG_CONFIG_HOME/garmin-mcp/` if set, `%AppData%\garmin-mcp\` on Windows), and config errors name that file. Adding a profile doesn't move anything off `default`; `default_profile` does. Sign-in hints carry the `--profile` they need.
+
+Names are lowercase letters, digits, `-` and `_`, up to 63 characters. A config with a profile called `Work` no longer loads: rename it to `work` and sign in again under the new name.
 
 ## Builds and signing
 
-Store builds must be signed with the key of your first upload. Point at it with `GARMIN_MCP_KEY=/path/to/developer_key.der`; it can live outside the repo and is only read. `sdk_key_generate` is for a brand-new app, and in a git repo it refuses unless the key path is git-ignored. `sdk_build device:"all"` writes `release/<project>-<version>.iq`; long builds return a `build_id` to poll, and asking again for the same output while it runs gives the same `build_id`.
+Store builds must be signed with the key of your first upload. Set `GARMIN_MCP_KEY=/path/to/developer_key.der` in the `env` of the garmin-mcp entry in your MCP client's config, then restart the client. A shell export doesn't reach a client started from the Dock or Start menu, and `doctor` in your shell can't see the client's env. The key can live outside the repo and is only read. `sdk_key_generate` is for a brand-new app, and in a git repo it refuses unless the key path is git-ignored. `sdk_build device:"all"` writes `release/<project>-<version>.iq`; long builds return a `build_id` to poll. Asking again with the same arguments while it runs gives the same `build_id`; a different build writing the same file gets `conflict`.
 
-Builds and the simulator need Java 17+ (`JAVA_HOME` as an absolute path, or `java` on PATH). Garmin MCP runs the SDK's jar itself, never its `monkeyc`/`monkeydo` scripts. Every path in `monkey.jungle` must stay inside the project root.
+Builds and the simulator need Java 17+ (`JAVA_HOME` as an absolute path, set in that same client env, or `java` on PATH). Garmin MCP runs the SDK's jar itself, never its `monkeyc`/`monkeydo` scripts.
+
+Paths in `monkey.jungle` must be relative and stay inside the project root once symlinks are followed. `..` is fine; absolute, drive-letter and `~` paths are refused, even when they point inside. Jungles inside barrels are checked too. `sdk_build` and `sim_run` refuse before the compiler runs.
 
 ## What you can ask
 
@@ -74,12 +80,23 @@ Pick with `GARMIN_MCP_TOOLSETS` (`all`, `+connect`). Every tool: [docs/TOOLS.md]
 ## Safety
 
 - Read-only until you say otherwise: ask the agent to enable writes, or set `GARMIN_MCP_ALLOW_WRITES=1` (or `--allow-writes`). SDK builds and the simulator work either way.
-- Anything public (publishing a version, editing the listing, replying to a review) shows you a preview and waits for your yes.
+- Anything public (publishing a version, editing the listing, replying to a review) shows you a preview and waits for your yes. Clients that can't show that dialog need writes on and `allow_no_elicit = true` in the profile, and then those actions go through on the agent's confirm alone. Nobody asks you.
+- Once a version is posted, `store_version_publish` says `published: true` even if saving what's new failed afterwards. The warning tells the agent to re-run it with the same version.
 - Review text is written by strangers. The server treats it as untrusted input, and so should your agent.
 
 ## CI
 
 No unattended long-lived sign-in. `garmin-mcp auth export --portal | gh secret set GARMIN_MCP_PORTAL_COOKIES`, then set that env var in the job. It holds only the portal `session` cookie, which lasts about 15 days and is never renewed.
+
+## Uninstall
+
+```sh
+garmin-mcp auth logout                 # and once per other profile: --profile <name>
+claude mcp remove garmin-mcp -s user   # or delete garmin-mcp from your client's config
+brew uninstall garmin-mcp              # or delete the binary
+```
+
+`auth logout` deletes that profile's keychain items, credentials file and sign-in browser profile. The config and state folders (`~/.config/garmin-mcp`, `~/.local/state/garmin-mcp`) stay; delete them if you want nothing left.
 
 ## Unofficial
 

@@ -428,3 +428,24 @@ func TestFailMapsNextSteps(t *testing.T) {
 		t.Errorf("body = %+v next = %+v", body, res.Next)
 	}
 }
+
+// N4: an auth_required hint for a server pinned to "work" names --profile work;
+// "default" keeps the bare command.
+func TestAuthRequiredHintNamesProfile(t *testing.T) {
+	type noIn struct{}
+	tl := tool.New(tool.Meta{Name: "needs_auth", Toolset: tool.Core, Description: "Fails auth.", Class: tool.Read},
+		func(context.Context, *tool.Env, noIn) (*tool.Result, error) {
+			return nil, fmt.Errorf("%w: session expired", tool.ErrAuthRequired)
+		})
+	for profile, want := range map[string]string{"work": "`garmin-mcp auth login --profile work`", "default": "`garmin-mcp auth login`"} {
+		k := newKit(t)
+		k.Env.Profile.Name = profile
+		b := tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, ``), "auth_required")
+		if !strings.Contains(b.Hint, want) {
+			t.Errorf("%s: hint = %q", profile, b.Hint)
+		}
+	}
+	if got := tool.LoginCommand("work", "--connect"); got != "garmin-mcp auth login --connect --profile work" {
+		t.Errorf("LoginCommand = %q", got)
+	}
+}

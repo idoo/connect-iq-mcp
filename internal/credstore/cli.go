@@ -178,14 +178,16 @@ func (s *Store) cliLogin(ctx context.Context, stdout, stderr io.Writer, connect,
 	return nil
 }
 
-// pastePrompt tells a terminal user how to end the pasted input: --paste
-// reads to EOF, and a Windows console has no Ctrl+D.
+// pastePrompt tells a terminal user where to copy the cookie from and how to
+// end the pasted input: --paste reads to EOF, and a Windows console has no
+// Ctrl+D.
 func pastePrompt() string {
 	eof := "Ctrl+D"
 	if runtime.GOOS == "windows" {
 		eof = "Ctrl+Z, then Enter"
 	}
-	return "Paste the Cookie header or the \"Copy as cURL\" command, then press Enter and " + eof + "."
+	return "In a browser signed in to apps.garmin.com, open DevTools → Network, pick any apps.garmin.com request and copy its Cookie from Request Headers (or right-click it → Copy as cURL).\n" +
+		"Paste the Cookie header or the \"Copy as cURL\" command, then press Enter and " + eof + "."
 }
 
 // pasteLogin stores a developer-portal Cookie header read from stdin.
@@ -309,8 +311,10 @@ func (s *Store) cliRenew(ctx context.Context, stdout io.Writer) error {
 		}
 	case errors.Is(err, browser.ErrRateLimited):
 		return fmt.Errorf("silent renewal failed: %w", err)
+	case errors.Is(err, errSignInOpen):
+		return errors.New("a sign-in window is open for this profile; finish or close it, then retry `garmin-mcp auth renew`")
 	case errors.Is(err, errNoRenewal) || errors.Is(err, browser.ErrInteractionRequired):
-		return authRequired("silent renewal failed", err)
+		return s.authRequired("silent renewal failed", err)
 	case err != nil:
 		return err
 	default:
@@ -349,7 +353,7 @@ func (s *Store) cliExport(stdout io.Writer, exportPortal bool) error {
 		return err
 	}
 	if b.Portal == nil || b.Portal.Cookies == "" {
-		return authRequired("not signed in to the Connect IQ developer portal", nil)
+		return s.authRequired("not signed in to the Connect IQ developer portal", nil)
 	}
 	_, err = fmt.Fprintln(stdout, b.Portal.Cookies)
 	return err

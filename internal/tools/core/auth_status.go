@@ -27,8 +27,6 @@ type authStatusOut struct {
 	Hint       string    `json:"hint,omitempty"`
 }
 
-const loginHint = "call auth_login (it opens a browser window for the user to sign in), or ask the user to run `garmin-mcp auth login` in a terminal"
-
 func init() {
 	tool.Register(tool.New(tool.Meta{
 		Name:        "auth_status",
@@ -51,14 +49,14 @@ func statusOut(ctx context.Context, env *tool.Env) authStatusOut {
 	if env.Credentials == nil {
 		out.Portal.Note = "not configured"
 		out.Connect.Note = "not configured"
-		out.Hint = loginHint
+		out.Hint = tool.AuthRequiredHint(env.Profile.Name)
 		return out
 	}
 	st := env.Credentials.Status(ctx)
 	out.Configured = true
 	out.Portal, out.Connect = state(st.Portal), state(st.Connect)
 	if needsSignIn(st.Portal, false) || needsSignIn(st.Connect, true) {
-		out.Hint = loginHint
+		out.Hint = tool.AuthRequiredHint(env.Profile.Name)
 	}
 	return out
 }

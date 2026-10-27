@@ -35,6 +35,12 @@ const (
 	// chunkPrefixV1 ("gmcp1:<count>:<sha>:<data>", chunks "<profile>#<i>")
 	// and a bare "{" item 0 are older formats, still read.
 	chunkPrefixV1 = "gmcp1:"
+	// pendingSuffix names the marker item "<profile>#pending" listing chunk
+	// generations ("<gen>:<count>,…") a write may leave behind: the new one
+	// before its chunks are written and the replaced one until its chunks are
+	// deleted. go-keyring cannot enumerate, so the next write and logout find
+	// orphans (a crash or timeout before item 0) through it.
+	pendingSuffix = "#pending"
 )
 
 // errKeyringUnavailable marks a keychain that cannot be used at all (no
@@ -188,6 +194,7 @@ func digest(data string) string {
 
 // chunkSet is a parsed item 0.
 type chunkSet struct {
+	gen   string   // gmcp2 generation ("" for gmcp1)
 	users []string // keychain users of chunks 1..n-1, in order
 	sum   string
 	data0 string
@@ -217,6 +224,7 @@ func parseHead(profile, head string) (cs chunkSet, ok bool, err error) {
 	if err != nil || n < 1 || n > maxChunks {
 		return cs, true, fmt.Errorf("%w: bad chunk count in the keychain", errStoredUnreadable)
 	}
+	cs.gen = gen
 	for i := 1; i < n; i++ {
 		if cs.v1 {
 			cs.users = append(cs.users, v1ChunkUser(profile, i))
@@ -241,6 +249,108 @@ func genChunkUser(profile, gen string, i int) string {
 }
 
 func v1ChunkUser(profile string, i int) string { return profile + "#" + strconv.Itoa(i) }
+
+// pendingGen is one generation recorded in the "#pending" marker, with the
+// time it was recorded (zero: unknown, treated as old).
+type pendingGen struct {
+	gen string
+	n   int
+	at  time.Time
+}
+
+// pendingGrace: cleanup leaves a recorded generation alone while it is
+// younger than this, so a writer that does not share our profile lock (a
+// different state directory) can still switch item 0 to it. It is more than
+// twice keyringTimeout plus slack.
+const pendingGrace = 30 * time.Second
+
+// keyringNow is the marker clock; tests replace it.
+var keyringNow = time.Now
+
+func pendingUser(profile string) string { return profile + pendingSuffix }
+
+// readPending returns the generations recorded in profile's marker
+// ("<gen>:<count>:<unix seconds>,…"). A missing marker is nil; malformed
+// entries are dropped.
+func readPending(profile string) ([]pendingGen, error) {
+	v, err := keychainGet(pendingUser(profile))
+	if errors.Is(err, keyring.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := []pendingGen{} // non-nil: a marker item exists and must be removed
+	for _, e := range strings.Split(v, ",") {
+		f := strings.Split(e, ":")
+		if len(f) < 2 || len(f) > 3 || !validGen(f[0]) {
+			continue
+		}
+		n, err := strconv.Atoi(f[1])
+		if err != nil || n < 1 || n > maxChunks {
+			continue
+		}
+		g := pendingGen{gen: f[0], n: n}
+		if len(f) == 3 {
+			if sec, err := strconv.ParseInt(f[2], 10, 64); err == nil && sec > 0 {
+				g.at = time.Unix(sec, 0)
+			}
+		}
+		out = append(out, g)
+	}
+	return out, nil
+}
+
+// writePending stores gens as the marker, deleting it when gens is empty.
+func writePending(profile string, gens []pendingGen) error {
+	if len(gens) == 0 {
+		err := keychainDel(pendingUser(profile))
+		if errors.Is(err, keyring.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	parts := make([]string, len(gens))
+	for i, g := range gens {
+		parts[i] = g.gen + ":" + strconv.Itoa(g.n)
+		if !g.at.IsZero() {
+			parts[i] += ":" + strconv.FormatInt(g.at.Unix(), 10)
+		}
+	}
+	v := strings.Join(parts, ",")
+	return keyringCall(func() error { return keyringSet(keyringService, pendingUser(profile), v) })
+}
+
+// deleteGens deletes the chunks of gens, except generation keep (the one
+// item 0 points at) and generations recorded less than pendingGrace ago
+// (possibly another writer's, still in flight). It returns the generations
+// still to clean (skipped or not fully deleted), whether any was skipped,
+// and the first delete error.
+func deleteGens(profile string, gens []pendingGen, keep string) (left []pendingGen, skipped bool, first error) {
+	now := keyringNow()
+	for _, g := range gens {
+		if g.gen == keep {
+			continue
+		}
+		if age := now.Sub(g.at); !g.at.IsZero() && age >= 0 && age < pendingGrace {
+			left, skipped = append(left, g), true
+			continue
+		}
+		ok := true
+		for i := 1; i < g.n; i++ {
+			if err := keychainDel(genChunkUser(profile, g.gen, i)); err != nil && !errors.Is(err, keyring.ErrNotFound) {
+				ok = false
+				if first == nil {
+					first = err
+				}
+			}
+		}
+		if !ok {
+			left = append(left, g)
+		}
+	}
+	return left, skipped, first
+}
 
 func newGen() (string, error) {
 	var b [4]byte
@@ -306,9 +416,11 @@ func keychainDel(user string) error {
 }
 
 // keychainWrite stores data as a new chunk generation: chunks 1..n-1 first,
-// then item 0 pointing at them, then (best effort) the previous generation's
-// chunks are deleted. A crash or timeout before item 0 leaves the old blob
-// intact and readable.
+// then item 0 pointing at them, then the previous generation's chunks are
+// deleted. A crash or timeout before item 0 leaves the old blob intact and
+// readable. While chunks are in flight (new or replaced), the "#pending"
+// marker records their generations; each write first deletes the chunks of
+// any recorded generation item 0 does not point at.
 func keychainWrite(profile, data string) error {
 	chunks := splitChunks(data)
 	if len(chunks) > maxChunks {
@@ -316,6 +428,7 @@ func keychainWrite(profile, data string) error {
 	}
 	var stale []string
 	staleV1 := false
+	curGen := ""
 	head, err := keychainGet(profile)
 	switch {
 	case errors.Is(err, keyring.ErrNotFound):
@@ -324,32 +437,77 @@ func keychainWrite(profile, data string) error {
 	default:
 		// A damaged old head still gets replaced; its chunks are just unknown.
 		if cs, _, perr := parseHead(profile, head); perr == nil {
-			stale, staleV1 = cs.users, cs.v1
+			stale, staleV1, curGen = cs.users, cs.v1, cs.gen
 		}
 	}
+	recorded, err := readPending(profile)
+	if err != nil {
+		return err
+	}
+	orphans, _, _ := deleteGens(profile, recorded, curGen) // failures and young entries stay recorded
 	gen, err := newGen()
 	if err != nil {
 		return fmt.Errorf("keychain generation: %w", err)
+	}
+	now := keyringNow()
+	pending := append([]pendingGen(nil), orphans...)
+	if curGen != "" && len(stale) > 0 {
+		pending = append(pending, pendingGen{curGen, len(stale) + 1, now})
+	}
+	if len(chunks) > 1 {
+		pending = append(pending, pendingGen{gen, len(chunks), now})
+	}
+	// Skip the marker write when nothing is in flight and it already matches.
+	if len(pending) > 0 || recorded != nil {
+		if err := writePending(profile, pending); err != nil {
+			return err
+		}
 	}
 	written := make([]string, 0, len(chunks)-1)
 	for i := 1; i < len(chunks); i++ {
 		user, c := genChunkUser(profile, gen, i), chunks[i]
 		if err := keyringCall(func() error { return keyringSet(keyringService, user, c) }); err != nil {
-			deleteBestEffort(written)
+			abortWrite(profile, written, orphans)
 			return err
 		}
 		written = append(written, user)
 	}
 	newHead := chunkPrefix + gen + ":" + strconv.Itoa(len(chunks)) + ":" + digest(data) + ":" + chunks[0]
 	if err := keyringCall(func() error { return keyringSet(keyringService, profile, newHead) }); err != nil {
-		deleteBestEffort(written)
+		// A timed-out Set may still land: if item 0 now points at the new
+		// generation (or cannot be read), its chunks and the marker stay.
+		if h, gerr := keychainGet(profile); gerr == nil {
+			if cs, _, perr := parseHead(profile, h); perr != nil || cs.gen != gen {
+				abortWrite(profile, written, orphans)
+			}
+		}
 		return err
 	}
-	deleteBestEffort(stale)
+	left := orphans
+	if curGen != "" && len(stale) > 0 {
+		// Our own replaced generation: no grace (zero time).
+		old, _, _ := deleteGens(profile, []pendingGen{{gen: curGen, n: len(stale) + 1}}, gen)
+		left = append(left, old...)
+	}
 	if staleV1 {
-		deleteV1Chunks(profile) //nolint:errcheck // best effort: the new generation is already in place
+		deleteBestEffort(stale)
+		deleteV1Chunks(profile, len(stale)+1) //nolint:errcheck // best effort: the new generation is already in place
+	}
+	if len(pending) > 0 {
+		_ = writePending(profile, left) // a stale entry is cleaned by the next write or logout
 	}
 	return nil
+}
+
+// abortWrite removes a failed write's new chunks and, if that worked,
+// restores the marker to the generations still orphaned before it.
+func abortWrite(profile string, written []string, orphans []pendingGen) {
+	for _, u := range written {
+		if err := keychainDel(u); err != nil && !errors.Is(err, keyring.ErrNotFound) {
+			return // the marker keeps the new generation for the next write or logout
+		}
+	}
+	_ = writePending(profile, orphans)
 }
 
 func deleteBestEffort(users []string) {
@@ -358,10 +516,12 @@ func deleteBestEffort(users []string) {
 	}
 }
 
-// deleteV1Chunks removes gmcp1 chunks "<profile>#1", "#2", … up to the first
-// missing one.
-func deleteV1Chunks(profile string) error {
-	for i := 1; i < maxChunks; i++ {
+// deleteV1Chunks removes gmcp1 chunks "<profile>#from", "#from+1", … up to
+// the first missing one. from is the old head's chunk count (its chunks
+// below that are deleted by the caller), or 1 when no gmcp1 head is known;
+// an interrupted gmcp1 write can leave chunks past the count.
+func deleteV1Chunks(profile string, from int) error {
+	for i := max(from, 1); i < maxChunks; i++ {
 		err := keychainDel(v1ChunkUser(profile, i))
 		if errors.Is(err, keyring.ErrNotFound) {
 			return nil
@@ -373,14 +533,17 @@ func deleteV1Chunks(profile string) error {
 	return nil
 }
 
-// keychainDelete removes item 0, the chunks it points at, and any gmcp1
-// chunks.
+// keychainDelete removes item 0, the chunks it points at, any gmcp1 chunks,
+// and the chunks of every generation recorded in the "#pending" marker. A
+// generation recorded less than pendingGrace ago may be another writer's in
+// flight: it and the marker are left for the next save or logout.
 func keychainDelete(profile string) error {
 	head, err := keychainGet(profile)
 	if err != nil && !errors.Is(err, keyring.ErrNotFound) {
 		return err
 	}
 	var errs []error
+	v1From := 1
 	if err == nil {
 		if cs, _, perr := parseHead(profile, head); perr == nil {
 			for _, u := range cs.users {
@@ -388,13 +551,31 @@ func keychainDelete(profile string) error {
 					errs = append(errs, err)
 				}
 			}
+			if cs.v1 {
+				v1From = len(cs.users) + 1
+			}
 		}
 		if err := keychainDel(profile); err != nil && !errors.Is(err, keyring.ErrNotFound) {
 			errs = append(errs, err)
 		}
 	}
-	// gmcp1 chunks may survive a lost item 0.
-	if err := deleteV1Chunks(profile); err != nil {
+	recorded, err := readPending(profile)
+	switch {
+	case err != nil:
+		errs = append(errs, err)
+	case recorded != nil:
+		left, skipped, derr := deleteGens(profile, recorded, "")
+		if derr != nil {
+			errs = append(errs, derr)
+		}
+		if !skipped {
+			if err := writePending(profile, left); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	// gmcp1 chunks may survive a lost item 0, or lie past the head's count.
+	if err := deleteV1Chunks(profile, v1From); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)

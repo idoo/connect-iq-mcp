@@ -218,10 +218,20 @@ func TestBuildRefusesJunglePathOutsideRoot(t *testing.T) {
 	k, argsFile, _ := exportFixture(t)
 	jungle := filepath.Join(k.Files.Root, "app", "monkey.jungle")
 	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(outside, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "sub"), filepath.Join(k.Files.Root, "app", "link")); err != nil {
+		t.Fatal(err)
+	}
 	for _, body := range []string{
 		"project.manifest = manifest.xml\nbase.resourcePath = " + outside + "\n",
 		"project.manifest = manifest.xml\nbase.resourcePath = resources;../../" + filepath.Base(outside) + "\n",
 		"lib = " + outside + "\nproject.manifest = manifest.xml\nbase.sourcePath = $(lib)\n",
+		// RS-2: monkeyc strips quotes, splits on \ and resolves .. after symlinks.
+		"base.sourcePath = source;\"" + outside + "\"\n",
+		"base.sourcePath = source;..\\..\\outside\n",
+		"base.sourcePath = source;link/..\n",
 	} {
 		if err := os.WriteFile(jungle, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -432,6 +442,72 @@ func TestDevicesListRejectsBadMinAPI(t *testing.T) {
 	k := tooltest.New(t).ReadOnly()
 	tl, _ := tool.Lookup("sdk_devices_list")
 	tooltest.MustFail(t, tooltest.Call(t, tl, k.Env, `{"min_api":"abc"}`), "invalid_arguments")
+}
+
+// RS-3: a call writing the same output with a different key while a build
+// runs is refused as a conflict, never handed the other call's artefact.
+func TestBuildSameOutputOtherOptionsConflicts(t *testing.T) {
+	runs := filepath.Join(t.TempDir(), "runs")
+	k, _, _ := exportFixtureWith(t, "echo x >> '"+runs+"'; sleep 1", ` version="1.2.3"`)
+	if _, err := ciqsdk.GenerateKey(filepath.Join(k.Files.Root, "other.der")); err != nil {
+		t.Fatal(err)
+	}
+	setBuildWait(t, 50*time.Millisecond)
+	a := tooltest.Decode[pendingOut](t, tooltest.MustOK(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`)))
+	for _, args := range []string{
+		`{"project":"app","device":"all","key":"other.der"}`,
+		`{"project":"app","device":"all","key":"dev.der","overwrite":true}`,
+	} {
+		res := tooltest.MustFail(t, callBuild(t, k, args), "conflict")
+		if b, _ := json.Marshal(res); !strings.Contains(string(b), a.BuildID) || !strings.Contains(string(b), "another build is writing") {
+			t.Fatalf("conflict lacks the running build: %s", b)
+		}
+	}
+	setBuildWait(t, 10*time.Second)
+	tooltest.MustOK(t, callBuild(t, k, `{"build_id":"`+a.BuildID+`"}`))
+	if got, _ := os.ReadFile(runs); strings.Count(string(got), "x") != 1 {
+		t.Fatalf("compiler ran %d times, want 1", strings.Count(string(got), "x"))
+	}
+}
+
+// N10: an unknown device id points at sdk_devices_list; a known id without
+// its definitions still points at SdkManager.
+func TestBuildUnknownDevice(t *testing.T) {
+	k, _, _ := exportFixture(t)
+	res := tooltest.MustFail(t, callBuild(t, k, `{"project":"app","device":"fenix8","key":"dev.der"}`), "invalid_arguments")
+	if b, _ := json.Marshal(res); !strings.Contains(string(b), "unknown device fenix8; list valid ids with sdk_devices_list") {
+		t.Fatalf("unknown device: %s", b)
+	}
+	dr, err := dataRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ciqsdk.DevicesDir(dr), "fenix8"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res = tooltest.MustFail(t, callBuild(t, k, `{"project":"app","device":"fenix8","key":"dev.der"}`), "invalid_arguments")
+	if b, _ := json.Marshal(res); !strings.Contains(string(b), "SdkManager") {
+		t.Fatalf("known device without definitions: %s", b)
+	}
+	get, _ := tool.Lookup("sdk_device_get")
+	res = tooltest.MustFail(t, tooltest.Call(t, get, k.Env, `{"id":"fenix9"}`), "invalid_arguments")
+	if b, _ := json.Marshal(res); !strings.Contains(string(b), "unknown device fenix9") {
+		t.Fatalf("sdk_device_get: %s", b)
+	}
+}
+
+// N7: key and Java hints say the env belongs to the MCP client, not the shell.
+func TestEnvHintsNameClientEnv(t *testing.T) {
+	k, _, _ := exportFixture(t)
+	t.Setenv(ciqsdk.EnvKeyVar, "")
+	res := tooltest.MustFail(t, callBuild(t, k, `{"project":"app","device":"all"}`), "invalid_arguments")
+	t.Setenv("JAVA_HOME", t.TempDir())
+	res2 := tooltest.MustFail(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`), "unavailable")
+	for _, r := range []tool.ErrorBody{res, res2} {
+		if b, _ := json.Marshal(r); !strings.Contains(string(b), "restart the client") || !strings.Contains(string(b), "config install") {
+			t.Fatalf("hint lacks the client env: %s", b)
+		}
+	}
 }
 
 func mustErr(t *testing.T, res *tool.Result) {

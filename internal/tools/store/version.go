@@ -240,31 +240,38 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 			return nil, wrap(err)
 		}
 	}
+	// The version POST is committed from here on: nothing below may surface as
+	// an error, or the agent would bump the version and publish the same .iq
+	// again. Later failures become warnings with the exact next call.
 	res := &tool.Result{}
 	out := map[string]any{
-		"app": outApp(app), "version": in.Version, "status": status, "validation": report,
+		"app": outApp(app), "version": in.Version, "status": status, "published": true, "validation": report,
 		"devices_added": added, "devices_removed": removed,
 	}
 	if len(in.WhatsNew) > 0 || len(cleared) > 0 {
+		const rerun = "; re-run store_version_publish with the same version and whats_new (it re-applies both); store_listing_update does not set the external version"
 		fresh, err := c.AppMetadata(wctx, app.ID)
 		if err != nil {
-			return nil, wrap(err)
-		}
-		for _, l := range locales(fresh) {
-			if txt, ok := in.WhatsNew[localeOf(l)]; ok {
-				l["appWhatsNew"] = txt
-			} else if slices.Contains(cleared, localeOf(l)) {
-				l["appWhatsNew"] = ""
-			}
-		}
-		fresh["externalAppVersion"] = in.Version
-		if status == "published" {
-			fresh["tempFileId"] = v.TempFileID
-		}
-		if err := c.UpdateAppMetadata(wctx, app.ID, fresh); err != nil {
-			res.Warn("version posted but what's new and the external version were not saved: " + wrap(err).Error() + "; re-run store_version_publish with the same version and whats_new (it re-applies both); store_listing_update does not set the external version")
+			out["whats_new_updated"] = 0
+			res.Warn("version " + in.Version + " is published, but what's new and the external version were not saved (reading the app back failed: " + wrap(err).Error() + ")" + rerun)
 		} else {
-			out["whats_new_updated"] = len(in.WhatsNew) + len(cleared)
+			for _, l := range locales(fresh) {
+				if txt, ok := in.WhatsNew[localeOf(l)]; ok {
+					l["appWhatsNew"] = txt
+				} else if slices.Contains(cleared, localeOf(l)) {
+					l["appWhatsNew"] = ""
+				}
+			}
+			fresh["externalAppVersion"] = in.Version
+			if status == "published" {
+				fresh["tempFileId"] = v.TempFileID
+			}
+			if err := c.UpdateAppMetadata(wctx, app.ID, fresh); err != nil {
+				out["whats_new_updated"] = 0
+				res.Warn("version " + in.Version + " is published, but what's new and the external version were not saved: " + wrap(err).Error() + rerun)
+			} else {
+				out["whats_new_updated"] = len(in.WhatsNew) + len(cleared)
+			}
 		}
 	}
 	for _, w := range warnings {

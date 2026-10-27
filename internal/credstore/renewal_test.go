@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -78,7 +79,7 @@ func TestRateLimitHoldsRenewalBack90m(t *testing.T) {
 		t.Helper()
 		_, err := s.PortalCookies(context.Background())
 		if !errors.Is(err, browser.ErrRateLimited) || errors.Is(err, auth.ErrAuthRequired) ||
-			strings.Contains(err.Error(), loginHint) || !strings.Contains(err.Error(), "wait until") {
+			strings.Contains(err.Error(), s.loginHint()) || !strings.Contains(err.Error(), "wait until") {
 			t.Fatalf("%s: err = %v", what, err)
 		}
 	}
@@ -130,6 +131,65 @@ func TestSealNotExtendedBacksOff12h(t *testing.T) {
 	clk.add(2 * time.Hour) // 24 h after the attempt
 	if _, err := s.PortalCookies(context.Background()); err != nil || logins.Load() != 2 {
 		t.Fatalf("after 12 h: %v, logins %d", err, logins.Load())
+	}
+}
+
+// r4: auth status and the auth_status tool (both read Status notes) show an
+// active rate-limit or not-extended pause until it ends.
+func TestStatusShowsRenewalPause(t *testing.T) {
+	s, clk, _ := renewStore(t, nil, func(browser.Request) (browser.Result, error) {
+		return browser.Result{}, errors.New("unused")
+	})
+	if err := s.writeStored(blob{Portal: &portalCred{Cookies: cookies(clk.now().Add(48 * time.Hour))}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.writeStamp(stampPortal, outcomeRateLimited, rateLimitBackoff); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.writeStamp(stampConnect, outcomeNotExtended, notExtendedBackoff); err != nil {
+		t.Fatal(err)
+	}
+	until := clk.now().Add(rateLimitBackoff).Local().Format("15:04")
+	next := clk.now().Add(notExtendedBackoff).Local().Format("Jan 2 15:04")
+	var out strings.Builder
+	if err := s.cliStatus(context.Background(), &out, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "(Cloudflare 1015) until "+until) || !strings.Contains(out.String(), "next attempt after "+next) {
+		t.Fatalf("status lacks the pauses:\n%s", out.String())
+	}
+	clk.add(rateLimitBackoff + time.Minute)
+	st := s.Status(context.Background())
+	if strings.Contains(st.Portal.Note, "paused") || !strings.Contains(st.Connect.Note, "paused") {
+		t.Fatalf("after 91 min: %q / %q", st.Portal.Note, st.Connect.Note)
+	}
+	clk.add(notExtendedBackoff)
+	if st := s.Status(context.Background()); strings.Contains(st.Connect.Note, "paused") {
+		t.Fatalf("after 12 h: %q", st.Connect.Note)
+	}
+}
+
+// r4: `auth renew` while a sign-in window is open says so instead of
+// auth_required (which would send agents to auth_login).
+func TestRenewDuringOpenSignIn(t *testing.T) {
+	s, clk, logins := renewStore(t, nil, func(browser.Request) (browser.Result, error) {
+		return browser.Result{}, errors.New("browser must not start")
+	})
+	if err := s.writeStored(blob{Portal: &portalCred{Cookies: cookies(clk.now().Add(time.Hour))}}); err != nil {
+		t.Fatal(err)
+	}
+	unlockLogin, err := lockPath(context.Background(), s.loginLockFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlockLogin()
+	err = s.cliRenew(context.Background(), io.Discard)
+	if err == nil || errors.Is(err, auth.ErrAuthRequired) || strings.Contains(err.Error(), "auth_login") ||
+		!strings.Contains(err.Error(), "sign-in window is open") || !strings.Contains(err.Error(), "retry") {
+		t.Fatalf("err = %v", err)
+	}
+	if logins.Load() != 0 {
+		t.Fatalf("logins = %d", logins.Load())
 	}
 }
 

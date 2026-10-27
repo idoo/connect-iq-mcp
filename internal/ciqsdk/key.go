@@ -21,6 +21,10 @@ const KeyBits = 4096
 // root, and it is only ever read, never written.
 const EnvKeyVar = "GARMIN_MCP_KEY"
 
+// ClientEnvHint ends a hint about GARMIN_MCP_KEY or JAVA_HOME: the server
+// reads its own process env, which the MCP client sets, not the user's shell.
+const ClientEnvHint = "in the env block of the MCP client's garmin-mcp entry (config install doesn't set it), then restart the client; a shell export does not reach a client started outside that shell"
+
 // EnvKey returns the developer key path from GARMIN_MCP_KEY when it is set to
 // an absolute path naming an existing regular file.
 func EnvKey() (path string, ok bool) {

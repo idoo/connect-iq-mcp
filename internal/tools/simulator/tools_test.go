@@ -40,6 +40,55 @@ func TestRegistered(t *testing.T) {
 	}
 }
 
+// RS-1: sim_run and sim_run with test build a project through ciqsdk.Build,
+// which refuses a jungle naming paths outside the project before monkeyc runs.
+func TestRunRefusesEscapingJungleBeforeMonkeyc(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script java")
+	}
+	t.Setenv("HOME", t.TempDir())
+	sdk := filepath.Join(t.TempDir(), "sdk")
+	if err := os.MkdirAll(filepath.Join(sdk, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sdk, "bin", "monkeybrains.jar"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "ran")
+	javaHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(javaHome, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\n[ \"$1\" = -version ] && { echo 'openjdk version \"21\"' >&2; exit 0; }\ntouch '" + marker + "'\n"
+	if err := os.WriteFile(filepath.Join(javaHome, "bin", "java"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GARMIN_MCP_SDK", sdk)
+	t.Setenv("CIQ_SDK", "")
+	t.Setenv("JAVA_HOME", javaHome)
+	k := tooltest.New(t)
+	proj := filepath.Join(k.Files.Root, "app")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(proj, "monkey.jungle"), []byte("base.sourcePath = "+outside+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ciqsdk.GenerateKey(filepath.Join(k.Files.Root, "dev.der")); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []bool{false, true} {
+		_, err := simRun(context.Background(), k.Env, runIn{Project: "app", Device: "fenix7", Key: "dev.der", Test: test})
+		if !errors.Is(err, tool.ErrInvalidArgs) || !strings.Contains(err.Error(), "base.sourcePath = "+outside) {
+			t.Fatalf("test=%v: err = %v, want the jungle refusal", test, err)
+		}
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("monkeyc ran with an escaping jungle")
+	}
+}
+
 func TestInputRefusesWithoutAllowFocus(t *testing.T) {
 	var te *tool.Error
 	if _, err := simInput(context.Background(), nil, inputIn{Steps: []inputStep{{Press: "up"}}}); !errors.As(err, &te) || te.Code != "focus_required" {

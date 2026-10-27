@@ -165,6 +165,18 @@ func TestRateLimitedAndWeightRange(t *testing.T) {
 	tooltest.MustFail(t, tooltest.Call(t, lookup(t, "connect_weight"), k.Env, `{"start":"2026-01-01","end":"2026-10-01"}`), "invalid_arguments")
 }
 
+// N4: a Connect 403 hint names the server's profile with --connect.
+func TestForbiddenHintNamesProfile(t *testing.T) {
+	k := kit(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+	k.Env.Profile.Name = "work"
+	body := tooltest.MustFail(t, tooltest.Call(t, lookup(t, "connect_hrv"), k.Env, `{"date":"2026-10-02"}`), "api_error")
+	if !strings.Contains(body.Hint, "`garmin-mcp auth login --connect --profile work`") {
+		t.Fatalf("hint = %q", body.Hint)
+	}
+}
+
 func TestCompactDropsBigArrays(t *testing.T) {
 	arr := make([]any, bigArray+1)
 	m := map[string]any{"big": arr, "small": []any{1}, "keep": arr}

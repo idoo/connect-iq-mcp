@@ -143,6 +143,7 @@ func (s *Session) Kill(force bool) error {
 type Manager struct {
 	mu       sync.Mutex
 	seq      int
+	pending  int // slots reserved by Start calls still launching
 	sessions map[string]*Session
 }
 
@@ -150,14 +151,38 @@ type Manager struct {
 var Sessions = &Manager{sessions: map[string]*Session{}}
 
 // Start launches argv (monkeydo) and captures its output. It refuses while
-// [MaxRunningSessions] clients run.
+// [MaxRunningSessions] clients run or are being started: the slot is
+// reserved under the same lock as the count, so parallel calls cannot
+// overshoot the cap, and released if the launch fails.
 func (m *Manager) Start(argv []string, prg, device string, tests bool) (*Session, error) {
 	if len(argv) == 0 {
 		return nil, errors.New("empty command")
 	}
-	if err := m.CheckRoom(); err != nil {
+	m.mu.Lock()
+	if m.runningLocked()+m.pending >= MaxRunningSessions {
+		m.mu.Unlock()
+		return nil, ErrTooManySessions
+	}
+	m.pending++
+	m.seq++
+	id := fmt.Sprintf("s%d-%d", m.seq, time.Now().Unix()%100000)
+	m.mu.Unlock()
+	s, err := m.launch(id, argv, prg, device, tests)
+	if err != nil {
+		m.mu.Lock()
+		m.pending--
+		m.mu.Unlock()
 		return nil, err
 	}
+	m.mu.Lock()
+	m.pending-- // the reserved slot becomes the running session, under one lock
+	m.addLocked(s)
+	m.mu.Unlock()
+	return s, nil
+}
+
+// launch starts the client process; Start holds its slot meanwhile.
+func (m *Manager) launch(id string, argv []string, prg, device string, tests bool) (*Session, error) {
 	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // G204: argv is built by callers from the resolved SDK's monkeydo and validated project paths; no shell
 	ownGroup(cmd)
 	stdout, err := cmd.StdoutPipe()
@@ -168,10 +193,6 @@ func (m *Manager) Start(argv []string, prg, device string, tests bool) (*Session
 	if err != nil {
 		return nil, err
 	}
-	m.mu.Lock()
-	m.seq++
-	id := fmt.Sprintf("s%d-%d", m.seq, time.Now().Unix()%100000)
-	m.mu.Unlock()
 	s := &Session{
 		ID: id, PRG: prg, Device: device, Tests: tests, Started: time.Now(),
 		ring: NewRing(RingLines), cmd: cmd, first: make(chan struct{}), done: make(chan struct{}),
@@ -196,7 +217,6 @@ func (m *Manager) Start(argv []string, prg, device string, tests bool) (*Session
 		s.exitCode.Store(int64(code))
 		close(s.done)
 	}()
-	m.add(s)
 	return s, nil
 }
 
@@ -208,6 +228,10 @@ const MaxFinishedSessions = 20
 func (m *Manager) add(s *Session) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.addLocked(s)
+}
+
+func (m *Manager) addLocked(s *Session) {
 	m.sessions[s.ID] = s
 	var done []*Session
 	for _, x := range m.sessions {
@@ -234,20 +258,25 @@ const MaxRunningSessions = 4
 // ErrTooManySessions refuses a new client while [MaxRunningSessions] run.
 var ErrTooManySessions = fmt.Errorf("%d monkeydo sessions are already running; call sim_stop to end them, then retry", MaxRunningSessions)
 
-// CheckRoom returns [ErrTooManySessions] when no other client may start.
+// CheckRoom returns [ErrTooManySessions] when no other client may start
+// (an early answer for callers; Start reserves the slot itself).
 func (m *Manager) CheckRoom() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.runningLocked()+m.pending >= MaxRunningSessions {
+		return ErrTooManySessions
+	}
+	return nil
+}
+
+func (m *Manager) runningLocked() int {
 	n := 0
 	for _, s := range m.sessions {
 		if !s.Exited() {
 			n++
 		}
 	}
-	if n >= MaxRunningSessions {
-		return ErrTooManySessions
-	}
-	return nil
+	return n
 }
 
 func (s *Session) pump(wg *sync.WaitGroup, stream string, r io.Reader) {

@@ -3,6 +3,7 @@ package sdk
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -106,14 +107,16 @@ func prepare(ctx context.Context, env *tool.Env, sdkArg, project, jungle, key st
 	if err != nil {
 		return prepared{}, err
 	}
-	if strings.Contains(jabs, ";") {
-		return prepared{}, tool.InvalidArgs("jungle path %s contains ';', which monkeyc reads as a list of jungle files; rename the folder", jabs)
-	}
 	if _, err := os.Stat(jabs); err != nil {
 		return prepared{}, tool.InvalidArgs("jungle %s: %v", jabs, err)
 	}
-	if err := checkJungle(env, jabs, 0); err != nil {
+	root, err := env.Root.Resolve(".")
+	if err != nil {
 		return prepared{}, err
+	}
+	// ciqsdk.Build checks again; checking here refuses before a job starts.
+	if err := ciqsdk.CheckJungle(root, pdir, jabs); err != nil {
+		return prepared{}, jungleArgs(err)
 	}
 	kabs, err := resolveKey(env, key)
 	if err != nil {
@@ -126,46 +129,18 @@ func prepare(ctx context.Context, env *tool.Env, sdkArg, project, jungle, key st
 	// `java` that the shell may find in the project directory.
 	j, err := ciqsdk.FindJava(ctx, os.Getenv)
 	if err != nil {
-		return prepared{}, fmt.Errorf("%w: java: %v; install a JDK 17+ and set JAVA_HOME to its absolute path (or put java on PATH), then retry", tool.ErrUnavailable, err)
+		return prepared{}, fmt.Errorf("%w: java: %v; install a JDK 17+ and set JAVA_HOME to its absolute path (or put java on PATH) %s", tool.ErrUnavailable, err, ciqsdk.ClientEnvHint)
 	}
-	return prepared{se: se, opts: ciqsdk.BuildOpts{SDK: se.Res.SDK, Java: j.Path, ProjectDir: pdir, Jungle: jabs, Key: kabs, Warnings: true}}, nil
+	return prepared{se: se, opts: ciqsdk.BuildOpts{SDK: se.Res.SDK, Java: j.Path, ProjectDir: pdir, Root: root, Jungle: jabs, Key: kabs, Warnings: true}}, nil
 }
 
-// checkJungle refuses a jungle whose path-valued keys (sourcePath,
-// resourcePath, barrelPath, manifest, ...) name anything outside the root:
-// monkeyc would compile it and echo it in diagnostics. Paths are relative to
-// the jungle's directory; a named .jungle file is checked the same way.
-func checkJungle(env *tool.Env, jabs string, depth int) error {
-	if depth > 4 {
-		return tool.InvalidArgs("jungle %s: jungle files nested too deep", jabs)
+// jungleArgs reports a jungle refused by ciqsdk.CheckJungle as invalid arguments.
+func jungleArgs(err error) error {
+	var je *ciqsdk.JungleError
+	if errors.As(err, &je) {
+		return tool.InvalidArgs("%v", je)
 	}
-	data, err := env.Root.ReadFile(jabs)
-	if err != nil {
-		return tool.InvalidArgs("jungle %s: %v", jabs, err)
-	}
-	paths, err := ciqsdk.JunglePaths(data)
-	if err != nil {
-		return tool.InvalidArgs("jungle %s: %v", jabs, err)
-	}
-	dir := filepath.Dir(jabs)
-	for _, jp := range paths {
-		p := jp.Path
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(dir, p)
-		}
-		abs, err := env.Root.Resolve(p)
-		if err != nil {
-			return tool.InvalidArgs("jungle %s: %s = %s is outside the project root (%v); monkeyc may only read files inside it, so move them in or drop the entry", jabs, jp.Key, jp.Path, err)
-		}
-		if strings.EqualFold(filepath.Ext(abs), ".jungle") {
-			if st, err := os.Stat(abs); err == nil && st.Mode().IsRegular() {
-				if err := checkJungle(env, abs, depth+1); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
+	return err
 }
 
 // resolveKey returns the developer key path: an agent-supplied key confined
@@ -179,9 +154,9 @@ func resolveKey(env *tool.Env, key string) (string, error) {
 		return p, nil
 	}
 	if v := os.Getenv(ciqsdk.EnvKeyVar); v != "" {
-		return "", tool.InvalidArgs("%s=%q is not an absolute path to an existing key file; ask the human to fix it", ciqsdk.EnvKeyVar, v)
+		return "", tool.InvalidArgs("%s=%q is not an absolute path to an existing key file; ask the human to fix it %s", ciqsdk.EnvKeyVar, v, ciqsdk.ClientEnvHint)
 	}
-	return "", tool.InvalidArgs("key is required: ask the human to set %s to the app's existing developer key (it may live outside the repo), or pass key inside the root. Only a brand-new app gets a new key from sdk_key_generate; updates must be signed with the key of the first upload", ciqsdk.EnvKeyVar)
+	return "", tool.InvalidArgs("key is required: ask the human to set %s to the app's existing developer key (it may live outside the repo) %s, or pass key inside the root. Only a brand-new app gets a new key from sdk_key_generate; updates must be signed with the key of the first upload", ciqsdk.EnvKeyVar, ciqsdk.ClientEnvHint)
 }
 
 func outFor(p prepared, r ciqsdk.BuildResult) buildOut {
@@ -234,7 +209,7 @@ func sdkBuild(ctx context.Context, env *tool.Env, in buildIn) (*tool.Result, err
 		p.opts.NoClobber = !in.Overwrite
 	} else {
 		if _, err := ciqsdk.LoadDevice(p.se.DataRoot, in.Device); errors.Is(err, os.ErrNotExist) {
-			return nil, tool.InvalidArgs("device %q is not installed; download it with SdkManager", in.Device)
+			return nil, missingDevice(p.se.DataRoot, in.Device)
 		}
 		suffix := ""
 		if in.Test {
@@ -250,10 +225,33 @@ func sdkBuild(ctx context.Context, env *tool.Env, in buildIn) (*tool.Result, err
 	if all {
 		p.opts.Timeout, what = exportTimeout, "monkeyc -e -r (all manifest products)"
 	}
+	ident, err := buildIdentity(p, all)
+	if err != nil {
+		return nil, err
+	}
 	// The build outlives this call if needed (a poll with build_id, or the
 	// same build again, picks it up), so cancelling the request does not
 	// kill monkeyc; it runs until it finishes or the server stops.
-	return waitJob(ctx, env, startJob(env.Lifetime, p, all, what))
+	j, err := startJob(env.Lifetime, p, all, what, ident)
+	if err != nil {
+		return nil, err
+	}
+	return waitJob(ctx, env, j)
+}
+
+// buildIdentity names everything that reaches monkeyc's argv, plus the key
+// file's content, so only a truly identical call joins a running build.
+func buildIdentity(p prepared, all bool) (string, error) {
+	key, err := os.ReadFile(p.opts.Key)
+	if err != nil {
+		return "", tool.InvalidArgs("key: %v", err)
+	}
+	sum := sha256.Sum256(key)
+	o := p.opts
+	return strings.Join([]string{
+		o.Output, o.Device, o.Key, hex.EncodeToString(sum[:]), o.SDK.Path, o.Jungle,
+		fmt.Sprint(all, o.Release, o.Test, o.NoClobber, o.Warnings, o.TypeCheck != nil),
+	}, "\x00"), nil
 }
 
 // buildJob is a build running independently of the tool call that started it.
@@ -261,6 +259,7 @@ type buildJob struct {
 	id     string
 	what   string
 	output string
+	ident  string // buildIdentity of the call that started it
 	start  time.Time
 	done   chan struct{}
 	// res, err and end are written before done is closed.
@@ -287,27 +286,37 @@ var (
 )
 
 // startJob starts p under the server lifetime, or returns the running job
-// that writes the same output (an agent re-calling instead of polling, or a
-// retry after a cancelled call, gets the same build_id).
-func startJob(life *tool.Lifetime, p prepared, all bool, what string) *buildJob {
+// with the same identity (an agent re-calling instead of polling, or a retry
+// after a cancelled call, gets the same build_id). A running job writing the
+// same output with other options is a conflict: joining it would hand back
+// an artefact built with options this call did not ask for.
+func startJob(life *tool.Lifetime, p prepared, all bool, what, ident string) (*buildJob, error) {
 	jobsMu.Lock()
 	defer jobsMu.Unlock()
 	sweepJobsLocked(time.Now())
 	for _, j := range jobs {
-		if j.output == p.opts.Output && !j.finished() {
-			return j
+		if j.output != p.opts.Output || j.finished() {
+			continue
+		}
+		if j.ident == ident {
+			return j, nil
+		}
+		return nil, &tool.Error{
+			Code:    "conflict",
+			Message: fmt.Sprintf("another build is writing %s (build_id %s); wait for it or choose another output", j.output, j.id),
+			Hint:    "call sdk_build {\"build_id\": \"" + j.id + "\"} to wait for it, then retry this build",
 		}
 	}
 	var b [8]byte
 	_, _ = rand.Read(b[:])
-	j := &buildJob{id: hex.EncodeToString(b[:]), what: what, output: p.opts.Output, start: time.Now(), done: make(chan struct{})}
+	j := &buildJob{id: hex.EncodeToString(b[:]), what: what, output: p.opts.Output, ident: ident, start: time.Now(), done: make(chan struct{})}
 	jobs[j.id] = j
 	life.Go(func(ctx context.Context) {
 		defer close(j.done)
 		j.res, j.err = runBuild(ctx, p, all)
 		j.end = time.Now()
 	})
-	return j
+	return j, nil
 }
 
 // sweepJobsLocked drops finished jobs whose result nobody collected within jobKeep.
@@ -368,7 +377,7 @@ func runBuild(ctx context.Context, p prepared, all bool) (*tool.Result, error) {
 		r, err = ciqsdk.Build(ctx, p.opts)
 	}
 	if err != nil {
-		return nil, err
+		return nil, jungleArgs(err)
 	}
 	o := outFor(p, r)
 	if all {
@@ -449,7 +458,7 @@ func sdkKeyGenerate(ctx context.Context, env *tool.Env, in keyGenIn) (*tool.Resu
 	}
 	return tool.OK(map[string]any{
 		"key":  ki,
-		"note": "Back this key up somewhere safe outside the repo. The store binds your app to the key of its first upload; a lost key means no more updates. The human can point " + ciqsdk.EnvKeyVar + " at the backup.",
+		"note": "Back this key up somewhere safe outside the repo. The store binds your app to the key of its first upload; a lost key means no more updates. The human can point " + ciqsdk.EnvKeyVar + " at the backup " + ciqsdk.ClientEnvHint + ".",
 	}), nil
 }
 

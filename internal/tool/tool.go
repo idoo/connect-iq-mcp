@@ -297,6 +297,12 @@ func (t Tool) Call(ctx context.Context, env *Env, raw json.RawMessage) (res *Res
 		if res == nil {
 			res = OK(map[string]any{"ok": true})
 		}
+		// The generic auth_required hint names a bare `auth login`, which
+		// signs in "default"; name the profile this server runs as.
+		if b, ok := res.Data.(ErrorBody); ok && res.IsError && b.Error == ErrAuthRequired.Code && b.Hint == ErrAuthRequired.Hint {
+			b.Hint = AuthRequiredHint(env.Profile.Name)
+			res.Data = b
+		}
 		res.Meta.Profile = env.Profile.Name
 		res.Meta.PinSource = env.Profile.PinSource
 		res.Meta.ApprovedBy = ApprovedNone

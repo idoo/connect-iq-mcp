@@ -22,6 +22,7 @@ import (
 	"github.com/idoo/garmin-mcp/internal/auth"
 	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/portal"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 func seal(t time.Time) string {
@@ -273,11 +274,30 @@ func TestExpiredPortalNoProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := s.PortalCookies(context.Background())
-	if !errors.Is(err, auth.ErrAuthRequired) || !strings.Contains(err.Error(), `run "garmin-mcp auth login" in a terminal`) {
+	if !errors.Is(err, auth.ErrAuthRequired) || !strings.Contains(err.Error(), `run "`+tool.LoginCommand(s.profile)+`" in a terminal`) {
 		t.Fatalf("err = %v", err)
 	}
 	if strings.Contains(err.Error(), "Fe26") {
 		t.Fatal("error leaks cookie")
+	}
+}
+
+// N4: a non-default profile's sign-in hint names --profile, so the human signs
+// in the account the server runs as.
+func TestLoginHintNamesProfile(t *testing.T) {
+	keyring.MockInit()
+	s := testStore(t, nil)
+	s.profile = "work"
+	_, err := s.PortalCookies(context.Background())
+	if !errors.Is(err, auth.ErrAuthRequired) || !strings.Contains(err.Error(), `run "garmin-mcp auth login --profile work" in a terminal`) {
+		t.Fatalf("err = %v", err)
+	}
+	_, err = s.ConnectToken(context.Background())
+	if !strings.Contains(err.Error(), `"garmin-mcp auth login --connect --profile work"`) {
+		t.Fatalf("connect err = %v", err)
+	}
+	if st := s.Status(context.Background()); !strings.Contains(st.Portal.Note, "--profile work") || !strings.Contains(st.Connect.Note, "--connect --profile work") {
+		t.Fatalf("status notes = %q / %q", st.Portal.Note, st.Connect.Note)
 	}
 }
 
@@ -335,7 +355,7 @@ func TestRenewalRateLimited(t *testing.T) {
 	}
 	check := func(what string, err error) {
 		t.Helper()
-		if !errors.Is(err, browser.ErrRateLimited) || errors.Is(err, auth.ErrAuthRequired) || strings.Contains(err.Error(), loginHint) {
+		if !errors.Is(err, browser.ErrRateLimited) || errors.Is(err, auth.ErrAuthRequired) || strings.Contains(err.Error(), s.loginHint()) {
 			t.Errorf("%s: err = %v", what, err)
 		}
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/idoo/garmin-mcp/internal/config"
 	"github.com/idoo/garmin-mcp/internal/credstore"
 	"github.com/idoo/garmin-mcp/internal/portal"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // Local lookups doctor runs; tests replace them so no real SDK, Java or
@@ -31,7 +32,15 @@ var (
 	}
 	findJava    = func(ctx context.Context) (ciqsdk.Java, error) { return ciqsdk.FindJava(ctx, nil) }
 	findBrowser = func() (string, error) { return browser.Find("") }
-	hasDisplay  = browser.HasDisplay
+	// browserPreflight: Linux-only Chrome for Testing checks (AppArmor
+	// userns block, missing shared libraries); nil elsewhere.
+	browserPreflight = browser.Preflight
+	hasDisplay       = browser.HasDisplay
+	// fromShell reports whether doctor runs in an interactive terminal.
+	fromShell = func() bool {
+		fi, err := os.Stdin.Stat()
+		return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	}
 	// probePortal asks the portal who is signed in (GET /developers).
 	probePortal = func(ctx context.Context, store auth.Store) (string, error) {
 		d, err := portal.New(&http.Client{Timeout: 15 * time.Second}, store).Developer(ctx)
@@ -46,6 +55,7 @@ type report struct {
 }
 
 func (r *report) ok(format string, a ...any)   { r.line("ok  ", format, a...) }
+func (r *report) info(format string, a ...any) { r.line("info", format, a...) }
 func (r *report) warn(format string, a ...any) { r.line("warn", format, a...) }
 func (r *report) fail(format string, a ...any) {
 	r.failed = true
@@ -98,8 +108,9 @@ func doctor(ctx context.Context, rep *report, profile string, probe bool) {
 	if probe {
 		portalProbe(ctx, rep, store)
 	}
-	localChecks(ctx, rep)
+	localChecks(ctx, rep, p.Name)
 	keyCheck(rep)
+	shellNote(rep)
 	if p.AllowWrites {
 		rep.ok("mode: writes enabled")
 	} else {
@@ -125,8 +136,8 @@ func credentialChecks(ctx context.Context, rep *report, profile string) auth.Sto
 		return nil
 	}
 	st := store.Status(ctx)
-	credLine(rep, "portal session", st.Portal)
-	credLine(rep, "Connect token", st.Connect)
+	credLine(rep, profile, "portal session", st.Portal, false)
+	credLine(rep, profile, "Connect token", st.Connect, true)
 	if !st.Portal.Present {
 		return nil
 	}
@@ -151,7 +162,7 @@ func portalProbe(ctx context.Context, rep *report, store auth.Store) {
 
 // localChecks reports the SDK, Java and sign-in browser. Missing pieces only
 // disable some tools, so they are warnings.
-func localChecks(ctx context.Context, rep *report) {
+func localChecks(ctx context.Context, rep *report, profile string) {
 	if s, err := resolveSDK(); err != nil {
 		rep.warn("Connect IQ SDK: %v (install it with the SDK Manager: https://developer.garmin.com/connect-iq/sdk/)", err)
 	} else {
@@ -167,12 +178,15 @@ func localChecks(ctx context.Context, rep *report) {
 		rep.ok("Java %s (%s): %s", v, j.Source, j.Path)
 	}
 	if b, err := findBrowser(); err != nil {
-		rep.warn("browser: %v (needed for `garmin-mcp auth login`)", err)
+		rep.warn("browser: %v (needed for `%s`)", err, tool.LoginCommand(profile))
 	} else {
 		rep.ok("browser: %s", b)
 	}
+	if err := browserPreflight(ctx); err != nil {
+		rep.warn("browser: %v", err)
+	}
 	if !hasDisplay() {
-		rep.warn("display: DISPLAY and WAYLAND_DISPLAY are unset, so `garmin-mcp auth login` can't open a window; sign in on a machine with a screen, or use GARMIN_MCP_PORTAL_COOKIES")
+		rep.warn("display: DISPLAY and WAYLAND_DISPLAY are unset, so `%s` can't open a window; run `%s` and paste the Cookie of a signed-in apps.garmin.com request (DevTools → Network → Copy as cURL), or use GARMIN_MCP_PORTAL_COOKIES", tool.LoginCommand(profile), tool.LoginCommand(profile, "--paste"))
 	}
 }
 
@@ -202,13 +216,29 @@ func keyCheck(rep *report) {
 	rep.ok("%s", line)
 }
 
-func credLine(rep *report, name string, c auth.CredStatus) {
+// shellNote warns that doctor sees this shell's env, not the MCP client's:
+// GUI clients never read shell exports, so a key or JAVA_HOME that is fine
+// here can still be missing for the server.
+func shellNote(rep *report) {
+	if !fromShell() {
+		return
+	}
+	rep.info("env: these checks use this shell's environment; your MCP client starts the server with its own, so set %s and JAVA_HOME in the env block of the client's garmin-mcp entry (written by `garmin-mcp config install <client>`), then restart the client", ciqsdk.EnvKeyVar)
+}
+
+// credLine reports one credential. Garmin Connect is opt-in, so a missing
+// Connect token is information, not a problem.
+func credLine(rep *report, profile, name string, c auth.CredStatus, optional bool) {
 	if state := credstore.UnreadableState(c); state != "" {
 		rep.fail("%s: %s (%s)", name, state, c.Note)
 		return
 	}
+	if !c.Present && optional {
+		rep.info("%s: not enabled (optional; enable with %s)", name, tool.LoginCommand(profile, "--connect"))
+		return
+	}
 	if !c.Present {
-		rep.warn("%s: missing; run `garmin-mcp auth login`%s", name, note(c.Note))
+		rep.warn("%s: missing; run `%s`%s", name, tool.LoginCommand(profile), note(c.Note))
 		return
 	}
 	line := fmt.Sprintf("%s: present (%s)", name, c.Source)

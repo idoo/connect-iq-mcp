@@ -20,6 +20,7 @@ import (
 	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/config"
 	"github.com/idoo/garmin-mcp/internal/portal"
+	"github.com/idoo/garmin-mcp/internal/state"
 )
 
 const (
@@ -451,5 +452,5 @@ func writeFile0600(path string, data []byte) (err error) {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return state.Rename(tmp, path) // retries while Windows reports the target busy
 }

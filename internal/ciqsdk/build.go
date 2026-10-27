@@ -52,15 +52,18 @@ type BuildOpts struct {
 	SDK        SDK
 	Java       string // absolute java path; empty runs FindJava (its error fails the build)
 	ProjectDir string
-	Jungle     string // default <ProjectDir>/monkey.jungle
-	Device     string // required for Build, ignored by Export
-	Key        string
-	Output     string
-	Release    bool
-	Test       bool
-	Warnings   bool          // -w
-	TypeCheck  *int          // -l 0..3
-	Timeout    time.Duration // default 2 min (Build) / 30 min (Export)
+	// Root bounds every path the jungle names (the server's file root);
+	// empty means ProjectDir.
+	Root      string
+	Jungle    string // default <ProjectDir>/monkey.jungle
+	Device    string // required for Build, ignored by Export
+	Key       string
+	Output    string
+	Release   bool
+	Test      bool
+	Warnings  bool          // -w
+	TypeCheck *int          // -l 0..3
+	Timeout   time.Duration // default 2 min (Build) / 30 min (Export)
 	// NoClobber installs Output with a hard link that fails if the file
 	// already exists, so a concurrent build never replaces it.
 	NoClobber bool
@@ -150,6 +153,10 @@ func Export(ctx context.Context, o BuildOpts) (BuildResult, error) {
 
 func run(ctx context.Context, o BuildOpts, export bool) (BuildResult, error) {
 	if _, err := BuildArgs(o, export); err != nil {
+		return BuildResult{}, err
+	}
+	// Every caller gets the jungle confinement before monkeyc can run.
+	if err := CheckJungle(o.Root, o.ProjectDir, o.Jungle); err != nil {
 		return BuildResult{}, err
 	}
 	java, err := requireJava(ctx, o.Java)

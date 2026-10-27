@@ -37,8 +37,11 @@ var sessionTools = []string{"toolsets"}
 // configUsage is printed for `garmin-mcp config --help` and misuse.
 var configUsage = "usage: garmin-mcp config <snippet|install> <client> [--profile NAME]\nclients: " + strings.Join(clients, ", ")
 
-// credentialsNote reminds that credentials come from `garmin-mcp auth`.
-const credentialsNote = "credentials: run `garmin-mcp auth login` once in a terminal; the server reads them from the OS keychain, or a 0600 file when there is none (`garmin-mcp auth status` says which)"
+// credentialsNote reminds that credentials come from `garmin-mcp auth`, for
+// the profile the entry pins.
+func credentialsNote(profile string) string {
+	return "credentials: run `" + tool.LoginCommand(profile) + "` once in a terminal; the server reads them from the OS keychain, or a 0600 file when there is none (`garmin-mcp auth status` says which)"
+}
 
 func runConfig(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
@@ -62,6 +65,10 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		if err := config.ValidateProfileName(*profile); err != nil {
 			return usageErr(err.Error())
 		}
+		// The server resolves the same profile at start; fail here, not there.
+		if _, err := config.Resolve(config.Options{Flags: config.Flags{Profile: *profile}}); err != nil {
+			return err
+		}
 	}
 	bin, err := binaryPath()
 	if err != nil {
@@ -76,7 +83,7 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		if _, err = io.WriteString(stdout, s); err != nil {
 			return err
 		}
-		fmt.Fprintln(stderr, credentialsNote) // stderr keeps stdout pasteable
+		fmt.Fprintln(stderr, credentialsNote(*profile)) // stderr keeps stdout pasteable
 		return nil
 	case "install":
 		env, err := currentInstallEnv()
@@ -86,7 +93,7 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		if err := install(client, bin, *profile, env, stdout); err != nil {
 			return err
 		}
-		fmt.Fprintln(stdout, credentialsNote)
+		fmt.Fprintln(stdout, credentialsNote(*profile))
 		return nil
 	default:
 		return usageErr(fmt.Sprintf("unknown config subcommand %q (snippet, install)", sub))
@@ -303,7 +310,7 @@ func clientConfigPaths(client string, e installEnv) []string {
 	case "claude-desktop":
 		return append([]string{filepath.Join(e.configDir, "Claude", "claude_desktop_config.json")}, msixClaudeConfigs(e)...)
 	case "vscode":
-		return vscodeConfigs(e)
+		return config.VSCodeUserConfigs(e.goos, e.home, e.configDir)
 	default:
 		return nil
 	}
@@ -329,32 +336,6 @@ func msixClaudeConfigs(e installEnv) []string {
 		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
 			out = append(out, filepath.Join(dir, "claude_desktop_config.json"))
 		}
-	}
-	return out
-}
-
-// vscodeConfigs returns mcp.json in every existing VS Code User dir (Code,
-// Code - OSS, VSCodium, and on Linux their Flatpaks), or Code's when none
-// exists yet.
-func vscodeConfigs(e installEnv) []string {
-	dirs := []string{
-		filepath.Join(e.configDir, "Code", "User"),
-		filepath.Join(e.configDir, "Code - OSS", "User"),
-		filepath.Join(e.configDir, "VSCodium", "User"),
-	}
-	if e.goos == "linux" {
-		dirs = append(dirs,
-			filepath.Join(e.home, ".var", "app", "com.visualstudio.code", "config", "Code", "User"),
-			filepath.Join(e.home, ".var", "app", "com.vscodium.codium", "config", "VSCodium", "User"))
-	}
-	var out []string
-	for _, d := range dirs {
-		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
-			out = append(out, filepath.Join(d, "mcp.json"))
-		}
-	}
-	if len(out) == 0 {
-		out = []string{filepath.Join(dirs[0], "mcp.json")}
 	}
 	return out
 }

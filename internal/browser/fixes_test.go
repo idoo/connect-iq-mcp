@@ -1,7 +1,11 @@
 package browser
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -91,6 +95,42 @@ func TestCftSandboxBlocked(t *testing.T) {
 		return "1", nil
 	}); err != nil {
 		t.Errorf("darwin: %v", err)
+	}
+}
+
+// r4: doctor's preflight only speaks for Chrome for Testing on Linux and
+// never downloads it.
+func TestPreflight(t *testing.T) {
+	blocked := func(string) (string, error) { return "1\n", nil }
+	open := func(string) (string, error) { return "0\n", nil }
+	runs := 0
+	libsMissing := func(context.Context, string) error { runs++; return fmt.Errorf("%w: libnss3.so missing", ErrNoBrowser) }
+	exe := filepath.Join(t.TempDir(), "chrome")
+	if err := os.WriteFile(exe, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cft := pick{exe: exe, cft: true}
+	if err := preflight(t.Context(), "linux", cft, blocked, libsMissing); err == nil || !strings.Contains(err.Error(), ".deb") {
+		t.Errorf("AppArmor: %v", err)
+	}
+	if err := preflight(t.Context(), "linux", cft, open, libsMissing); err == nil || !strings.Contains(err.Error(), "libnss3") {
+		t.Errorf("libs: %v", err)
+	}
+	notYet := pick{exe: filepath.Join(t.TempDir(), "absent"), cft: true}
+	for name, c := range map[string]struct {
+		goos string
+		p    pick
+		read func(string) (string, error)
+	}{
+		"darwin":        {"darwin", cft, blocked},
+		"windows":       {"windows", cft, blocked},
+		"vendor":        {"linux", pick{exe: "/usr/bin/google-chrome"}, blocked},
+		"not extracted": {"linux", notYet, open}, // never downloads or runs
+	} {
+		before := runs
+		if err := preflight(t.Context(), c.goos, c.p, c.read, libsMissing); err != nil || runs != before {
+			t.Errorf("%s: %v, runs %d", name, err, runs-before)
+		}
 	}
 }
 

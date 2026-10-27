@@ -24,6 +24,26 @@ func (e *Error) Error() string { return e.Message }
 // ask, returns the restart steps for that client.
 const EnableWritesHint = `call toolsets {"action":"enable_writes"} so the user can approve writes for this session (if the client cannot show the approval, it returns the restart steps)`
 
+// LoginCommand is the one CLI sign-in command every human-facing hint names:
+// "garmin-mcp auth login" plus flags, plus "--profile <name>" unless the
+// profile is "" or "default" (a bare command in the user's terminal signs in
+// "default", not the profile the server runs as).
+func LoginCommand(profile string, flags ...string) string {
+	cmd := "garmin-mcp auth login"
+	for _, f := range flags {
+		cmd += " " + f
+	}
+	if profile != "" && profile != "default" {
+		cmd += " --profile " + profile
+	}
+	return cmd
+}
+
+// AuthRequiredHint is the auth_required hint for profile.
+func AuthRequiredHint(profile string) string {
+	return "call the auth_login tool (it opens a browser window for the user to sign in), or ask the user to run `" + LoginCommand(profile) + "` in a terminal, then retry"
+}
+
 // Sentinel errors shared by every tool.
 var (
 	ErrWritesDisabled = &Error{
@@ -79,7 +99,7 @@ var (
 	ErrAuthRequired = &Error{
 		Code:    "auth_required",
 		Message: "Connect IQ credentials are missing or expired",
-		Hint:    "call the auth_login tool (it opens a browser window for the user to sign in), or ask the user to run `garmin-mcp auth login` in a terminal, then retry",
+		Hint:    AuthRequiredHint(""),
 	}
 	ErrUnavailable = &Error{
 		Code:    "unavailable",

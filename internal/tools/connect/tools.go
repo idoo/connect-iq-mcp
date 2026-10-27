@@ -44,8 +44,9 @@ func client(env *tool.Env) *connectapi.Client {
 	return connectapi.New(env.HTTP, env.Credentials, baseURL)
 }
 
-// wrap maps client errors to tool errors; messages never carry tokens or bodies.
-func wrap(err error) error {
+// wrap maps client errors to tool errors; messages never carry tokens or
+// bodies. env names the profile in sign-in hints.
+func wrap(env *tool.Env, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -66,7 +67,7 @@ func wrap(err error) error {
 		case 404:
 			ae.Hint = "no data for that date or id, or the endpoint is not available for this account"
 		case 403:
-			ae.Hint = "the Connect token lacks access; call auth_login with connect=true (or run `garmin-mcp auth login --connect`)"
+			ae.Hint = "the Connect token lacks access; call auth_login with connect=true (or run `" + tool.LoginCommand(env.Profile.Name, "--connect") + "`)"
 		}
 		return ae
 	}
@@ -220,12 +221,12 @@ func connectProfile(ctx context.Context, env *tool.Env, _ noIn) (*tool.Result, e
 	c := client(env)
 	p, err := c.Profile(ctx)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	out := map[string]any{"display_name": tool.Untrusted(p.DisplayName), "full_name": tool.Untrusted(p.FullName)}
 	var s map[string]any
 	if err := c.GetJSON(ctx, "/userprofile-service/userprofile/user-settings", nil, &s); err != nil {
-		out["settings_error"] = wrap(err).Error()
+		out["settings_error"] = wrap(env, err).Error()
 	} else if ud, ok := s["userData"].(map[string]any); ok {
 		out["settings"] = pick(ud, "measurementSystem", "timeFormat", "gender", "birthDate", "height", "weight",
 			"vo2MaxRunning", "vo2MaxCycling", "lactateThresholdHeartRate", "lactateThresholdSpeed", "intensityMinutesCalcMethod")
@@ -241,11 +242,11 @@ func connectDailySummary(ctx context.Context, env *tool.Env, in dateIn) (*tool.R
 	c := client(env)
 	name, err := c.DisplayName(ctx)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	var v any
 	if err := c.GetJSON(ctx, "/usersummary-service/usersummary/daily/"+name, url.Values{"calendarDate": {ymd(d)}}, &v); err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	return tool.OK(map[string]any{"date": ymd(d), "summary": compact(v)}), nil
 }
@@ -258,12 +259,12 @@ func connectSleep(ctx context.Context, env *tool.Env, in seriesIn) (*tool.Result
 	c := client(env)
 	name, err := c.DisplayName(ctx)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	var v any
 	q := url.Values{"date": {ymd(d)}, "nonSleepBufferMinutes": {"60"}}
 	if err := c.GetJSON(ctx, "/wellness-service/wellness/dailySleepData/"+name, q, &v); err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	if !in.Series {
 		v = compact(v)
@@ -279,11 +280,11 @@ func connectHeartRate(ctx context.Context, env *tool.Env, in seriesIn) (*tool.Re
 	c := client(env)
 	name, err := c.DisplayName(ctx)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	var m map[string]any
 	if err := c.GetJSON(ctx, "/wellness-service/wellness/dailyHeartRate/"+name, url.Values{"date": {ymd(d)}}, &m); err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	out := map[string]any{"date": ymd(d)}
 	if m != nil {
@@ -314,7 +315,7 @@ func dated(ctx context.Context, env *tool.Env, date string, series bool, key str
 	}
 	var v any
 	if err := client(env).GetJSON(ctx, p(ymd(d)), nil, &v); err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	if !series {
 		v = compact(v)
@@ -330,7 +331,7 @@ func connectTraining(ctx context.Context, env *tool.Env, in dateIn) (*tool.Resul
 	c := client(env)
 	name, err := c.DisplayName(ctx)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	out := map[string]any{"date": ymd(d)}
 	parts := []struct{ key, path string }{
@@ -343,7 +344,7 @@ func connectTraining(ctx context.Context, env *tool.Env, in dateIn) (*tool.Resul
 	for _, p := range parts {
 		var v any
 		if err := c.GetJSON(ctx, p.path, nil, &v); err != nil {
-			last = wrap(err)
+			last = wrap(env, err)
 			if errors.Is(last, tool.ErrAuthRequired) || errors.Is(last, tool.ErrRateLimited) {
 				return nil, last
 			}
@@ -379,7 +380,7 @@ func connectWeight(ctx context.Context, env *tool.Env, in rangeIn) (*tool.Result
 	var v any
 	path := "/weight-service/weight/range/" + ymd(start) + "/" + ymd(end)
 	if err := client(env).GetJSON(ctx, path, url.Values{"includeAll": {"true"}}, &v); err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	return tool.OK(map[string]any{"start": ymd(start), "end": ymd(end), "weight": v}), nil
 }
@@ -410,7 +411,7 @@ func connectActivitiesList(ctx context.Context, env *tool.Env, in listIn) (*tool
 	}
 	var raw []map[string]any
 	if err := client(env).GetJSON(ctx, "/activitylist-service/activities/search/activities", q, &raw); err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	rows := make([]map[string]any, 0, len(raw))
 	for _, a := range raw {
@@ -441,13 +442,13 @@ func connectActivityGet(ctx context.Context, env *tool.Env, in activityIn) (*too
 	c := client(env)
 	var a any
 	if err := c.GetJSON(ctx, p, nil, &a); err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	out := map[string]any{"activity": untrusted(compact(a))}
 	if in.Splits {
 		var s any
 		if err := c.GetJSON(ctx, p+"/splits", nil, &s); err != nil {
-			out["splits_error"] = wrap(err).Error()
+			out["splits_error"] = wrap(env, err).Error()
 		} else {
 			out["splits"] = untrusted(compact(s, "lapDTOs"))
 		}
@@ -456,7 +457,7 @@ func connectActivityGet(ctx context.Context, env *tool.Env, in activityIn) (*too
 		var d any
 		q := url.Values{"maxChartSize": {"200"}, "maxPolylineSize": {"0"}}
 		if err := c.GetJSON(ctx, p+"/details", q, &d); err != nil {
-			out["details_error"] = wrap(err).Error()
+			out["details_error"] = wrap(env, err).Error()
 		} else {
 			out["details"] = compact(d, "activityDetailMetrics", "metricDescriptors")
 		}
@@ -468,11 +469,11 @@ func connectPersonalRecords(ctx context.Context, env *tool.Env, _ noIn) (*tool.R
 	c := client(env)
 	name, err := c.DisplayName(ctx)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	var v any
 	if err := c.GetJSON(ctx, "/personalrecord-service/personalrecord/prs/"+name, nil, &v); err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	return tool.OK(map[string]any{"records": untrusted(v)}), nil
 }
@@ -480,7 +481,7 @@ func connectPersonalRecords(ctx context.Context, env *tool.Env, _ noIn) (*tool.R
 func connectDevices(ctx context.Context, env *tool.Env, _ noIn) (*tool.Result, error) {
 	var raw []map[string]any
 	if err := client(env).GetJSON(ctx, "/device-service/deviceregistration/devices", nil, &raw); err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	out := make([]any, 0, len(raw))
 	for _, d := range raw {
@@ -521,7 +522,7 @@ func connectActivityDownload(ctx context.Context, env *tool.Env, in downloadIn) 
 	}
 	data, err := client(env).Download(ctx, src)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, wrap(env, err)
 	}
 	if in.Format == "fit" {
 		if data, err = unzipFIT(data); err != nil {

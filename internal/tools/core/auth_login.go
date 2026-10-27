@@ -45,7 +45,7 @@ var loginGate struct {
 }
 
 // enterLogin claims the window slot or explains why not.
-func enterLogin() error {
+func enterLogin(profile string) error {
 	loginGate.mu.Lock()
 	defer loginGate.mu.Unlock()
 	if loginGate.busy {
@@ -60,7 +60,7 @@ func enterLogin() error {
 			return &tool.Error{
 				Code:    "login_unavailable",
 				Message: fmt.Sprintf("the last sign-in window closed without a sign-in; auth_login can open another in %s", left.Round(time.Second)),
-				Hint:    "ask the user to run `garmin-mcp auth login` in a terminal, or call auth_login again later",
+				Hint:    "ask the user to run `" + tool.LoginCommand(profile) + "` in a terminal, or call auth_login again later",
 			}
 		}
 	}
@@ -113,7 +113,7 @@ func authLogin(ctx context.Context, env *tool.Env, in authLoginIn) (*tool.Result
 		return nil, &tool.Error{
 			Code:    "login_unavailable",
 			Message: "this garmin-mcp build has no interactive sign-in",
-			Hint:    "ask the user to run `garmin-mcp auth login` in a terminal",
+			Hint:    "ask the user to run `" + tool.LoginCommand(env.Profile.Name) + "` in a terminal",
 		}
 	}
 	if in.Connect && !env.Credentials.Status(ctx).Connect.Present {
@@ -122,7 +122,7 @@ func authLogin(ctx context.Context, env *tool.Env, in authLoginIn) (*tool.Result
 		}
 	}
 
-	if err := enterLogin(); err != nil {
+	if err := enterLogin(env.Profile.Name); err != nil {
 		return nil, err
 	}
 
@@ -176,7 +176,7 @@ func authLogin(ctx context.Context, env *tool.Env, in authLoginIn) (*tool.Result
 		return nil, &tool.Error{
 			Code:    "login_failed",
 			Message: err.Error(),
-			Hint:    "ask the user to run `garmin-mcp auth login` in a terminal; auth_login itself waits 10 minutes before opening another window",
+			Hint:    "ask the user to run `" + tool.LoginCommand(env.Profile.Name) + "` in a terminal; auth_login itself waits 10 minutes before opening another window",
 		}
 	}
 	out := tool.OK(statusOut(ctx, env))
@@ -191,7 +191,9 @@ func authLogin(ctx context.Context, env *tool.Env, in authLoginIn) (*tool.Result
 const connectConsentPrompt = "auth_login wants to sign in to Garmin Connect, giving this AI agent read access to your health and activity data (sleep, heart rate, activities). Allow?"
 
 // connectConsentHint is the way to enable Connect without elicitation.
-const connectConsentHint = "ask the user to run `garmin-mcp auth login --connect` in a terminal"
+func connectConsentHint(profile string) string {
+	return "ask the user to run `" + tool.LoginCommand(profile, "--connect") + "` in a terminal"
+}
 
 // connectConsent asks the human to enable Garmin Connect. An agent alone can
 // never enable health-data access: without elicitation it is refused, even
@@ -203,11 +205,11 @@ func connectConsent(ctx context.Context, env *tool.Env) error {
 	}
 	switch {
 	case errors.Is(err, tool.ErrElicitationUnavailable):
-		return &tool.Error{Code: tool.ErrHumanRequired.Code, Message: "enabling Garmin Connect needs the user's approval, but the client cannot ask", Hint: connectConsentHint}
+		return &tool.Error{Code: tool.ErrHumanRequired.Code, Message: "enabling Garmin Connect needs the user's approval, but the client cannot ask", Hint: connectConsentHint(env.Profile.Name)}
 	case err != nil:
 		return fmt.Errorf("ask for confirmation: %w", err)
 	case !ok:
-		return &tool.Error{Code: tool.ErrDeclined.Code, Message: "the user declined enabling Garmin Connect", Hint: connectConsentHint}
+		return &tool.Error{Code: tool.ErrDeclined.Code, Message: "the user declined enabling Garmin Connect", Hint: connectConsentHint(env.Profile.Name)}
 	}
 	return nil
 }

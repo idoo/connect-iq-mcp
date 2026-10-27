@@ -291,6 +291,25 @@ func TestEnableWrites(t *testing.T) {
 		if res.IsError || !strings.Contains(instr, "~/.cursor/mcp.json") || !strings.Contains(instr, "GARMIN_MCP_ALLOW_WRITES") {
 			t.Fatalf("fallback = %v", body)
 		}
+		// N5: one restart needs both settings, and the text says publishes then
+		// go through without a human yes.
+		for _, want := range []string{"GARMIN_MCP_ALLOW_WRITES=1", "allow_no_elicit = true under [profiles.work]", "config.toml", "without a human yes", "one restart"} {
+			if !strings.Contains(instr, want) {
+				t.Errorf("instructions lack %q: %s", want, instr)
+			}
+		}
+	})
+	// N6: VS Code is pointed at the user mcp.json `config install vscode`
+	// writes, never the workspace .vscode/mcp.json.
+	t.Run("vscode user config", func(t *testing.T) {
+		old := vscodeUserConfigs
+		t.Cleanup(func() { vscodeUserConfigs = old })
+		want := "/home/u/.config/Code/User/mcp.json"
+		vscodeUserConfigs = func() []string { return []string{want} }
+		instr := writesInstructions("Visual Studio Code", "work")
+		if !strings.Contains(instr, want) || !strings.Contains(instr, "MCP: Open User Configuration") || strings.Contains(instr, ".vscode") {
+			t.Fatalf("vscode instructions: %s", instr)
+		}
 	})
 	t.Run("cancel", func(t *testing.T) {
 		h := connect(t, Deps{Tools: (&fixture{}).tools(), Profile: team(false)}, "test", answer("cancel"))

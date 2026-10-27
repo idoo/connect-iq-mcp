@@ -122,7 +122,7 @@ func Login(ctx context.Context, o Options, r Request) (Result, error) {
 		logw = io.Discard
 	}
 	if !o.Headless && !HasDisplay() {
-		return Result{}, errors.New("browser: no display (DISPLAY and WAYLAND_DISPLAY are unset); sign in on a desktop session, or run `garmin-mcp auth login` on a machine with a screen and copy the profile")
+		return Result{}, errors.New("browser: no display (DISPLAY and WAYLAND_DISPLAY are unset); run `garmin-mcp auth login --paste` (with --profile NAME for a non-default profile) and paste the Cookie of a signed-in apps.garmin.com request (DevTools → Network → Copy as cURL), or sign in on a desktop session")
 	}
 	if o.BinDir == "" {
 		o.BinDir = defaultBinDir()

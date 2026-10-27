@@ -16,6 +16,7 @@ import (
 	"github.com/idoo/garmin-mcp/internal/auth"
 	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/portal"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 const (
@@ -25,7 +26,6 @@ const (
 
 	portalRenewWindow  = 3 * 24 * time.Hour
 	accessRefreshSlack = 15 * time.Minute
-	loginHint          = `call the auth_login tool (it opens a browser window for the user to sign in), or run "garmin-mcp auth login" in a terminal`
 
 	// profileLockWait bounds the wait for the profile lock while the current
 	// credential still works; past it that credential is returned.
@@ -71,13 +71,20 @@ var (
 	// errSealNotExtended: a portal renewal returned a seal that expires no
 	// later than the stored one; the stored session is kept.
 	errSealNotExtended = fmt.Errorf("%w: the renewed developer-portal session expires no later than the current one", errNoRenewal)
+	// errSignInOpen: an interactive sign-in window holds the browser profile.
+	errSignInOpen = fmt.Errorf("%w: an interactive sign-in is using the browser profile", errNoRenewal)
 )
 
-func authRequired(what string, cause error) error {
+// loginHint tells the agent or human how to sign this profile in.
+func (s *Store) loginHint() string {
+	return "call the auth_login tool (it opens a browser window for the user to sign in), or run \"" + tool.LoginCommand(s.profile) + "\" in a terminal"
+}
+
+func (s *Store) authRequired(what string, cause error) error {
 	if cause != nil {
-		return fmt.Errorf("%w: %s (%v); %s", auth.ErrAuthRequired, what, cause, loginHint)
+		return fmt.Errorf("%w: %s (%v); %s", auth.ErrAuthRequired, what, cause, s.loginHint())
 	}
-	return fmt.Errorf("%w: %s; %s", auth.ErrAuthRequired, what, loginHint)
+	return fmt.Errorf("%w: %s; %s", auth.ErrAuthRequired, what, s.loginHint())
 }
 
 // renewRateLimited reports a renewal Garmin's sign-in server refused with its
@@ -143,12 +150,12 @@ func (s *Store) PortalCookies(ctx context.Context) (string, error) {
 	}
 	if src == srcEnv { // read-only: cannot renew
 		if b.Portal == nil || b.Portal.Cookies == "" {
-			return "", authRequired("GARMIN_MCP_PORTAL_COOKIES has no `session` cookie", nil)
+			return "", s.authRequired("GARMIN_MCP_PORTAL_COOKIES has no `session` cookie", nil)
 		}
 		if !s.portalDead(b.Portal) {
 			return b.Portal.Cookies, nil
 		}
-		return "", authRequired("GARMIN_MCP_PORTAL_COOKIES holds an expired session", nil)
+		return "", s.authRequired("GARMIN_MCP_PORTAL_COOKIES holds an expired session", nil)
 	}
 	rerr := fmt.Errorf("%w: auto_renew is off", errNoRenewal)
 	if s.autoRenew { // auto_renew off: nothing to decide under the lock
@@ -179,9 +186,9 @@ func (s *Store) PortalCookies(ctx context.Context) (string, error) {
 		return "", renewRateLimited("developer portal session expired", rerr)
 	}
 	if b.Portal == nil {
-		return "", authRequired("not signed in to the Connect IQ developer portal", nil)
+		return "", s.authRequired("not signed in to the Connect IQ developer portal", nil)
 	}
-	return "", authRequired("developer portal session expired", nil)
+	return "", s.authRequired("developer portal session expired", nil)
 }
 
 // portalUsable reports p's header when its expiry is beyond the renew window
@@ -247,7 +254,7 @@ func (s *Store) ConnectToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if b.Connect == nil {
-		return "", errNoConnectConsent()
+		return "", s.errNoConnectConsent()
 	}
 	if tok, ok := s.accessUsable(b.Connect); ok {
 		return tok, nil
@@ -267,7 +274,7 @@ func (s *Store) ConnectToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if b.Connect == nil { // signed out meanwhile
-		return "", errNoConnectConsent()
+		return "", s.errNoConnectConsent()
 	}
 	if tok, ok := s.accessUsable(b.Connect); ok {
 		return tok, nil
@@ -289,7 +296,7 @@ func (s *Store) ConnectToken(ctx context.Context) (string, error) {
 		if cause == nil {
 			cause = errors.New("refresh token expired")
 		}
-		return "", fmt.Errorf("%w: GARMIN_MCP_CONNECT_REFRESH_TOKEN was rejected (%v); put a fresh refresh token in it, or unset it and have a human run \"garmin-mcp auth login --connect\"", auth.ErrAuthRequired, cause)
+		return "", fmt.Errorf("%w: GARMIN_MCP_CONNECT_REFRESH_TOKEN was rejected (%v); put a fresh refresh token in it, or unset it and have a human run \"%s\"", auth.ErrAuthRequired, cause, tool.LoginCommand(s.profile, "--connect"))
 	}
 	rerr := s.renewLocked(ctx, false, true, false)
 	if rerr == nil {
@@ -300,7 +307,7 @@ func (s *Store) ConnectToken(ctx context.Context) (string, error) {
 	if errors.Is(rerr, browser.ErrRateLimited) {
 		return "", renewRateLimited("Garmin Connect sign-in expired", rerr)
 	}
-	return "", authRequired("Garmin Connect sign-in expired", cause)
+	return "", s.authRequired("Garmin Connect sign-in expired", cause)
 }
 
 // keepConnect saves a refreshed Connect credential. When the save fails the
@@ -327,8 +334,8 @@ func (s *Store) retryPendingConnect() {
 }
 
 // errNoConnectConsent is returned when Connect was never explicitly enabled.
-func errNoConnectConsent() error {
-	return authRequired(`Garmin Connect is not enabled; a human must run "garmin-mcp auth login --connect" (or approve auth_login with connect=true)`, nil)
+func (s *Store) errNoConnectConsent() error {
+	return s.authRequired(`Garmin Connect is not enabled; a human must run "`+tool.LoginCommand(s.profile, "--connect")+`" (or approve auth_login with connect=true)`, nil)
 }
 
 func (s *Store) accessUsable(c *connectCred) (string, bool) {
@@ -517,7 +524,7 @@ func (s *Store) renewLocked(ctx context.Context, wantPortal, wantConnect, force 
 		return fmt.Errorf("%w: auto_renew is off", errNoRenewal)
 	}
 	if !s.hasProfile(s.browserDir()) {
-		return fmt.Errorf("%w: no browser profile (sign in once with the auth_login tool or \"garmin-mcp auth login\")", errNoRenewal)
+		return fmt.Errorf("%w: no browser profile (sign in once with the auth_login tool or \"%s\")", errNoRenewal, tool.LoginCommand(s.profile))
 	}
 	var kinds []string
 	if wantPortal {
@@ -544,7 +551,7 @@ func (s *Store) renewLocked(ctx context.Context, wantPortal, wantConnect, force 
 		return fmt.Errorf("lock browser profile: %w", err)
 	}
 	if busy {
-		return fmt.Errorf("%w: an interactive sign-in is using the browser profile", errNoRenewal)
+		return errSignInOpen
 	}
 	defer unlockLogin()
 	var oldSeal time.Time
@@ -702,7 +709,7 @@ func (s *Store) Status(context.Context) auth.Status {
 		exp, _ := portal.SealExpiry(b.Portal.Cookies)
 		st.Portal = s.credStatus(ps, exp, renewable && ps != srcEnv)
 	} else {
-		st.Portal = auth.CredStatus{Renewable: renewable, Note: `not signed in; auth_login tool or "garmin-mcp auth login"`}
+		st.Portal = auth.CredStatus{Renewable: renewable, Note: `not signed in; auth_login tool or "` + tool.LoginCommand(s.profile) + `"`}
 	}
 	if b.Connect != nil && b.Connect.RefreshToken != "" {
 		var exp time.Time
@@ -714,9 +721,27 @@ func (s *Store) Status(context.Context) auth.Status {
 			st.Connect.Note += "; rotated tokens are kept in memory only"
 		}
 	} else {
-		st.Connect = auth.CredStatus{Renewable: renewable, Note: `not enabled (optional; health data); a human enables it with "garmin-mcp auth login --connect" or by approving auth_login with connect=true`}
+		st.Connect = auth.CredStatus{Renewable: renewable, Note: `not enabled (optional; health data); a human enables it with "` + tool.LoginCommand(s.profile, "--connect") + `" or by approving auth_login with connect=true`}
 	}
+	st.Portal.Note += s.pauseNote(stampPortal)
+	st.Connect.Note += s.pauseNote(stampConnect)
 	return st
+}
+
+// pauseNote describes an active silent-renewal pause of kind read from its
+// stamp (the same window renewLocked honours), or "".
+func (s *Store) pauseNote(kind string) string {
+	st, blocked := s.stampBlocks(kind)
+	if !blocked {
+		return ""
+	}
+	switch st.Outcome {
+	case outcomeRateLimited:
+		return "; renewal paused: Garmin is rate-limiting sign-ins (Cloudflare 1015) until " + st.Until.Local().Format("15:04")
+	case outcomeNotExtended:
+		return "; renewal paused: the last renewal did not extend the session; next attempt after " + st.Until.Local().Format("Jan 2 15:04")
+	}
+	return ""
 }
 
 func (s *Store) credStatus(src string, exp time.Time, renewable bool) auth.CredStatus {
@@ -730,7 +755,7 @@ func (s *Store) credStatus(src string, exp time.Time, renewable bool) auth.CredS
 		if auto {
 			cs.Note += ", renews automatically on next use"
 		} else {
-			cs.Note += `; auth_login tool or "garmin-mcp auth login"`
+			cs.Note += `; auth_login tool or "` + tool.LoginCommand(s.profile) + `"`
 		}
 		return cs
 	default:
