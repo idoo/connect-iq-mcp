@@ -10,7 +10,6 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/flock"
 )
 
@@ -52,12 +51,12 @@ func TestConnectTokenWithConsentRenews(t *testing.T) {
 	s.hasProfile = func(string) bool { return true }
 	seedConnect(t, s, "revoked")
 	var logins int
-	s.login = func(_ context.Context, o browser.Options, r browser.Request) (browser.Result, error) {
+	s.login = func(_ context.Context, r SignInRequest) (Capture, error) {
 		logins++
-		if !o.Headless || !r.Connect || r.Portal {
-			t.Errorf("options = %+v %+v", o, r)
+		if !r.Headless || !r.Connect || r.Portal {
+			t.Errorf("request = %+v", r)
 		}
-		return browser.Result{ConnectTicket: "ST-1"}, nil
+		return Capture{ConnectTicket: "ST-1"}, nil
 	}
 	tok, err := s.ConnectToken(context.Background())
 	if err != nil || tok != "at-st" || logins != 1 {
@@ -76,7 +75,7 @@ func TestLogoutWaitsForLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- s.logout(context.Background()) }()
+	go func() { done <- s.Logout(context.Background()) }()
 	select {
 	case err := <-done:
 		unlock()

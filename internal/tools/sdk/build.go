@@ -69,13 +69,6 @@ const (
 	exportTimeout = 30 * time.Minute
 )
 
-// buildWait bounds how long one sdk_build call waits before answering
-// still_processing; clients cancel a request after about 60 s. Tests shorten it.
-var buildWait = 45 * time.Second
-
-// progressEvery is the progress note interval while a call waits.
-var progressEvery = 10 * time.Second
-
 // versionRE bounds the version used in the .iq file name.
 var versionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$`)
 
@@ -179,11 +172,12 @@ func outFor(p prepared, r ciqsdk.BuildResult) buildOut {
 
 func sdkBuild(ctx context.Context, env *tool.Env, in buildIn) (*tool.Result, error) {
 	if in.BuildID != "" {
-		j := lookupJob(in.BuildID)
+		jobs := jobsOf(env)
+		j := jobs.lookup(in.BuildID)
 		if j == nil {
 			return nil, tool.InvalidArgs("unknown build_id %q (finished results are returned once; builds are lost when the server restarts)", in.BuildID)
 		}
-		return waitJob(ctx, env, j)
+		return jobs.wait(ctx, env, j)
 	}
 	all := in.Device == allDevices
 	note := ""
@@ -236,11 +230,12 @@ func sdkBuild(ctx context.Context, env *tool.Env, in buildIn) (*tool.Result, err
 	// The build outlives this call if needed (a poll with build_id, or the
 	// same build again, picks it up), so cancelling the request does not
 	// kill monkeyc; it runs until it finishes or the server stops.
-	j, err := startJob(env.Lifetime, p, all, what, ident)
+	jobs := jobsOf(env)
+	j, err := jobs.start(env.Lifetime, p, all, what, ident)
 	if err != nil {
 		return nil, err
 	}
-	res, err := waitJob(ctx, env, j)
+	res, err := jobs.wait(ctx, env, j)
 	if err != nil {
 		return nil, err
 	}
@@ -288,21 +283,37 @@ func (j *buildJob) finished() bool {
 // jobKeep is how long a finished, never-collected result is kept.
 const jobKeep = 30 * time.Minute
 
-var (
-	jobsMu sync.Mutex
-	jobs   = map[string]*buildJob{}
-)
+// jobRegistry is the server's background builds (one per [tool.Shared]).
+// Jobs are added and removed only under mu; a job's result fields are
+// written before its done channel closes, and every waiter gets a copy.
+type jobRegistry struct {
+	mu   sync.Mutex
+	jobs map[string]*buildJob
+	// buildWait bounds how long one sdk_build call waits before answering
+	// still_processing; clients cancel a request after about 60 s. Tests
+	// shorten it on their own registry.
+	buildWait time.Duration
+	// progressEvery is the progress note interval while a call waits.
+	progressEvery time.Duration
+}
 
-// startJob starts p under the server lifetime, or returns the running job
+func newJobRegistry() *jobRegistry {
+	return &jobRegistry{jobs: map[string]*buildJob{}, buildWait: 45 * time.Second, progressEvery: 10 * time.Second}
+}
+
+// jobsOf returns the server's build registry.
+func jobsOf(env *tool.Env) *jobRegistry { return tool.SharedValue(env.Shared, newJobRegistry) }
+
+// start starts p under the server lifetime, or returns the running job
 // with the same identity (an agent re-calling instead of polling, or a retry
 // after a cancelled call, gets the same build_id). A running job writing the
 // same output with other options is a conflict: joining it would hand back
 // an artefact built with options this call did not ask for.
-func startJob(life *tool.Lifetime, p prepared, all bool, what, ident string) (*buildJob, error) {
-	jobsMu.Lock()
-	defer jobsMu.Unlock()
-	sweepJobsLocked(time.Now())
-	for _, j := range jobs {
+func (r *jobRegistry) start(life *tool.Lifetime, p prepared, all bool, what, ident string) (*buildJob, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sweepLocked(time.Now())
+	for _, j := range r.jobs {
 		if j.output != p.opts.Output || j.finished() {
 			continue
 		}
@@ -318,7 +329,7 @@ func startJob(life *tool.Lifetime, p prepared, all bool, what, ident string) (*b
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	j := &buildJob{id: hex.EncodeToString(b[:]), what: what, output: p.opts.Output, ident: ident, start: time.Now(), done: make(chan struct{})}
-	jobs[j.id] = j
+	r.jobs[j.id] = j
 	life.Go(func(ctx context.Context) {
 		defer close(j.done)
 		j.res, j.err = runBuild(ctx, p, all)
@@ -327,27 +338,30 @@ func startJob(life *tool.Lifetime, p prepared, all bool, what, ident string) (*b
 	return j, nil
 }
 
-// sweepJobsLocked drops finished jobs whose result nobody collected within jobKeep.
-func sweepJobsLocked(now time.Time) {
-	for id, j := range jobs {
+// sweepLocked drops finished jobs whose result nobody collected within jobKeep.
+func (r *jobRegistry) sweepLocked(now time.Time) {
+	for id, j := range r.jobs {
 		if j.finished() && now.Sub(j.end) > jobKeep {
-			delete(jobs, id)
+			delete(r.jobs, id)
 		}
 	}
 }
 
-func lookupJob(id string) *buildJob {
-	jobsMu.Lock()
-	defer jobsMu.Unlock()
-	sweepJobsLocked(time.Now())
-	return jobs[id]
+func (r *jobRegistry) lookup(id string) *buildJob {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sweepLocked(time.Now())
+	return r.jobs[id]
 }
 
-// waitJob waits up to buildWait for j, sending strictly increasing progress
+// wait waits up to buildWait for j, sending strictly increasing progress
 // (no total). A finished job is removed and its result returned; otherwise
 // the caller gets still_processing with the build_id to poll. A cancelled
 // call leaves the job running: a poll or the same build again finds it.
-func waitJob(ctx context.Context, env *tool.Env, j *buildJob) (*tool.Result, error) {
+func (r *jobRegistry) wait(ctx context.Context, env *tool.Env, j *buildJob) (*tool.Result, error) {
+	r.mu.Lock()
+	buildWait, progressEvery := r.buildWait, r.progressEvery
+	r.mu.Unlock()
 	timer := time.NewTimer(buildWait)
 	defer timer.Stop()
 	tick := time.NewTicker(progressEvery)
@@ -357,9 +371,9 @@ func waitJob(ctx context.Context, env *tool.Env, j *buildJob) (*tool.Result, err
 	for {
 		select {
 		case <-j.done:
-			jobsMu.Lock()
-			delete(jobs, j.id)
-			jobsMu.Unlock()
+			r.mu.Lock()
+			delete(r.jobs, j.id)
+			r.mu.Unlock()
 			// Every joined caller writes its own Meta and render state.
 			return j.res.Clone(), j.err
 		case <-ctx.Done():

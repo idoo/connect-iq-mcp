@@ -3,6 +3,8 @@ package browser
 import (
 	"errors"
 	"testing"
+
+	"github.com/idoo/garmin-mcp/internal/auth"
 )
 
 const (
@@ -36,11 +38,11 @@ func TestInteractionCloudflareBlock(t *testing.T) {
 	title := "Access denied | sso.garmin.com used Cloudflare to restrict access"
 	for _, headless := range []bool{true, false} {
 		s := &session{headless: headless}
-		if err := s.interaction(pageState{Title: title, Text: cf1015Text}); !errors.Is(err, ErrRateLimited) {
+		if err := s.interaction(pageState{Title: title, Text: cf1015Text}); !errors.Is(err, auth.ErrRateLimited) {
 			t.Errorf("headless=%v 1015: err = %v, want ErrRateLimited", headless, err)
 		}
 		err := s.interaction(pageState{Title: title, Text: cf1020Text})
-		if !errors.Is(err, ErrInteractionRequired) || errors.Is(err, ErrRateLimited) {
+		if !errors.Is(err, auth.ErrInteractionRequired) || errors.Is(err, auth.ErrRateLimited) {
 			t.Errorf("headless=%v 1020: err = %v, want ErrInteractionRequired", headless, err)
 		}
 	}

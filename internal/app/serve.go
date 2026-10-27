@@ -33,9 +33,12 @@ type ServeOptions struct {
 // Serve builds the environment and runs the MCP server until ctx ends: one
 // server over stdio, or one server per HTTP session.
 func Serve(ctx context.Context, opts ServeOptions) error {
+	// Cross-call state (app cache, build jobs, simulator sessions) is one
+	// per server and shared by every session.
+	shared := tool.NewShared()
 	// monkeydo clients run in their own process group; never leave them
 	// running after the server (stdio or HTTP) returns.
-	defer sim.Sessions.KillAll()
+	defer tool.SharedValue(shared, sim.NewManager).KillAll()
 	r := opts.Resolved
 	logger := opts.Logger
 	if logger == nil {
@@ -64,6 +67,7 @@ func Serve(ctx context.Context, opts ServeOptions) error {
 	life := tool.NewLifetime(ctx)
 	defer life.Close(5 * time.Second)
 	env.Lifetime = life
+	env.Shared = shared
 	if env.Credentials == nil {
 		logger.Warn("no Connect IQ credentials configured; run `" + tool.LoginCommand(env.Profile.Name) + "`")
 	}

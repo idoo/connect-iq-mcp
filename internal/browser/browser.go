@@ -17,17 +17,9 @@ import (
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
+
+	"github.com/idoo/garmin-mcp/internal/auth"
 )
-
-// ErrInteractionRequired means Garmin showed a sign-in form, MFA prompt or
-// Cloudflare challenge while running headless.
-var ErrInteractionRequired = errors.New("garmin needs you to sign in")
-
-// ErrRateLimited means Cloudflare in front of Garmin's sign-in server
-// answered with error 1015. Live it was keyed on the signed-in profile, not
-// the IP (a fresh profile still loaded), and lasted over an hour.
-// Retrying right away makes it worse.
-var ErrRateLimited = errors.New("garmin's sign-in server is rate limiting this sign-in (Cloudflare 1015); the current session keeps working until it expires, retry renewal in an hour or more")
 
 var errClosed = errors.New("browser closed before sign-in finished")
 
@@ -262,7 +254,7 @@ func (s *session) wrap(err error) error {
 	}
 	if errors.Is(s.ctx.Err(), context.DeadlineExceeded) {
 		if s.headless {
-			return fmt.Errorf("%w: timed out waiting for Garmin", ErrInteractionRequired)
+			return fmt.Errorf("%w: timed out waiting for Garmin", auth.ErrInteractionRequired)
 		}
 		return errors.New("timed out waiting for Garmin sign-in")
 	}
@@ -278,23 +270,23 @@ func (s *session) wrap(err error) error {
 func (s *session) interaction(st pageState) error {
 	switch cloudflareBlock(st.Title, st.Text) {
 	case cfRateLimited:
-		return ErrRateLimited
+		return auth.ErrRateLimited
 	case cfDenied:
 		if s.headless {
-			return fmt.Errorf("%w (Cloudflare blocked the headless browser: access denied)", ErrInteractionRequired)
+			return fmt.Errorf("%w (Cloudflare blocked the headless browser: access denied)", auth.ErrInteractionRequired)
 		}
-		return fmt.Errorf("%w (Cloudflare blocked this browser: access denied)", ErrInteractionRequired)
+		return fmt.Errorf("%w (Cloudflare blocked this browser: access denied)", auth.ErrInteractionRequired)
 	}
 	if !s.headless {
 		return nil
 	}
 	switch {
 	case st.Challenge || challengeTitle(st.Title) || classifyURL(st.URL) == pageChallenge:
-		return fmt.Errorf("%w (Cloudflare challenge)", ErrInteractionRequired)
+		return fmt.Errorf("%w (Cloudflare challenge)", auth.ErrInteractionRequired)
 	case st.MFA:
-		return fmt.Errorf("%w (verification code requested)", ErrInteractionRequired)
+		return fmt.Errorf("%w (verification code requested)", auth.ErrInteractionRequired)
 	case st.Form:
-		return fmt.Errorf("%w (sign-in form shown)", ErrInteractionRequired)
+		return fmt.Errorf("%w (sign-in form shown)", auth.ErrInteractionRequired)
 	}
 	return nil
 }
@@ -355,7 +347,7 @@ func (s *session) portal(verify func(context.Context, string) error) ([]Cookie, 
 		// Headless on the portal but not signed in and nothing to click
 		// through: a person must sign in.
 		if s.headless && time.Since(portalSince) > 8*time.Second {
-			return nil, fmt.Errorf("%w (portal session not accepted)", ErrInteractionRequired)
+			return nil, fmt.Errorf("%w (portal session not accepted)", auth.ErrInteractionRequired)
 		}
 	}
 }

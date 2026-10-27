@@ -306,7 +306,7 @@ func storeListingUpdate(ctx context.Context, env *tool.Env, in listingIn) (*tool
 	}
 	md, err := c.AppMetadata(ctx, app.ID)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	diff, err := applyEdits(md, in.Locales)
 	if err != nil {
@@ -328,7 +328,7 @@ func storeListingUpdate(ctx context.Context, env *tool.Env, in listingIn) (*tool
 		return gate, nil
 	}
 	if err := c.UpdateAppMetadata(wctx, app.ID, md); err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	return written(c, map[string]any{"app": outApp(app), "changed": len(diff), "changes": diff}), nil
 }
@@ -341,14 +341,14 @@ func storeReviewReply(ctx context.Context, env *tool.Env, in replyIn) (*tool.Res
 			return nil, tool.InvalidArgs("create needs review_id and text")
 		}
 		if err := portal.CheckID("review_id", in.ReviewID); err != nil {
-			return nil, wrap(err)
+			return nil, tool.FromUpstream(err, upstreamHints)
 		}
 	case "delete":
 		if strings.TrimSpace(in.ReplyID) == "" {
 			return nil, tool.InvalidArgs("delete needs reply_id")
 		}
 		if err := portal.CheckID("reply_id", in.ReplyID); err != nil {
-			return nil, wrap(err)
+			return nil, tool.FromUpstream(err, upstreamHints)
 		}
 	default:
 		return nil, tool.InvalidArgs("action must be create or delete")
@@ -378,13 +378,13 @@ func storeReviewReply(ctx context.Context, env *tool.Env, in replyIn) (*tool.Res
 	}
 	if in.Action == "delete" {
 		if err := c.DeleteReply(wctx, app.ID, in.ReplyID); err != nil {
-			return nil, wrap(err)
+			return nil, tool.FromUpstream(err, upstreamHints)
 		}
 		return written(c, map[string]any{"app": outApp(app), "deleted": in.ReplyID}), nil
 	}
 	out, err := c.CreateReply(wctx, app.ID, in.ReviewID, in.Text)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	return written(c, map[string]any{"app": outApp(app), "review_id": in.ReviewID, "reply": tool.WrapUntrusted(out, nil, true)}), nil
 }
@@ -407,7 +407,7 @@ func storeScreenshots(ctx context.Context, env *tool.Env, in screenshotsIn) (*to
 			return nil, tool.InvalidArgs("%s needs screenshot_id", in.Action)
 		}
 		if err := portal.CheckID("screenshot_id", in.ScreenshotID); err != nil {
-			return nil, wrap(err)
+			return nil, tool.FromUpstream(err, upstreamHints)
 		}
 	default:
 		return nil, tool.InvalidArgs("action must be add, reorder or delete")
@@ -439,7 +439,7 @@ func storeScreenshots(ctx context.Context, env *tool.Env, in screenshotsIn) (*to
 	case "add":
 		r, err := c.AddScreenshot(wctx, app.ID, in.Order, f)
 		if err != nil {
-			return nil, wrap(err)
+			return nil, tool.FromUpstream(err, upstreamHints)
 		}
 		out["result"] = r
 	case "reorder":
@@ -448,7 +448,7 @@ func storeScreenshots(ctx context.Context, env *tool.Env, in screenshotsIn) (*to
 		err = c.DeleteScreenshot(wctx, app.ID, in.ScreenshotID)
 	}
 	if err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	return written(c, out), nil
 }
@@ -526,18 +526,18 @@ func storeAppCreate(ctx context.Context, env *tool.Env, in createIn) (*tool.Resu
 	}
 	v, err := c.ValidateIQ(wctx, "", in.Version, iq)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	// A confirm retried after a lost CreateApp response must not submit a
 	// second app: refuse when an app with this manifest id already exists.
 	if mid := portal.NormalizeID(v.ManifestAppID()); mid != "" {
 		apps, gen, err := listApps(ctx, c)
 		if err != nil {
-			return nil, wrap(err)
+			return nil, tool.FromUpstream(err, upstreamHints)
 		}
 		m, err := manifestMap(ctx, c, apps, gen)
 		if err != nil {
-			return nil, wrap(err)
+			return nil, tool.FromUpstream(err, upstreamHints)
 		}
 		if existing, ok := m[mid]; ok {
 			return nil, tool.WithNext(tool.InvalidArgs("app already exists: %s has manifest id %s; nothing was submitted. Publish updates with store_version_publish", existing, v.ManifestAppID()),
@@ -551,7 +551,7 @@ func storeAppCreate(ctx context.Context, env *tool.Env, in createIn) (*tool.Resu
 			return nil, tool.WithNext(fmt.Errorf("%w: status unknown: the app submission got no response (%s); it may have been created. Check store_apps_list before retrying (a retry with the same .iq is refused if the app exists)", tool.ErrOutcomeUnknown, err.Error()),
 				tool.NextStep{Tool: "store_apps_list"})
 		}
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	return written(c, map[string]any{"app_id": id, "version": in.Version, "validation": validationReport(v, "")}), nil
 }
@@ -576,7 +576,7 @@ func storeAppDelete(ctx context.Context, env *tool.Env, in deleteIn) (*tool.Resu
 		return gate, nil
 	}
 	if err := c.DeleteApp(wctx, app.ID); err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	return written(c, map[string]any{"deleted": outApp(app)}), nil
 }

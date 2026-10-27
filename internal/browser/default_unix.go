@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-var detectDefault = func() defaultBrowser {
+func detectDefault() defaultBrowser {
 	out, err := exec.Command("xdg-settings", "get", "default-web-browser").Output()
 	if err != nil {
 		return defaultBrowser{}

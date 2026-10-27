@@ -16,6 +16,7 @@ import (
 
 	"github.com/idoo/garmin-mcp/internal/auth"
 	"github.com/idoo/garmin-mcp/internal/httpx"
+	"github.com/idoo/garmin-mcp/internal/upstream"
 )
 
 // BaseURL is the Connect API host.
@@ -39,30 +40,6 @@ var NativeHeaders = map[string]string{
 	"X-GCExperience":              "GC5",
 	"Accept-Language":             "en-US,en;q=0.9",
 	"Accept":                      "application/json",
-}
-
-// RateLimitError is HTTP 429; RetryAfter is zero when the server sent none.
-type RateLimitError struct {
-	Path       string
-	RetryAfter time.Duration
-}
-
-func (e *RateLimitError) Error() string {
-	if e.RetryAfter > 0 {
-		return fmt.Sprintf("Garmin Connect rate limit on %s; retry after %s", e.Path, e.RetryAfter)
-	}
-	return "Garmin Connect rate limit on " + e.Path
-}
-
-// StatusError is any other non-2xx answer. Response bodies are never kept:
-// they may echo tokens.
-type StatusError struct {
-	Status int
-	Path   string
-}
-
-func (e *StatusError) Error() string {
-	return fmt.Sprintf("Garmin Connect HTTP %d on GET %s", e.Status, e.Path)
 }
 
 // Client performs GET requests. It is safe for concurrent use.
@@ -135,9 +112,10 @@ func (c *Client) get(ctx context.Context, path string, q url.Values) (*http.Resp
 		case res.StatusCode == http.StatusUnauthorized:
 			return nil, fmt.Errorf("%w: Garmin Connect rejected the token (HTTP 401)", auth.ErrAuthRequired)
 		case res.StatusCode == http.StatusTooManyRequests:
-			return nil, &RateLimitError{Path: path, RetryAfter: httpx.RetryAfter(res.Header.Get("Retry-After"), time.Now())}
+			return nil, &upstream.HTTPError{Service: upstream.Connect, Status: res.StatusCode, Method: http.MethodGet, Path: path, RateLimited: true, RetryAfter: httpx.RetryAfter(res.Header.Get("Retry-After"), time.Now())}
 		default:
-			return nil, &StatusError{Status: res.StatusCode, Path: path}
+			// Response bodies are never kept: they may echo tokens.
+			return nil, &upstream.HTTPError{Service: upstream.Connect, Status: res.StatusCode, Method: http.MethodGet, Path: path}
 		}
 	}
 }

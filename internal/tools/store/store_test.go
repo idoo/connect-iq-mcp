@@ -179,8 +179,6 @@ func (f *fakePortal) called(sub string) bool {
 
 func setup(t *testing.T) (*tooltest.Kit, *fakePortal) {
 	t.Helper()
-	invalidateCache()
-	t.Cleanup(invalidateCache)
 	k := tooltest.New(t)
 	k.Creds.Cookie = "session=S"
 	f := &fakePortal{signature: true}

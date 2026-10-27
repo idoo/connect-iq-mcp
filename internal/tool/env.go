@@ -136,6 +136,10 @@ type Env struct {
 	// Lifetime runs work that outlives one call (sdk builds) until the
 	// server stops; nil runs it under context.Background (tests).
 	Lifetime *Lifetime
+	// Shared is the server's cross-call state (see [Shared]). The server and
+	// tooltest.New set it; a hand-built Env with none gets a fresh,
+	// call-private one.
+	Shared *Shared
 
 	// noProgress records that Progress was nil before [Env.complete].
 	noProgress bool
@@ -166,6 +170,9 @@ func (e *Env) complete() *Env {
 	}
 	if c.Clock == nil {
 		c.Clock = SystemClock{}
+	}
+	if c.Shared == nil {
+		c.Shared = NewShared()
 	}
 	if c.SetWrites == nil {
 		c.SetWrites = func(bool) {}

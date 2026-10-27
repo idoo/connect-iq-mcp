@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/upstream"
 )
 
 type fakeCreds struct{}
@@ -99,18 +100,18 @@ func TestRateLimited(t *testing.T) {
 			w.WriteHeader(tc.status)
 		})
 		_, err := c.Reviews(context.Background(), "app-1", ReviewsQuery{PageSize: 20})
-		var rl *RateLimitError
-		if !errors.As(err, &rl) || rl.Status != tc.status || rl.RetryAfter != tc.want {
+		var rl *upstream.HTTPError
+		if !errors.As(err, &rl) || !rl.RateLimited || rl.Status != tc.status || rl.RetryAfter != tc.want {
 			t.Fatalf("%d/%q: err = %v", tc.status, tc.ra, err)
 		}
 		if hits.Load() != 1 {
 			t.Fatalf("%d/%q: hits = %d (no retries expected)", tc.status, tc.ra, hits.Load())
 		}
 	}
-	// A plain 503 stays an APIError.
+	// A plain 503 stays a non-rate-limit HTTPError.
 	c, _ := fakeServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })
-	var ae *APIError
-	if _, err := c.Reviews(context.Background(), "app-1", ReviewsQuery{}); !errors.As(err, &ae) || ae.Status != 503 {
+	var ae *upstream.HTTPError
+	if _, err := c.Reviews(context.Background(), "app-1", ReviewsQuery{}); !errors.As(err, &ae) || ae.RateLimited || ae.Status != 503 {
 		t.Fatalf("plain 503 err = %v", err)
 	}
 }
@@ -130,9 +131,9 @@ func TestForbiddenClassification(t *testing.T) {
 
 	c, _ = fakeServer(t, plain)
 	_, err := c.AppMetadata(ctx, app)
-	var ae *APIError
-	if !errors.As(err, &ae) || ae.Status != http.StatusForbidden || ae.Code != "forbidden" || errors.Is(err, auth.ErrAuthRequired) {
-		t.Fatalf("403 on metadata err = %v, want APIError 403 forbidden", err)
+	var ae *upstream.HTTPError
+	if !errors.As(err, &ae) || ae.RateLimited || ae.Status != http.StatusForbidden || ae.Code != "forbidden" || errors.Is(err, auth.ErrAuthRequired) {
+		t.Fatalf("403 on metadata err = %v, want HTTPError 403 forbidden", err)
 	}
 
 	c, _ = fakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -151,9 +152,9 @@ func TestForbiddenClassification(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = w.Write([]byte("error code: 1015"))
 	})
-	var rl *RateLimitError
-	if _, err := c.AppMetadata(ctx, app); !errors.As(err, &rl) || !rl.Cloudflare {
-		t.Fatalf("Cloudflare 1015 err = %v, want Cloudflare RateLimitError", err)
+	var rl *upstream.HTTPError
+	if _, err := c.AppMetadata(ctx, app); !errors.As(err, &rl) || !rl.RateLimited || !rl.Cloudflare {
+		t.Fatalf("Cloudflare 1015 err = %v, want Cloudflare rate-limit HTTPError", err)
 	}
 }
 

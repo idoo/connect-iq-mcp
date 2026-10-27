@@ -77,7 +77,7 @@ func storeReviewsInbox(ctx context.Context, env *tool.Env, in inboxIn) (*tool.Re
 	if len(in.Apps) == 0 {
 		all, _, err := listApps(ctx, c)
 		if err != nil {
-			return nil, wrap(err)
+			return nil, tool.FromUpstream(err, upstreamHints)
 		}
 		apps = all
 	} else {
@@ -107,7 +107,7 @@ apps:
 		for page := range inboxPages {
 			rv, err := c.Reviews(ctx, a.ID, portal.ReviewsQuery{Page: page, PageSize: inboxPageSize})
 			if err != nil {
-				werr := wrap(err)
+				werr := tool.FromUpstream(err, upstreamHints)
 				stop := errors.Is(werr, tool.ErrRateLimited) || errors.Is(werr, tool.ErrAuthRequired)
 				if stop && i == 0 && page == 0 {
 					return nil, werr // nothing collected yet

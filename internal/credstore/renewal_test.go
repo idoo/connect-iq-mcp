@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"strings"
 	"sync"
@@ -15,8 +14,8 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/flock"
+	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 type fakeClock struct {
@@ -38,7 +37,7 @@ func (c *fakeClock) add(d time.Duration) {
 
 // renewStore is a store with a browser profile, a fake clock and a counted
 // fake browser that answers with fn.
-func renewStore(t *testing.T, env map[string]string, fn func(browser.Request) (browser.Result, error)) (*Store, *fakeClock, *atomic.Int32) {
+func renewStore(t *testing.T, env map[string]string, fn func(SignInRequest) (Capture, error)) (*Store, *fakeClock, *atomic.Int32) {
 	t.Helper()
 	keyring.MockInit()
 	s := testStore(t, env)
@@ -47,7 +46,7 @@ func renewStore(t *testing.T, env map[string]string, fn func(browser.Request) (b
 	s.verify = okVerify
 	s.hasProfile = func(string) bool { return true }
 	var logins atomic.Int32
-	s.login = func(_ context.Context, _ browser.Options, r browser.Request) (browser.Result, error) {
+	s.login = func(_ context.Context, r SignInRequest) (Capture, error) {
 		logins.Add(1)
 		return fn(r)
 	}
@@ -70,8 +69,8 @@ func readStamp(t *testing.T, s *Store, kind string) renewStamp {
 // LC-2: after a 1015 every call for 90 minutes reports the rate limit (never
 // auth_required) without starting the browser again.
 func TestRateLimitHoldsRenewalBack90m(t *testing.T) {
-	s, clk, logins := renewStore(t, nil, func(browser.Request) (browser.Result, error) {
-		return browser.Result{}, browser.ErrRateLimited
+	s, clk, logins := renewStore(t, nil, func(SignInRequest) (Capture, error) {
+		return Capture{}, auth.ErrRateLimited
 	})
 	if err := s.writeStored(blob{Portal: &portalCred{Cookies: cookies(clk.now().Add(-time.Hour))}}); err != nil {
 		t.Fatal(err)
@@ -79,8 +78,9 @@ func TestRateLimitHoldsRenewalBack90m(t *testing.T) {
 	check := func(what string) {
 		t.Helper()
 		_, err := s.PortalCookies(context.Background())
-		if !errors.Is(err, browser.ErrRateLimited) || errors.Is(err, auth.ErrAuthRequired) ||
-			strings.Contains(err.Error(), s.loginHint()) || !strings.Contains(err.Error(), "wait until") {
+		var held *rateLimitedError
+		if !errors.Is(err, auth.ErrRateLimited) || errors.Is(err, auth.ErrAuthRequired) ||
+			strings.Contains(err.Error(), tool.LoginCommand(s.profile)) || !errors.As(err, &held) {
 			t.Fatalf("%s: err = %v", what, err)
 		}
 	}
@@ -104,8 +104,8 @@ func TestRateLimitHoldsRenewalBack90m(t *testing.T) {
 // one keeps the stored session and holds portal renewal back for 12 hours.
 func TestSealNotExtendedBacksOff12h(t *testing.T) {
 	var same string
-	s, clk, logins := renewStore(t, nil, func(browser.Request) (browser.Result, error) {
-		return browser.Result{PortalCookies: []browser.Cookie{{Name: "session", Value: same}}}, nil
+	s, clk, logins := renewStore(t, nil, func(SignInRequest) (Capture, error) {
+		return Capture{PortalCookies: "session=" + same}, nil
 	})
 	exp := clk.now().Add(2 * 24 * time.Hour)
 	same = seal(exp)
@@ -138,8 +138,8 @@ func TestSealNotExtendedBacksOff12h(t *testing.T) {
 // r4: auth status and the auth_status tool (both read Status notes) show an
 // active rate-limit or not-extended pause until it ends.
 func TestStatusShowsRenewalPause(t *testing.T) {
-	s, clk, _ := renewStore(t, nil, func(browser.Request) (browser.Result, error) {
-		return browser.Result{}, errors.New("unused")
+	s, clk, _ := renewStore(t, nil, func(SignInRequest) (Capture, error) {
+		return Capture{}, errors.New("unused")
 	})
 	if err := s.writeStored(blob{Portal: &portalCred{Cookies: cookies(clk.now().Add(48 * time.Hour))}}); err != nil {
 		t.Fatal(err)
@@ -152,29 +152,25 @@ func TestStatusShowsRenewalPause(t *testing.T) {
 	}
 	until := clk.now().Add(rateLimitBackoff).Local().Format("15:04")
 	next := clk.now().Add(notExtendedBackoff).Local().Format("Jan 2 15:04")
-	var out strings.Builder
-	if err := s.cliStatus(context.Background(), &out, false); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), "(Cloudflare 1015) until "+until) || !strings.Contains(out.String(), "next attempt after "+next) {
-		t.Fatalf("status lacks the pauses:\n%s", out.String())
+	if st := s.Status(context.Background()); !strings.Contains(st.Portal.Note, until) || !strings.Contains(st.Connect.Note, next) {
+		t.Fatalf("status lacks the pauses: %q / %q", st.Portal.Note, st.Connect.Note)
 	}
 	clk.add(rateLimitBackoff + time.Minute)
 	st := s.Status(context.Background())
-	if strings.Contains(st.Portal.Note, "paused") || !strings.Contains(st.Connect.Note, "paused") {
+	if cn := s.pauseNote(stampConnect); s.pauseNote(stampPortal) != "" || cn == "" || !strings.HasSuffix(st.Connect.Note, cn) {
 		t.Fatalf("after 91 min: %q / %q", st.Portal.Note, st.Connect.Note)
 	}
 	clk.add(notExtendedBackoff)
-	if st := s.Status(context.Background()); strings.Contains(st.Connect.Note, "paused") {
-		t.Fatalf("after 12 h: %q", st.Connect.Note)
+	if s.pauseNote(stampConnect) != "" {
+		t.Fatalf("after 12 h: %q", s.Status(context.Background()).Connect.Note)
 	}
 }
 
 // r4: `auth renew` while a sign-in window is open says so instead of
 // auth_required (which would send agents to auth_login).
 func TestRenewDuringOpenSignIn(t *testing.T) {
-	s, clk, logins := renewStore(t, nil, func(browser.Request) (browser.Result, error) {
-		return browser.Result{}, errors.New("browser must not start")
+	s, clk, logins := renewStore(t, nil, func(SignInRequest) (Capture, error) {
+		return Capture{}, errors.New("browser must not start")
 	})
 	if err := s.writeStored(blob{Portal: &portalCred{Cookies: cookies(clk.now().Add(time.Hour))}}); err != nil {
 		t.Fatal(err)
@@ -184,9 +180,8 @@ func TestRenewDuringOpenSignIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unlockLogin()
-	err = s.cliRenew(context.Background(), io.Discard)
-	if err == nil || errors.Is(err, auth.ErrAuthRequired) || strings.Contains(err.Error(), "auth_login") ||
-		!strings.Contains(err.Error(), "sign-in window is open") || !strings.Contains(err.Error(), "retry") {
+	_, err = s.Renew(context.Background())
+	if !errors.Is(err, ErrRenewSignInOpen) || errors.Is(err, auth.ErrAuthRequired) {
 		t.Fatalf("err = %v", err)
 	}
 	if logins.Load() != 0 {
@@ -198,11 +193,11 @@ func TestRenewDuringOpenSignIn(t *testing.T) {
 func TestRenewStampsIndependent(t *testing.T) {
 	srv, _ := diauth(t, 0)
 	var fresh string
-	s, clk, logins := renewStore(t, nil, func(r browser.Request) (browser.Result, error) {
+	s, clk, logins := renewStore(t, nil, func(r SignInRequest) (Capture, error) {
 		if r.Portal {
-			return browser.Result{PortalCookies: []browser.Cookie{{Name: "session", Value: fresh}}}, nil
+			return Capture{PortalCookies: "session=" + fresh}, nil
 		}
-		return browser.Result{ConnectTicket: "ST-1"}, nil
+		return Capture{ConnectTicket: "ST-1"}, nil
 	})
 	s.diauthURL = srv.URL
 	fresh = seal(clk.now().Add(60 * 24 * time.Hour))
@@ -230,8 +225,8 @@ func TestRenewStampsIndependent(t *testing.T) {
 // LC-9: a stamp from the future (the clock went back) never blocks renewal.
 func TestStampFromFutureDoesNotBlock(t *testing.T) {
 	var fresh string
-	s, clk, logins := renewStore(t, nil, func(browser.Request) (browser.Result, error) {
-		return browser.Result{PortalCookies: []browser.Cookie{{Name: "session", Value: fresh}}}, nil
+	s, clk, logins := renewStore(t, nil, func(SignInRequest) (Capture, error) {
+		return Capture{PortalCookies: "session=" + fresh}, nil
 	})
 	fresh = seal(clk.now().Add(60 * 24 * time.Hour))
 	if err := s.writeStored(blob{Portal: &portalCred{Cookies: cookies(clk.now().Add(-time.Hour))}}); err != nil {
@@ -250,8 +245,8 @@ func TestStampFromFutureDoesNotBlock(t *testing.T) {
 // LC-3: an interactive sign-in (login lock) or another process (profile
 // lock) never blocks a call while the current credential still works.
 func TestHeldLocksDoNotBlockValidCredential(t *testing.T) {
-	s, clk, logins := renewStore(t, nil, func(browser.Request) (browser.Result, error) {
-		return browser.Result{}, errors.New("browser must not start")
+	s, clk, logins := renewStore(t, nil, func(SignInRequest) (Capture, error) {
+		return Capture{}, errors.New("browser must not start")
 	})
 	valid := cookies(clk.now().Add(2 * 24 * time.Hour)) // inside the renew window
 	if err := s.writeStored(blob{
@@ -345,12 +340,13 @@ func TestConnectSaveFailureKeepsRotation(t *testing.T) {
 func TestEnvConnectRejectedNoBrowser(t *testing.T) {
 	srv, _ := diauth(t, 0)
 	s, _, logins := renewStore(t, map[string]string{"GARMIN_MCP_CONNECT_REFRESH_TOKEN": "revoked"},
-		func(browser.Request) (browser.Result, error) {
-			return browser.Result{ConnectTicket: "ST-1"}, nil
+		func(SignInRequest) (Capture, error) {
+			return Capture{ConnectTicket: "ST-1"}, nil
 		})
 	s.diauthURL = srv.URL
 	_, err := s.ConnectToken(context.Background())
-	if !errors.Is(err, auth.ErrAuthRequired) || !strings.Contains(err.Error(), "GARMIN_MCP_CONNECT_REFRESH_TOKEN") {
+	if !errors.Is(err, auth.ErrAuthRequired) || strings.Contains(err.Error(), s.loginHint()) ||
+		!strings.Contains(err.Error(), tool.LoginCommand(s.profile, "--connect")) {
 		t.Fatalf("err = %v", err)
 	}
 	if logins.Load() != 0 {

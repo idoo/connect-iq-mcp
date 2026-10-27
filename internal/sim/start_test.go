@@ -33,13 +33,14 @@ func fakeLauncher(st Status, dial DialFunc, launches *atomic.Int32, exited <-cha
 			launches.Add(1)
 			return launched{exited: exited, path: "/sdk/bin/simulator"}, nil
 		},
-		alive:   func(context.Context) bool { return st.Running },
-		verify:  func(context.Context, int) error { return nil },
-		pid:     func(context.Context) (int, error) { return st.PID, nil },
-		kill:    func(context.Context, int) {},
-		owned:   &owner{},
-		dial:    dial,
-		timeout: 5 * time.Second,
+		alive:    func(context.Context) bool { return st.Running },
+		verify:   func(context.Context, int) error { return nil },
+		pid:      func(context.Context) (int, error) { return st.PID, nil },
+		kill:     func(context.Context, int) {},
+		owned:    &owner{},
+		sessions: NewManager(),
+		dial:     dial,
+		timeout:  5 * time.Second,
 	}
 }
 

@@ -100,7 +100,10 @@ func WaitClosed(ctx context.Context, clk Clock, dial DialFunc, addr string, time
 }
 
 // Dial is the production DialFunc.
-var Dial DialFunc = (&net.Dialer{}).DialContext
+func Dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	var d net.Dialer
+	return d.DialContext(ctx, network, addr)
+}
 
 // Lease takes the OS-wide simulator lease (flock under the state dir); hold
 // it for every simulator-mutating call.
@@ -355,9 +358,6 @@ func (o *owner) is(pid int) bool {
 	return pid > 0 && o.pid == pid
 }
 
-// ours is the simulator this server launched (production launcher).
-var ours owner
-
 // launched is a simulator being started: exited delivers the child's exit
 // (nil = never, as for macOS `open -a`), output returns its newest output,
 // and path is what a human opens by hand.
@@ -369,26 +369,31 @@ type launched struct {
 
 // launcher holds Start's and Stop's process and network hooks; tests replace them.
 type launcher struct {
-	status  func(context.Context) (Status, error)
-	launch  func(context.Context, ciqsdk.SDK) (launched, error)
-	alive   func(context.Context) bool
-	verify  func(context.Context, int) error
-	pid     func(context.Context) (int, error)
-	kill    func(context.Context, int)
-	owned   *owner
-	dial    DialFunc // nil = Dial
-	timeout time.Duration
+	status   func(context.Context) (Status, error)
+	launch   func(context.Context, ciqsdk.SDK) (launched, error)
+	alive    func(context.Context) bool
+	verify   func(context.Context, int) error
+	pid      func(context.Context) (int, error)
+	kill     func(context.Context, int)
+	owned    *owner
+	sessions *Manager // clients killed by stop
+	dial     DialFunc // nil = Dial
+	timeout  time.Duration
 }
 
-var defaultLauncher = launcher{
-	status:  GetStatus,
-	launch:  launch,
-	alive:   func(ctx context.Context) bool { pid, _ := FindPID(ctx); return pid > 0 },
-	verify:  verifyListener,
-	pid:     FindPID,
-	kill:    killVerified,
-	owned:   &ours,
-	timeout: 60 * time.Second,
+// prodLauncher is the production launcher for the server whose state is m.
+func prodLauncher(m *Manager) launcher {
+	return launcher{
+		status:   GetStatus,
+		launch:   launch,
+		alive:    func(ctx context.Context) bool { pid, _ := FindPID(ctx); return pid > 0 },
+		verify:   verifyListener,
+		pid:      FindPID,
+		kill:     killVerified,
+		owned:    &m.owned,
+		sessions: m,
+		timeout:  60 * time.Second,
+	}
 }
 
 // stopAdvice is the next step for a simulator (pid) in the way: sim_stop
@@ -401,10 +406,11 @@ func (l launcher) stopAdvice(pid int) string {
 }
 
 // Start launches the simulator of sdk (no-op if one is ready) and waits for
-// the port. A simulator of another SDK is an [ErrSDKMismatch]. A simulator
-// that is running but not listening yet is waited for, never launched twice.
-func Start(ctx context.Context, clk Clock, sdk ciqsdk.SDK) (st Status, already bool, err error) {
-	return defaultLauncher.start(ctx, clk, sdk)
+// the port, recording a launched simulator as m's. A simulator of another
+// SDK is an [ErrSDKMismatch]. A simulator that is running but not listening
+// yet is waited for, never launched twice.
+func Start(ctx context.Context, clk Clock, m *Manager, sdk ciqsdk.SDK) (st Status, already bool, err error) {
+	return prodLauncher(m).start(ctx, clk, sdk)
 }
 
 func (l launcher) start(ctx context.Context, clk Clock, sdk ciqsdk.SDK) (st Status, already bool, err error) {
@@ -622,15 +628,15 @@ func (t *tailBuffer) String() string {
 	return string(t.b)
 }
 
-// Stop kills this server's monkeydo clients, then the simulator, and waits
-// for the port to close. A simulator this server did not launch is left
-// running with an [ErrForeignSimulator], unless force.
-func Stop(ctx context.Context, clk Clock, force bool) (killedClients int, wasRunning bool, err error) {
-	return defaultLauncher.stop(ctx, clk, force)
+// Stop kills m's monkeydo clients, then the simulator, and waits for the
+// port to close. A simulator m did not launch is left running with an
+// [ErrForeignSimulator], unless force.
+func Stop(ctx context.Context, clk Clock, m *Manager, force bool) (killedClients int, wasRunning bool, err error) {
+	return prodLauncher(m).stop(ctx, clk, force)
 }
 
 func (l launcher) stop(ctx context.Context, clk Clock, force bool) (killedClients int, wasRunning bool, err error) {
-	killedClients = Sessions.KillAll()
+	killedClients = l.sessions.KillAll()
 	pid, err := l.pid(ctx)
 	if err != nil {
 		return killedClients, false, err

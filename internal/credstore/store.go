@@ -1,7 +1,8 @@
 // Package credstore implements auth.Store: the Connect IQ developer-portal session cookie
 // and Garmin Connect DI OAuth2 tokens kept in the OS keychain (or a 0600 file),
-// cross-process locked refresh, silent renewal through a dedicated browser
-// profile, and the `garmin-mcp auth` CLI.
+// cross-process locked refresh, and the silent-renewal policy (stamps,
+// backoff) run through an injected [Browser]. Interactive sign-in lives in
+// internal/auth/login, the `garmin-mcp auth` CLI in cmd/garmin-mcp.
 package credstore
 
 import (
@@ -17,7 +18,6 @@ import (
 	"time"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/config"
 	"github.com/idoo/garmin-mcp/internal/flock"
 	"github.com/idoo/garmin-mcp/internal/portal"
@@ -60,14 +60,15 @@ type Store struct {
 	dir       string // garmin-mcp state directory
 	autoRenew bool
 
-	hc         *http.Client
-	diauthURL  string
-	connectAPI string
-	now        func() time.Time
-	login      func(context.Context, browser.Options, browser.Request) (browser.Result, error)
-	hasProfile func(dir string) bool
-	verify     func(context.Context, *http.Client, string) (portal.Developer, string, error)
-	getenv     func(string) string
+	hc            *http.Client
+	diauthURL     string
+	connectAPI    string
+	now           func() time.Time
+	login         func(context.Context, SignInRequest) (Capture, error)
+	hasProfile    func(dir string) bool
+	removeProfile func(dir string) error
+	verify        func(context.Context, *http.Client, string) (portal.Developer, string, error)
+	getenv        func(string) string
 
 	mu sync.Mutex
 	// Env overrides are read-only: rotations live here, in memory only.
@@ -82,27 +83,71 @@ type Store struct {
 	pendingConnect *connectCred
 }
 
-// newStore returns the store for profile. The name becomes a file name and a
-// keychain account, so it must pass config.ValidateProfileName.
-func newStore(profile, stateDir string, autoRenew bool) (*Store, error) {
+// Open returns the credential store for profile, honoring the profile's
+// auto_renew setting from the config file. b runs its browser sign-ins.
+func Open(_ context.Context, profile string, b Browser) (*Store, error) {
+	dir, err := state.DefaultDir()
+	if err != nil {
+		return nil, err
+	}
+	autoRenew := true
+	if path, err := config.DefaultPath(os.Getenv); err == nil {
+		if cfg, _, err := config.Load(path); err == nil {
+			if p, ok := cfg.Profiles[profile]; ok {
+				autoRenew = p.AutoRenewEnabled()
+			}
+		}
+	}
+	return New(profile, dir, autoRenew, b)
+}
+
+// New returns the store for profile under stateDir; b runs its browser
+// sign-ins. The name becomes a file name and a keychain account, so it must
+// pass config.ValidateProfileName.
+func New(profile, stateDir string, autoRenew bool, b Browser) (*Store, error) {
 	if err := config.ValidateProfileName(profile); err != nil {
 		return nil, err
 	}
 	s := &Store{
-		profile:    profile,
-		dir:        stateDir,
-		autoRenew:  autoRenew,
-		hc:         newHTTPClient(),
-		diauthURL:  defaultDIAuthURL,
-		connectAPI: defaultConnectAPI,
-		now:        time.Now,
-		login:      browser.Login,
-		hasProfile: browser.ProfileExists,
-		verify:     portal.Verify,
-		getenv:     os.Getenv,
+		profile:       profile,
+		dir:           stateDir,
+		autoRenew:     autoRenew,
+		hc:            newHTTPClient(),
+		diauthURL:     defaultDIAuthURL,
+		connectAPI:    defaultConnectAPI,
+		now:           time.Now,
+		login:         b.SignIn,
+		hasProfile:    b.ProfileExists,
+		removeProfile: b.RemoveProfile,
+		verify:        portal.Verify,
+		getenv:        os.Getenv,
 	}
 	s.loadEnv()
 	return s, nil
+}
+
+// Profile is the store's profile name.
+func (s *Store) Profile() string { return s.profile }
+
+// HasEnvCredentials reports whether GARMIN_MCP_* environment variables
+// provide a credential (they survive Logout).
+func (s *Store) HasEnvCredentials() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.envPortal != nil || s.envConnect != nil
+}
+
+// ExportPortal returns the developer-portal Cookie header as used now,
+// without renewing it.
+func (s *Store) ExportPortal() (string, error) {
+	b, _, _, err := s.view()
+	if err != nil {
+		return "", err
+	}
+	if b.Portal == nil || b.Portal.Cookies == "" {
+		return "", s.authRequired("not signed in to the Connect IQ developer portal", nil)
+	}
+	return b.Portal.Cookies, nil
 }
 
 func newHTTPClient() *http.Client {
@@ -386,10 +431,10 @@ func (s *Store) saveConnect(c *connectCred) error {
 	return nil
 }
 
-// logout deletes everything under the profile lock, so a concurrent renewal
+// Logout deletes everything under the profile lock, so a concurrent renewal
 // cannot write the session back afterwards. An interactive sign-in in
 // progress loses its window (deleteAll closes the browser) and saves nothing.
-func (s *Store) logout(ctx context.Context) error {
+func (s *Store) Logout(ctx context.Context) error {
 	unlock, err := flock.Lock(ctx, s.lockFile())
 	if err != nil {
 		return fmt.Errorf("lock credentials: %w", err)
@@ -416,7 +461,7 @@ func (s *Store) deleteAll() error {
 			errs = append(errs, err)
 		}
 	}
-	if err := browser.RemoveProfile(s.browserDir()); err != nil {
+	if err := s.removeProfile(s.browserDir()); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)

@@ -4,6 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/upstream"
 )
 
 // Error is a typed garmin-mcp error with a stable machine-readable code. The
@@ -207,4 +210,69 @@ func BodyFor(err error) ErrorBody {
 // message ("invalid arguments: <msg>"). %w in format wraps as in fmt.Errorf.
 func InvalidArgs(format string, args ...any) error {
 	return fmt.Errorf("%w: "+format, append([]any{ErrInvalidArgs}, args...)...)
+}
+
+// UpstreamHints is the toolset-specific part of [FromUpstream]: the agent
+// hints for its upstream's errors and the client's own sentinels.
+type UpstreamHints struct {
+	// Codes maps an upstream error code to its hint.
+	Codes map[string]string
+	// Statuses maps an HTTP status to its hint when Codes has none.
+	Statuses map[int]string
+	// Blocked is the client's Cloudflare-block sentinel (nil: none). It maps
+	// to rate_limited with an api body of code "blocked" and BlockedHint.
+	Blocked     error
+	BlockedHint string
+	// InvalidID is the client's sentinel for an id it refused to send (nil:
+	// none). It maps to invalid_arguments.
+	InvalidID error
+	// RateLimitAPI attaches an api body (code rate_limited plus a wait hint)
+	// to rate limits; without it they are plain rate_limited errors.
+	RateLimitAPI bool
+}
+
+// FromUpstream maps an upstream client error to a tool error: auth_required,
+// rate_limited, invalid_arguments, or api_error carrying the upstream code
+// and a hint from h. Other errors pass through. nil stays nil.
+func FromUpstream(err error, h UpstreamHints) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, auth.ErrRateLimited) {
+		if !h.RateLimitAPI {
+			return fmt.Errorf("%w: %s", ErrRateLimited, err.Error())
+		}
+		return fmt.Errorf("%w: %w", ErrRateLimited, &APIError{Code: "rate_limited", Detail: err.Error(), Hint: auth.ErrRateLimited.Error()})
+	}
+	if h.Blocked != nil && errors.Is(err, h.Blocked) {
+		return fmt.Errorf("%w: %w", ErrRateLimited, &APIError{Code: "blocked", Detail: err.Error(), Hint: h.BlockedHint})
+	}
+	if errors.Is(err, auth.ErrAuthRequired) || errors.Is(err, auth.ErrInteractionRequired) {
+		return fmt.Errorf("%w: %s", ErrAuthRequired, err.Error())
+	}
+	if h.InvalidID != nil && errors.Is(err, h.InvalidID) {
+		return InvalidArgs("%s", err.Error())
+	}
+	var he *upstream.HTTPError
+	if !errors.As(err, &he) {
+		return err
+	}
+	if he.RateLimited {
+		if !h.RateLimitAPI {
+			return fmt.Errorf("%w: %s", ErrRateLimited, he.Error())
+		}
+		hint := "wait before retrying; garmin-mcp does not retry by itself"
+		if he.Cloudflare {
+			hint = fmt.Sprintf("Cloudflare is rate-limiting requests to the %s (error 1015); wait several minutes before retrying and do not call auth_login", he.Service)
+		}
+		if s := int(he.RetryAfter.Seconds()); s > 0 {
+			hint = fmt.Sprintf("the %s asked to wait %d seconds (Retry-After) before retrying", he.Service, s)
+		}
+		return fmt.Errorf("%w: %w", ErrRateLimited, &APIError{Status: he.Status, Code: "rate_limited", Detail: he.Error(), Hint: hint})
+	}
+	hint := h.Codes[he.Code]
+	if hint == "" {
+		hint = h.Statuses[he.Status]
+	}
+	return &APIError{Status: he.Status, Code: he.Code, Detail: he.Detail(), Hint: hint}
 }

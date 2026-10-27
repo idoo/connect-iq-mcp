@@ -107,11 +107,11 @@ func storeAppsList(ctx context.Context, env *tool.Env, _ noIn) (*tool.Result, er
 	c := client(env)
 	d, err := c.Developer(ctx)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	apps, _, err := listApps(ctx, c)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	byApp := map[string]string{}
 	for mid, id := range cachedManifests(ctx, c) {
@@ -152,7 +152,7 @@ func storeAppGet(ctx context.Context, env *tool.Env, in appGetIn) (*tool.Result,
 	}
 	md, err := c.AppMetadata(ctx, app.ID)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	info, _ := md["appIqFileInfoResult"].(map[string]any)
 	for _, l := range locales(md) {
@@ -229,7 +229,7 @@ func storeReviewsList(ctx context.Context, env *tool.Env, in reviewsIn) (*tool.R
 		Ascending: in.Ascending, LatestOnly: in.LatestVersionOnly, Locale: in.Locale,
 	})
 	if err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	// Every string of the payload is wrapped: the field names were never
 	// verified, so no allow-list of "safe" keys is trusted.
@@ -244,7 +244,7 @@ func storeRatings(ctx context.Context, env *tool.Env, in appIn) (*tool.Result, e
 	}
 	d, err := c.ReviewDistribution(ctx, app.ID)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	return tool.OK(map[string]any{"app": outApp(app), "distribution": d}), nil
 }
@@ -275,7 +275,7 @@ func storeInstalls(ctx context.Context, env *tool.Env, in installsIn) (*tool.Res
 	}
 	d, err := c.FullInstalls(ctx, app.ID, start.Format(time.DateOnly), end.Format(time.DateOnly))
 	if err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	return tool.OK(map[string]any{"app": outApp(app), "installs": d}), nil
 }
@@ -283,7 +283,7 @@ func storeInstalls(ctx context.Context, env *tool.Env, in installsIn) (*tool.Res
 func storeReferences(ctx context.Context, env *tool.Env, in referencesIn) (*tool.Result, error) {
 	d, err := client(env).Reference(ctx, in.Type)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	return tool.OK(map[string]any{"type": in.Type, "items": d}), nil
 }

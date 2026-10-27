@@ -16,7 +16,7 @@ import (
 func TestJoinedBuildCallersGetOwnResult(t *testing.T) {
 	runs := filepath.Join(t.TempDir(), "runs")
 	k, _, _ := exportFixtureWith(t, "echo x >> '"+runs+"'; sleep 1", ` version="1.2.3"`)
-	setBuildWait(t, 20*time.Second)
+	setBuildWait(k, 20*time.Second)
 	var wg sync.WaitGroup
 	for range 2 {
 		wg.Go(func() {

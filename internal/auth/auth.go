@@ -39,6 +39,16 @@ type CredStatus struct {
 // ErrAuthRequired means a credential is missing or can no longer be renewed.
 var ErrAuthRequired = errors.New("auth_required")
 
+// ErrInteractionRequired means Garmin showed a sign-in form, MFA prompt or
+// Cloudflare challenge while running headless.
+var ErrInteractionRequired = errors.New("garmin needs you to sign in")
+
+// ErrRateLimited means Cloudflare in front of Garmin's sign-in server
+// answered with error 1015. Live it was keyed on the signed-in profile, not
+// the IP (a fresh profile still loaded), and lasted over an hour.
+// Retrying right away makes it worse.
+var ErrRateLimited = errors.New("garmin's sign-in server is rate limiting this sign-in (Cloudflare 1015); the current session keeps working until it expires, retry renewal in an hour or more")
+
 // LoginOptions configures an interactive sign-in.
 type LoginOptions struct {
 	// Connect also signs in to Garmin Connect.

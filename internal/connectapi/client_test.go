@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/upstream"
 )
 
 type countingCreds struct {
@@ -100,8 +101,8 @@ func TestRateLimit(t *testing.T) {
 	}, "t")
 	var v any
 	err := c.GetJSON(context.Background(), "/x", nil, &v)
-	var rl *RateLimitError
-	if !errors.As(err, &rl) || rl.RetryAfter != 42*time.Second {
+	var rl *upstream.HTTPError
+	if !errors.As(err, &rl) || !rl.RateLimited || rl.RetryAfter != 42*time.Second {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -113,8 +114,8 @@ func TestStatusErrorHasNoBody(t *testing.T) {
 	}, "t")
 	var v any
 	err := c.GetJSON(context.Background(), "/x", nil, &v)
-	var se *StatusError
-	if !errors.As(err, &se) || se.Status != 500 || strings.Contains(err.Error(), "secret") {
+	var se *upstream.HTTPError
+	if !errors.As(err, &se) || se.RateLimited || se.Status != 500 || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -128,7 +129,7 @@ func TestNoRedirects(t *testing.T) {
 		t.Errorf("redirect followed to %s", r.URL.Path)
 	}, "t")
 	var v any
-	var se *StatusError
+	var se *upstream.HTTPError
 	if err := c.GetJSON(context.Background(), "/x", nil, &v); !errors.As(err, &se) || se.Status != 302 {
 		t.Fatalf("err = %v", err)
 	}

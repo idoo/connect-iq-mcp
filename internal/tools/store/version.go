@@ -122,7 +122,7 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 	}
 	md, err := c.AppMetadata(ctx, app.ID)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	info, _ := md["appIqFileInfoResult"].(map[string]any)
 	live, _ := md["externalAppVersion"].(string)
@@ -169,11 +169,11 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 	}
 	v, err := c.ValidateIQ(vctx, app.ID, in.Version, iq)
 	if err != nil {
-		return nil, wrap(err)
+		return nil, tool.FromUpstream(err, upstreamHints)
 	}
 	report := validationReport(v, manifest)
 	if !report.SignatureOK {
-		return nil, &tool.APIError{Status: 0, Code: "SIGNATURE_CHECK_FAILED", Detail: "the portal's signature check failed for this update; nothing was published", Hint: hintFor("SIGNATURE_CHECK_FAILED")}
+		return nil, &tool.APIError{Status: 0, Code: "SIGNATURE_CHECK_FAILED", Detail: "the portal's signature check failed for this update; nothing was published", Hint: codeHints["SIGNATURE_CHECK_FAILED"]}
 	}
 	if report.ManifestMatches != nil && !*report.ManifestMatches {
 		return nil, tool.InvalidArgs("the .iq manifest id %s does not match the app's %s; nothing was published", report.ManifestID, manifest)
@@ -237,7 +237,7 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 					tool.NextStep{Tool: "store_app_get", Args: map[string]any{"app": app.ID}})
 			}
 		default:
-			return nil, wrap(err)
+			return nil, tool.FromUpstream(err, upstreamHints)
 		}
 	}
 	// The version POST is committed from here on: nothing below may surface as
@@ -253,7 +253,7 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 		fresh, err := c.AppMetadata(wctx, app.ID)
 		if err != nil {
 			out["whats_new_updated"] = 0
-			res.Warn("version " + in.Version + " is published, but what's new and the external version were not saved (reading the app back failed: " + wrap(err).Error() + ")" + rerun)
+			res.Warn("version " + in.Version + " is published, but what's new and the external version were not saved (reading the app back failed: " + tool.FromUpstream(err, upstreamHints).Error() + ")" + rerun)
 		} else {
 			for _, l := range locales(fresh) {
 				if txt, ok := in.WhatsNew[localeOf(l)]; ok {
@@ -268,7 +268,7 @@ func storeVersionPublish(ctx context.Context, env *tool.Env, in publishIn) (*too
 			}
 			if err := c.UpdateAppMetadata(wctx, app.ID, fresh); err != nil {
 				out["whats_new_updated"] = 0
-				res.Warn("version " + in.Version + " is published, but what's new and the external version were not saved: " + wrap(err).Error() + rerun)
+				res.Warn("version " + in.Version + " is published, but what's new and the external version were not saved: " + tool.FromUpstream(err, upstreamHints).Error() + rerun)
 			} else {
 				out["whats_new_updated"] = len(in.WhatsNew) + len(cleared)
 			}

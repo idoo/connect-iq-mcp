@@ -9,21 +9,14 @@ import (
 	"os"
 	"time"
 
+	"github.com/idoo/garmin-mcp/internal/auth/login"
 	"github.com/idoo/garmin-mcp/internal/config"
-	"github.com/idoo/garmin-mcp/internal/credstore"
 	"github.com/idoo/garmin-mcp/internal/state"
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
 
 // httpTimeout bounds one outbound request.
 const httpTimeout = 2 * time.Minute
-
-// NewEnv builds the base tool environment for resolved. Without configured
-// credentials Env.Credentials stays nil and tools report auth_required. The
-// file root comes from GARMIN_MCP_ROOT when set (see [ProjectFiles]).
-func NewEnv(ctx context.Context, r *config.Resolved, version string) (*tool.Env, error) {
-	return newEnv(ctx, r, version, os.Getenv(config.EnvRoot))
-}
 
 func newEnv(ctx context.Context, r *config.Resolved, version, root string) (*tool.Env, error) {
 	cwd, err := os.Getwd()
@@ -55,7 +48,7 @@ func newEnv(ctx context.Context, r *config.Resolved, version, root string) (*too
 		Version:   version,
 		NoConfirm: r.NoConfirm && r.CI,
 	}
-	creds, err := credstore.Open(ctx, r.Profile.Name)
+	creds, err := login.Open(ctx, r.Profile.Name)
 	if err != nil {
 		return nil, fmt.Errorf("app: credentials: %w", err)
 	}

@@ -1,7 +1,6 @@
 package credstore
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -370,9 +369,8 @@ func TestSaveLockedKeychainFails(t *testing.T) {
 	if _, ok, _ := s.readFile(); ok {
 		t.Fatal("locked keychain fell back to the file")
 	}
-	var out bytes.Buffer
-	if err := s.cliStatus(context.Background(), &out, false); err == nil || !strings.Contains(out.String(), "locked") {
-		t.Fatalf("auth status = %v\n%s", err, out.String())
+	if st := s.Status(context.Background()); UnreadableState(st.Portal) != "locked" {
+		t.Fatalf("status = %+v, want locked", st.Portal)
 	}
 }
 
@@ -501,11 +499,11 @@ func TestLogoutAlwaysClearsKeychain(t *testing.T) {
 // LC-8: the constructor refuses names that would escape or collide.
 func TestNewStoreRejectsBadProfileNames(t *testing.T) {
 	for _, name := range []string{"", "..", ".", "a#1", "Work", "a/b", "-x", strings.Repeat("a", 64)} {
-		if _, err := newStore(name, t.TempDir(), true); err == nil {
-			t.Errorf("newStore(%q) accepted", name)
+		if _, err := New(name, t.TempDir(), true, noBrowser{}); err == nil {
+			t.Errorf("New(%q) accepted", name)
 		}
 	}
-	if _, err := newStore("work-1_x", t.TempDir(), true); err != nil {
+	if _, err := New("work-1_x", t.TempDir(), true, noBrowser{}); err != nil {
 		t.Fatal(err)
 	}
 }

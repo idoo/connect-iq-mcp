@@ -12,41 +12,54 @@ import (
 
 	"github.com/idoo/garmin-mcp/internal/portal"
 	"github.com/idoo/garmin-mcp/internal/tool"
+	"github.com/idoo/garmin-mcp/internal/upstream"
 )
 
 // cacheTTL bounds how long the app list and manifest map are reused.
 const cacheTTL = 5 * time.Minute
 
-// appCache is the per-developer app list and manifest id → store UUID map.
-// Any store write drops it (see client). Entries are read and written only
-// under cacheMu; callers get copies.
-type appCache struct {
+// cacheEntry is the per-developer app list and manifest id → store UUID map.
+type cacheEntry struct {
 	at        time.Time
-	gen       uint64 // cacheGen when this entry was filled
+	gen       uint64 // appCache.gen when this entry was filled
 	apps      []portal.App
 	manifests map[string]string // normalized manifest id → app id; nil until built
 }
 
-var (
-	cacheMu sync.Mutex
-	caches  = map[string]*appCache{}
-	// cacheGen is bumped by every invalidation and every fill. A fetch that
+// appCache is the server's app cache (one per [tool.Shared]). Any store
+// write drops it (see client). Entries are read and written only under mu;
+// callers get copies.
+type appCache struct {
+	mu      sync.Mutex
+	entries map[string]*cacheEntry
+	// gen is bumped by every invalidation and every fill. A fetch that
 	// started at an older generation never stores its result, so a list read
 	// before a write cannot repopulate the cache after it.
-	cacheGen uint64
-)
-
-// invalidateCache drops every cached app list.
-func invalidateCache() {
-	cacheMu.Lock()
-	clear(caches)
-	cacheGen++
-	cacheMu.Unlock()
+	gen uint64
 }
 
-// freshLocked returns the fresh entry for dev, or nil. Caller holds cacheMu.
-func freshLocked(dev string) *appCache {
-	e := caches[dev]
+func newAppCache() *appCache { return &appCache{entries: map[string]*cacheEntry{}} }
+
+// cacheOf returns the server's app cache.
+func cacheOf(env *tool.Env) *appCache { return tool.SharedValue(env.Shared, newAppCache) }
+
+// storeClient is a portal client paired with the server's app cache.
+type storeClient struct {
+	*portal.Client
+	cache *appCache
+}
+
+// invalidate drops every cached app list.
+func (a *appCache) invalidate() {
+	a.mu.Lock()
+	clear(a.entries)
+	a.gen++
+	a.mu.Unlock()
+}
+
+// freshLocked returns the fresh entry for dev, or nil. Caller holds a.mu.
+func (a *appCache) freshLocked(dev string) *cacheEntry {
+	e := a.entries[dev]
 	if e == nil || time.Since(e.at) > cacheTTL {
 		return nil
 	}
@@ -55,80 +68,83 @@ func freshLocked(dev string) *appCache {
 
 // listApps returns a copy of the developer's apps, from the cache when fresh,
 // and the generation of the entry they belong to (pass it to manifestMap).
-func listApps(ctx context.Context, c *portal.Client) ([]portal.App, uint64, error) {
+func listApps(ctx context.Context, c *storeClient) ([]portal.App, uint64, error) {
 	dev, err := c.DeveloperID(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	cacheMu.Lock()
-	if e := freshLocked(dev); e != nil {
+	a := c.cache
+	a.mu.Lock()
+	if e := a.freshLocked(dev); e != nil {
 		apps, gen := slices.Clone(e.apps), e.gen
-		cacheMu.Unlock()
+		a.mu.Unlock()
 		return apps, gen, nil
 	}
-	start := cacheGen
-	cacheMu.Unlock()
+	start := a.gen
+	a.mu.Unlock()
 
 	apps, err := c.Apps(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
-	if cacheGen != start {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.gen != start {
 		// A write or another fill happened meanwhile: serve this result once,
 		// never cache it over newer data. Generation 0 matches no entry.
 		return apps, 0, nil
 	}
-	cacheGen++
-	caches[dev] = &appCache{at: time.Now(), gen: cacheGen, apps: slices.Clone(apps)}
-	return apps, cacheGen, nil
+	a.gen++
+	a.entries[dev] = &cacheEntry{at: time.Now(), gen: a.gen, apps: slices.Clone(apps)}
+	return apps, a.gen, nil
 }
 
 // manifestMap returns a copy of the manifest map for the app list of
 // generation gen, building it (one metadata GET per app) at most once per
 // cache entry. A map is stored only on the entry its app list came from.
-func manifestMap(ctx context.Context, c *portal.Client, apps []portal.App, gen uint64) (map[string]string, error) {
+func manifestMap(ctx context.Context, c *storeClient, apps []portal.App, gen uint64) (map[string]string, error) {
 	dev, err := c.DeveloperID(ctx)
 	if err != nil {
 		return nil, err
 	}
-	cacheMu.Lock()
-	if e := freshLocked(dev); e != nil && e.gen == gen && e.manifests != nil {
+	a := c.cache
+	a.mu.Lock()
+	if e := a.freshLocked(dev); e != nil && e.gen == gen && e.manifests != nil {
 		m := maps.Clone(e.manifests)
-		cacheMu.Unlock()
+		a.mu.Unlock()
 		return m, nil
 	}
-	cacheMu.Unlock()
+	a.mu.Unlock()
 
 	m := make(map[string]string, len(apps))
-	for _, a := range apps {
-		md, err := c.AppMetadata(ctx, a.ID)
+	for _, app := range apps {
+		md, err := c.AppMetadata(ctx, app.ID)
 		if err != nil {
 			return nil, err
 		}
 		if id := portal.NormalizeID(portal.ManifestID(md)); id != "" {
-			m[id] = a.ID
+			m[id] = app.ID
 		}
 	}
-	cacheMu.Lock()
-	if e := caches[dev]; e != nil && gen != 0 && e.gen == gen {
+	a.mu.Lock()
+	if e := a.entries[dev]; e != nil && gen != 0 && e.gen == gen {
 		e.manifests = maps.Clone(m)
 	}
-	cacheMu.Unlock()
+	a.mu.Unlock()
 	return m, nil
 }
 
 // cachedManifests returns a copy of the manifest map only if already built
 // (no calls).
-func cachedManifests(ctx context.Context, c *portal.Client) map[string]string {
+func cachedManifests(ctx context.Context, c *storeClient) map[string]string {
 	dev, err := c.DeveloperID(ctx)
 	if err != nil {
 		return nil
 	}
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
-	if e := freshLocked(dev); e != nil {
+	a := c.cache
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if e := a.freshLocked(dev); e != nil {
 		return maps.Clone(e.manifests)
 	}
 	return nil
@@ -136,7 +152,7 @@ func cachedManifests(ctx context.Context, c *portal.Client) map[string]string {
 
 // resolveApp finds an app by store UUID, manifest id or exact title
 // (case-insensitive).
-func resolveApp(ctx context.Context, c *portal.Client, ref string) (portal.App, error) {
+func resolveApp(ctx context.Context, c *storeClient, ref string) (portal.App, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return portal.App{}, tool.InvalidArgs("app is required (store UUID, manifest id or title)")
@@ -176,5 +192,5 @@ func resolveApp(ctx context.Context, c *portal.Client, ref string) (portal.App, 
 			}
 		}
 	}
-	return portal.App{}, &portal.APIError{Status: http.StatusNotFound, Code: "APP_NOT_FOUND", Message: fmt.Sprintf("no app matches %q (store UUID, manifest id or exact title); store_apps_list shows your apps. A brand-new app needs its first upload on apps.garmin.com before versions can be published here", ref)}
+	return portal.App{}, &upstream.HTTPError{Service: upstream.Portal, Status: http.StatusNotFound, Code: "APP_NOT_FOUND", Message: fmt.Sprintf("no app matches %q (store UUID, manifest id or exact title); store_apps_list shows your apps. A brand-new app needs its first upload on apps.garmin.com before versions can be published here", ref)}
 }

@@ -75,11 +75,9 @@ func TestBuildWithoutJavaNeverRunsWrapper(t *testing.T) {
 		t.Fatal(err)
 	}
 	noJava := errors.New("no Java found (JAVA_HOME unset, no java on PATH); install Java 17+")
-	old := findJava
-	findJava = func(context.Context, func(string) string) (Java, error) { return Java{}, noJava }
-	t.Cleanup(func() { findJava = old })
+	noJavaFind := func(context.Context, func(string) string) (Java, error) { return Java{}, noJava }
 	proj := t.TempDir()
-	_, err := Build(context.Background(), BuildOpts{SDK: sdk, ProjectDir: proj, Device: "fenix7", Key: "/k", Output: filepath.Join(proj, "bin", "a.prg")})
+	_, err := Build(context.Background(), BuildOpts{SDK: sdk, ProjectDir: proj, Device: "fenix7", Key: "/k", Output: filepath.Join(proj, "bin", "a.prg"), findJava: noJavaFind})
 	if !errors.Is(err, noJava) {
 		t.Fatalf("err = %v, want the FindJava error", err)
 	}

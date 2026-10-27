@@ -16,7 +16,7 @@ func TestCacheConcurrentGetAndWrite(t *testing.T) {
 	write := lookup(t, "store_listing_update")
 	args := `{"app":"` + strings.ReplaceAll(manifest2, "-", "") + `"}`
 	for range 10 {
-		invalidateCache()
+		cacheOf(k.Env).invalidate()
 		var wg sync.WaitGroup
 		for range 4 {
 			wg.Go(func() { tooltest.Call(t, get, k.Env, args) })
@@ -32,7 +32,7 @@ func TestCacheConcurrentGetAndWrite(t *testing.T) {
 func TestStaleListFillDropped(t *testing.T) {
 	k, f := setup(t)
 	once := sync.Once{}
-	f.onAppsList = func() { once.Do(invalidateCache) } // a write lands mid-fetch
+	f.onAppsList = func() { once.Do(cacheOf(k.Env).invalidate) } // a write lands mid-fetch
 	list := lookup(t, "store_apps_list")
 	tooltest.MustOK(t, tooltest.Call(t, list, k.Env, `{}`))
 	tooltest.MustOK(t, tooltest.Call(t, list, k.Env, `{}`))

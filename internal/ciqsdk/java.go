@@ -136,21 +136,21 @@ func javaFor(java string) string {
 	return javaExe()
 }
 
-// requireJava returns java when absolute, else the [FindJava] result or its
-// error (which names the install step).
-func requireJava(ctx context.Context, java string) (string, error) {
+// requireJava returns java when absolute, else the result of find (nil =
+// [FindJava]) or its error (which names the install step).
+func requireJava(ctx context.Context, java string, find func(context.Context, func(string) string) (Java, error)) (string, error) {
 	if java != "" {
 		if !filepath.IsAbs(java) {
 			return "", errors.New("java must be an absolute path, got " + java)
 		}
 		return java, nil
 	}
-	j, err := findJava(ctx, nil)
+	if find == nil {
+		find = FindJava
+	}
+	j, err := find(ctx, nil)
 	if err != nil {
 		return "", err
 	}
 	return j.Path, nil
 }
-
-// findJava is FindJava; tests replace it.
-var findJava = FindJava

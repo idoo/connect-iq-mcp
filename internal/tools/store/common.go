@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -12,8 +11,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/portal"
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
@@ -35,77 +32,49 @@ var versionRE = regexp.MustCompile(`^[vV]?\d+(\.\d+)*([-+][0-9A-Za-z.-]+)?$`)
 // listingKeys are the listing text keys of app metadata.
 var listingKeys = []string{"appTitle", "appDescription", "appWhatsNew", "localizedAppName"}
 
-// client returns a portal client whose writes drop the app cache.
-func client(env *tool.Env) *portal.Client {
-	c := portal.New(env.HTTP, env.Credentials)
-	c.OnWrite = invalidateCache
+// client returns a portal client, paired with the server's app cache, whose
+// writes drop that cache.
+func client(env *tool.Env) *storeClient {
+	c := &storeClient{Client: portal.New(env.HTTP, env.Credentials), cache: cacheOf(env)}
+	c.OnWrite = c.cache.invalidate
 	return c
 }
 
-// wrap maps portal errors to tool errors (auth_required, api_error with the
-// portal code). Messages never carry cookies.
-func wrap(err error) error {
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, browser.ErrRateLimited) {
-		return fmt.Errorf("%w: %w", tool.ErrRateLimited, &tool.APIError{Code: "rate_limited", Detail: err.Error(), Hint: browser.ErrRateLimited.Error()})
-	}
-	if errors.Is(err, portal.ErrBlocked) {
-		return fmt.Errorf("%w: %w", tool.ErrRateLimited, &tool.APIError{Code: "blocked", Detail: err.Error(), Hint: "Cloudflare blocked the request; do not call auth_login (the session is valid). Wait a few minutes, then retry; if it persists, ask the user to open apps.garmin.com in their browser"})
-	}
-	if errors.Is(err, auth.ErrAuthRequired) {
-		return fmt.Errorf("%w: %s", tool.ErrAuthRequired, err.Error())
-	}
-	if errors.Is(err, portal.ErrInvalidID) {
-		return tool.InvalidArgs("%s", err.Error())
-	}
-	var rl *portal.RateLimitError
-	if errors.As(err, &rl) {
-		hint := "wait before retrying; garmin-mcp does not retry by itself"
-		if rl.Cloudflare {
-			hint = "Cloudflare is rate-limiting requests to the portal (error 1015); wait several minutes before retrying and do not call auth_login"
-		}
-		if s := int(rl.RetryAfter.Seconds()); s > 0 {
-			hint = fmt.Sprintf("the portal asked to wait %d seconds (Retry-After) before retrying", s)
-		}
-		return fmt.Errorf("%w: %w", tool.ErrRateLimited, &tool.APIError{Status: rl.Status, Code: "rate_limited", Detail: rl.Error(), Hint: hint})
-	}
-	var ae *portal.APIError
-	if errors.As(err, &ae) {
-		return &tool.APIError{Status: ae.Status, Code: ae.Code, Detail: ae.Message, Hint: hintFor(ae.Code)}
-	}
-	return err
+// upstreamHints maps portal errors to tool errors (auth_required,
+// rate_limited, api_error with the portal code) through [tool.FromUpstream].
+// Messages never carry cookies.
+var upstreamHints = tool.UpstreamHints{
+	Codes:        codeHints,
+	Blocked:      portal.ErrBlocked,
+	BlockedHint:  "Cloudflare blocked the request; do not call auth_login (the session is valid). Wait a few minutes, then retry; if it persists, ask the user to open apps.garmin.com in their browser",
+	InvalidID:    portal.ErrInvalidID,
+	RateLimitAPI: true,
 }
 
-func hintFor(code string) string {
-	switch code {
-	case "APP_VERSION_ALREADY_EXISTS":
-		return "this version is already uploaded; bump the version"
-	case "SIGNATURE_CHECK_FAILED", "SIGNATURE_CHECK_FAILED_PREVIOUS_KEY_DIFFERENT":
-		return "sign the .iq with the same developer key as the published version"
-	case "APP_NOT_FOUND":
-		return "call store_apps_list for the app ids and titles"
-	case "forbidden":
-		return "the session is valid (auth_status shows it), so do not call auth_login; the portal refused this action for this app or account. Check the app id with store_apps_list, or ask the user to try it on apps.garmin.com"
-	case "TITLE_TOO_LONG", "DESCRIPTION_TOO_LONG", "WHATS_NEW_TOO_LONG":
-		return "limits: title 50, description 4000, what's new 4000 UTF-16 units"
-	}
-	return ""
+// codeHints are the agent hints for portal error codes.
+var codeHints = map[string]string{
+	"APP_VERSION_ALREADY_EXISTS":                    "this version is already uploaded; bump the version",
+	"SIGNATURE_CHECK_FAILED":                        "sign the .iq with the same developer key as the published version",
+	"SIGNATURE_CHECK_FAILED_PREVIOUS_KEY_DIFFERENT": "sign the .iq with the same developer key as the published version",
+	"APP_NOT_FOUND":                                 "call store_apps_list for the app ids and titles",
+	"forbidden":                                     "the session is valid (auth_status shows it), so do not call auth_login; the portal refused this action for this app or account. Check the app id with store_apps_list, or ask the user to try it on apps.garmin.com",
+	"TITLE_TOO_LONG":                                "limits: title 50, description 4000, what's new 4000 UTF-16 units",
+	"DESCRIPTION_TOO_LONG":                          "limits: title 50, description 4000, what's new 4000 UTF-16 units",
+	"WHATS_NEW_TOO_LONG":                            "limits: title 50, description 4000, what's new 4000 UTF-16 units",
 }
 
-func resolve(ctx context.Context, c *portal.Client, ref string) (portal.App, error) {
+func resolve(ctx context.Context, c *storeClient, ref string) (portal.App, error) {
 	a, err := resolveApp(ctx, c, ref)
-	return a, wrap(err)
+	return a, tool.FromUpstream(err, upstreamHints)
 }
 
 // written is the result of a successful write. It carries the client's
 // non-fatal warnings (a rotated cookie that could not be saved).
-func written(c *portal.Client, data any) *tool.Result {
+func written(c *storeClient, data any) *tool.Result {
 	return withWarnings(c, tool.OK(data))
 }
 
-func withWarnings(c *portal.Client, res *tool.Result) *tool.Result {
+func withWarnings(c *storeClient, res *tool.Result) *tool.Result {
 	for _, w := range c.Warnings() {
 		res.Warn(w)
 	}

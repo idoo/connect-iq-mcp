@@ -139,10 +139,12 @@ func callBuild(t *testing.T, k *tooltest.Kit, args string) *tool.Result {
 	return tooltest.Call(t, tl, k.Env, args)
 }
 
-func setBuildWait(t *testing.T, d time.Duration) {
-	old := buildWait
-	buildWait = d
-	t.Cleanup(func() { buildWait = old })
+// setBuildWait shortens the wait on k's own build registry.
+func setBuildWait(k *tooltest.Kit, d time.Duration) {
+	r := jobsOf(k.Env)
+	r.mu.Lock()
+	r.buildWait = d
+	r.mu.Unlock()
 }
 
 // The human-set GARMIN_MCP_KEY is used when key is omitted, even outside the
@@ -334,12 +336,12 @@ func TestKeyGenerateIgnoresGitDirEnv(t *testing.T) {
 // A store build outliving the wait returns a build_id; polling returns the result.
 func TestBuildAllOutlivesWait(t *testing.T) {
 	k, _, iq := exportFixtureWith(t, "sleep 1", ` version="1.2.3"`)
-	setBuildWait(t, 100*time.Millisecond)
+	setBuildWait(k, 100*time.Millisecond)
 	p := tooltest.Decode[pendingOut](t, tooltest.MustOK(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`)))
 	if p.Status != "still_processing" || p.BuildID == "" {
 		t.Fatalf("pending = %+v", p)
 	}
-	setBuildWait(t, 10*time.Second)
+	setBuildWait(k, 10*time.Second)
 	out := tooltest.Decode[buildOut](t, tooltest.MustOK(t, callBuild(t, k, `{"build_id":"`+p.BuildID+`"}`)))
 	if !out.OK || out.Output != iq {
 		t.Fatalf("polled = %+v", out)
@@ -354,7 +356,7 @@ func TestBuildAllOutlivesWait(t *testing.T) {
 func TestBuildSameOutputSharesJob(t *testing.T) {
 	runs := filepath.Join(t.TempDir(), "runs")
 	k, _, iq := exportFixtureWith(t, "echo x >> '"+runs+"'; sleep 1", ` version="1.2.3"`)
-	setBuildWait(t, 50*time.Millisecond)
+	setBuildWait(k, 50*time.Millisecond)
 	start := func() pendingOut {
 		return tooltest.Decode[pendingOut](t, tooltest.MustOK(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`)))
 	}
@@ -362,7 +364,7 @@ func TestBuildSameOutputSharesJob(t *testing.T) {
 	if a.BuildID == "" || a.BuildID != b.BuildID {
 		t.Fatalf("build ids %q and %q, want the same running job", a.BuildID, b.BuildID)
 	}
-	setBuildWait(t, 10*time.Second)
+	setBuildWait(k, 10*time.Second)
 	out := tooltest.Decode[buildOut](t, tooltest.MustOK(t, callBuild(t, k, `{"build_id":"`+a.BuildID+`"}`)))
 	if !out.OK || out.Output != iq {
 		t.Fatalf("polled = %+v", out)
@@ -379,18 +381,13 @@ func TestSweepDropsStaleFinishedJobs(t *testing.T) {
 	old := &buildJob{id: "old", done: done, end: time.Now().Add(-jobKeep - time.Minute)}
 	fresh := &buildJob{id: "fresh", done: done, end: time.Now()}
 	running := &buildJob{id: "running", done: make(chan struct{})}
-	jobsMu.Lock()
+	r := newJobRegistry()
+	r.mu.Lock()
 	for _, j := range []*buildJob{old, fresh, running} {
-		jobs[j.id] = j
+		r.jobs[j.id] = j
 	}
-	jobsMu.Unlock()
-	t.Cleanup(func() {
-		jobsMu.Lock()
-		delete(jobs, "fresh")
-		delete(jobs, "running")
-		jobsMu.Unlock()
-	})
-	if lookupJob("old") != nil || lookupJob("fresh") == nil || lookupJob("running") == nil {
+	r.mu.Unlock()
+	if r.lookup("old") != nil || r.lookup("fresh") == nil || r.lookup("running") == nil {
 		t.Fatal("sweep kept a stale result or dropped a live one")
 	}
 }
@@ -400,9 +397,9 @@ func TestBuildEndsWithServerLifetime(t *testing.T) {
 	k, _, _ := exportFixtureWith(t, "sleep 30 & wait", ` version="1.2.3"`)
 	life := tool.NewLifetime(t.Context())
 	k.Env.Lifetime = life
-	setBuildWait(t, 50*time.Millisecond)
+	setBuildWait(k, 50*time.Millisecond)
 	p := tooltest.Decode[pendingOut](t, tooltest.MustOK(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`)))
-	j := lookupJob(p.BuildID)
+	j := jobsOf(k.Env).lookup(p.BuildID)
 	if j == nil {
 		t.Fatal("job not registered")
 	}
@@ -416,10 +413,6 @@ func TestBuildEndsWithServerLifetime(t *testing.T) {
 	if time.Since(begin) > 8*time.Second || j.err == nil {
 		t.Fatalf("build not cancelled promptly: took %s, err %v", time.Since(begin), j.err)
 	}
-	lookupJob(p.BuildID) // keep the registry tidy
-	jobsMu.Lock()
-	delete(jobs, p.BuildID)
-	jobsMu.Unlock()
 }
 
 func TestBuildAllNamesIQ(t *testing.T) {
@@ -447,7 +440,7 @@ func TestBuildSameOutputOtherOptionsConflicts(t *testing.T) {
 	runs := filepath.Join(t.TempDir(), "runs")
 	k, _, _ := exportFixtureWith(t, "echo x >> '"+runs+"'; sleep 1", ` version="1.2.3"`)
 	ciqsdktest.Key(t, filepath.Join(k.Files.Root, "other.der"))
-	setBuildWait(t, 50*time.Millisecond)
+	setBuildWait(k, 50*time.Millisecond)
 	a := tooltest.Decode[pendingOut](t, tooltest.MustOK(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`)))
 	for _, args := range []string{
 		`{"project":"app","device":"all","key":"other.der"}`,
@@ -458,7 +451,7 @@ func TestBuildSameOutputOtherOptionsConflicts(t *testing.T) {
 			t.Fatalf("conflict lacks the running build: %s", b)
 		}
 	}
-	setBuildWait(t, 10*time.Second)
+	setBuildWait(k, 10*time.Second)
 	tooltest.MustOK(t, callBuild(t, k, `{"build_id":"`+a.BuildID+`"}`))
 	if got, _ := os.ReadFile(runs); strings.Count(string(got), "x") != 1 {
 		t.Fatalf("compiler ran %d times, want 1", strings.Count(string(got), "x"))

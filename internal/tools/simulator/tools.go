@@ -123,9 +123,12 @@ func findJava(ctx context.Context) (string, error) {
 	return j.Path, nil
 }
 
-func sessionsOut() []sim.SessionInfo {
+// sessions returns the server's simulator state.
+func sessions(env *tool.Env) *sim.Manager { return tool.SharedValue(env.Shared, sim.NewManager) }
+
+func sessionsOut(m *sim.Manager) []sim.SessionInfo {
 	out := []sim.SessionInfo{}
-	for _, s := range sim.Sessions.List() {
+	for _, s := range m.List() {
 		out = append(out, s.Info())
 	}
 	return out
@@ -143,7 +146,7 @@ func simStop(ctx context.Context, env *tool.Env, in stopIn) (*tool.Result, error
 		return nil, err
 	}
 	defer rel()
-	killed, was, err := sim.Stop(ctx, clock(env), in.Force)
+	killed, was, err := sim.Stop(ctx, clock(env), sessions(env), in.Force)
 	if err != nil {
 		return nil, simErr(err)
 	}
@@ -282,7 +285,8 @@ type started struct {
 // resolved SDK when none is ready, and launches monkeydo.
 func startSession(ctx context.Context, env *tool.Env, in runIn, extra ...string) (started, *tool.Result, error) {
 	var out started
-	if err := sim.Sessions.CheckRoom(); err != nil {
+	m := sessions(env)
+	if err := m.CheckRoom(); err != nil {
 		return out, nil, simErr(err)
 	}
 	dr, r, err := resolveSDK(in.SDK)
@@ -305,12 +309,12 @@ func startSession(ctx context.Context, env *tool.Env, in runIn, extra ...string)
 	if br != nil && !br.OK {
 		return out, buildFailed(br), nil
 	}
-	_, already, err := sim.Start(ctx, clock(env), r.SDK)
+	_, already, err := sim.Start(ctx, clock(env), m, r.SDK)
 	if err != nil {
 		return out, nil, simErr(err)
 	}
 	out.simStarted = !already
-	out.s, err = sim.Sessions.Start(r.SDK.MonkeydoArgv(java, prg, in.Device, extra...), prg, in.Device, in.Test)
+	out.s, err = m.Start(r.SDK.MonkeydoArgv(java, prg, in.Device, extra...), prg, in.Device, in.Test)
 	return out, nil, simErr(err)
 }
 
@@ -445,21 +449,22 @@ type logsIn struct {
 	Crash     bool   `json:"crash,omitempty" jsonschema:"return the newest parsed CIQ_LOG.YML entries (error, details, app, file:line stack) instead of session lines"`
 }
 
-func simLogs(ctx context.Context, _ *tool.Env, in logsIn) (*tool.Result, error) {
+func simLogs(ctx context.Context, env *tool.Env, in logsIn) (*tool.Result, error) {
 	st, err := sim.GetStatus(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]any{"simulator": st, "sessions": sessionsOut()}
+	m := sessions(env)
+	out := map[string]any{"simulator": st, "sessions": sessionsOut(m)}
 	if in.Crash {
 		return crashLog(out, in.Limit)
 	}
 	var s *sim.Session
 	var ok bool
 	if in.SessionID == "" {
-		s, ok = sim.Sessions.Latest()
+		s, ok = m.Latest()
 	} else {
-		s, ok = sim.Sessions.Get(in.SessionID)
+		s, ok = m.Get(in.SessionID)
 	}
 	if !ok && in.SessionID != "" {
 		return nil, &tool.Error{Code: "not_found", Message: "no such session in this server process", Hint: "call sim_logs without session_id to list sessions"}
@@ -530,7 +535,7 @@ func simScreenshot(ctx context.Context, env *tool.Env, in shotIn) (*tool.Result,
 		if dev, note, err = sdk.ResolveDevice(dr, dev); err != nil {
 			return nil, err
 		}
-	} else if s, ok := sim.Sessions.Latest(); ok {
+	} else if s, ok := sessions(env).Latest(); ok {
 		dev = s.Device
 	} else {
 		dev = sim.LastUsedDevice(dr)

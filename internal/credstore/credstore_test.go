@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,7 +19,6 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/portal"
 	"github.com/idoo/garmin-mcp/internal/tool"
 )
@@ -81,17 +79,18 @@ func testStore(t *testing.T, env map[string]string) *Store {
 	keyringPrecheck, keyringRetryDelay = func() error { return nil }, time.Millisecond
 	t.Cleanup(func() { keyringPrecheck, keyringRetryDelay = precheck, delay })
 	s := &Store{
-		profile:    "test",
-		dir:        t.TempDir(),
-		autoRenew:  true,
-		hc:         newHTTPClient(),
-		diauthURL:  "http://127.0.0.1:1/unused",
-		connectAPI: "http://127.0.0.1:1",
-		now:        time.Now,
-		hasProfile: func(string) bool { return false },
-		login: func(context.Context, browser.Options, browser.Request) (browser.Result, error) {
+		profile:       "test",
+		dir:           t.TempDir(),
+		autoRenew:     true,
+		hc:            newHTTPClient(),
+		diauthURL:     "http://127.0.0.1:1/unused",
+		connectAPI:    "http://127.0.0.1:1",
+		now:           time.Now,
+		hasProfile:    func(string) bool { return false },
+		removeProfile: os.RemoveAll,
+		login: func(context.Context, SignInRequest) (Capture, error) {
 			t.Error("unexpected browser login")
-			return browser.Result{}, errors.New("no browser")
+			return Capture{}, errors.New("no browser")
 		},
 		verify: func(context.Context, *http.Client, string) (portal.Developer, string, error) {
 			return portal.Developer{}, "", errors.New("unexpected verify")
@@ -101,6 +100,15 @@ func testStore(t *testing.T, env map[string]string) *Store {
 	s.loadEnv()
 	return s
 }
+
+// noBrowser is a Browser for stores whose sign-ins the test never runs.
+type noBrowser struct{}
+
+func (noBrowser) SignIn(context.Context, SignInRequest) (Capture, error) {
+	return Capture{}, errors.New("no browser")
+}
+func (noBrowser) ProfileExists(string) bool      { return false }
+func (noBrowser) RemoveProfile(dir string) error { return os.RemoveAll(dir) }
 
 func TestKeyringRoundTrip(t *testing.T) {
 	keyring.MockInit()
@@ -251,7 +259,7 @@ func TestDeadRefreshNoProfileAuthRequired(t *testing.T) {
 	s.diauthURL = srv.URL
 	seedConnect(t, s, "revoked")
 	_, err := s.ConnectToken(context.Background())
-	if !errors.Is(err, auth.ErrAuthRequired) || !strings.Contains(err.Error(), "garmin-mcp auth login") {
+	if !errors.Is(err, auth.ErrAuthRequired) || !strings.Contains(err.Error(), tool.LoginCommand(s.profile)) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -274,7 +282,7 @@ func TestExpiredPortalNoProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := s.PortalCookies(context.Background())
-	if !errors.Is(err, auth.ErrAuthRequired) || !strings.Contains(err.Error(), `run "`+tool.LoginCommand(s.profile)+`" in a terminal`) {
+	if !errors.Is(err, auth.ErrAuthRequired) || !strings.Contains(err.Error(), tool.LoginCommand(s.profile)) {
 		t.Fatalf("err = %v", err)
 	}
 	if strings.Contains(err.Error(), "Fe26") {
@@ -283,21 +291,29 @@ func TestExpiredPortalNoProfile(t *testing.T) {
 }
 
 // N4: a non-default profile's sign-in hint names --profile, so the human signs
-// in the account the server runs as.
-func TestLoginHintNamesProfile(t *testing.T) {
+// in the account the server runs as. This is the one golden test of the
+// human text of the main sign-in hints; other tests compare error classes
+// and tool.LoginCommand.
+func TestLoginHintGolden(t *testing.T) {
 	keyring.MockInit()
 	s := testStore(t, nil)
 	s.profile = "work"
 	_, err := s.PortalCookies(context.Background())
-	if !errors.Is(err, auth.ErrAuthRequired) || !strings.Contains(err.Error(), `run "garmin-mcp auth login --profile work" in a terminal`) {
-		t.Fatalf("err = %v", err)
+	const portalHint = `auth_required: not signed in to the Connect IQ developer portal; call the auth_login tool (it opens a browser window for the user to sign in), or run "garmin-mcp auth login --profile work" in a terminal`
+	if !errors.Is(err, auth.ErrAuthRequired) || err.Error() != portalHint {
+		t.Fatalf("portal err =\n%v\nwant\n%s", err, portalHint)
 	}
 	_, err = s.ConnectToken(context.Background())
-	if !strings.Contains(err.Error(), `"garmin-mcp auth login --connect --profile work"`) {
-		t.Fatalf("connect err = %v", err)
+	const connectHint = `auth_required: Garmin Connect is not enabled; a human must run "garmin-mcp auth login --connect --profile work" (or approve auth_login with connect=true); call the auth_login tool (it opens a browser window for the user to sign in), or run "garmin-mcp auth login --profile work" in a terminal`
+	if !errors.Is(err, auth.ErrAuthRequired) || err.Error() != connectHint {
+		t.Fatalf("connect err =\n%v\nwant\n%s", err, connectHint)
 	}
-	if st := s.Status(context.Background()); !strings.Contains(st.Portal.Note, "--profile work") || !strings.Contains(st.Connect.Note, "--connect --profile work") {
-		t.Fatalf("status notes = %q / %q", st.Portal.Note, st.Connect.Note)
+	st := s.Status(context.Background())
+	if want := `not signed in; auth_login tool or "garmin-mcp auth login --profile work"`; st.Portal.Note != want {
+		t.Fatalf("portal note = %q, want %q", st.Portal.Note, want)
+	}
+	if want := `not enabled (optional; health data); a human enables it with "garmin-mcp auth login --connect --profile work" or by approving auth_login with connect=true`; st.Connect.Note != want {
+		t.Fatalf("connect note = %q, want %q", st.Connect.Note, want)
 	}
 }
 
@@ -309,12 +325,12 @@ func TestExpiringPortalSilentRenewal(t *testing.T) {
 	fresh := cookies(freshExp)
 	s.hasProfile = func(string) bool { return true }
 	var logins int
-	s.login = func(_ context.Context, o browser.Options, r browser.Request) (browser.Result, error) {
+	s.login = func(_ context.Context, r SignInRequest) (Capture, error) {
 		logins++
-		if !o.Headless || !r.Portal {
-			t.Errorf("options = %+v %+v", o, r)
+		if !r.Headless || !r.Portal {
+			t.Errorf("request = %+v", r)
 		}
-		return browser.Result{PortalCookies: []browser.Cookie{{Name: "session", Value: seal(freshExp)}, {Name: "refresh_token", Value: seal(freshExp)}}}, nil
+		return Capture{PortalCookies: "session=" + seal(freshExp) + "; refresh_token=" + seal(freshExp)}, nil
 	}
 	s.verify = func(_ context.Context, _ *http.Client, h string) (portal.Developer, string, error) {
 		return portal.Developer{ID: "42", Name: "Dev"}, h, nil
@@ -340,9 +356,9 @@ func TestRenewalRateLimited(t *testing.T) {
 	s.verify = okVerify
 	s.hasProfile = func(string) bool { return true }
 	var logins int
-	s.login = func(context.Context, browser.Options, browser.Request) (browser.Result, error) {
+	s.login = func(context.Context, SignInRequest) (Capture, error) {
 		logins++
-		return browser.Result{}, browser.ErrRateLimited
+		return Capture{}, auth.ErrRateLimited
 	}
 	if err := s.writeStored(blob{
 		Portal: &portalCred{Cookies: cookies(time.Now().Add(-time.Hour))},
@@ -355,7 +371,7 @@ func TestRenewalRateLimited(t *testing.T) {
 	}
 	check := func(what string, err error) {
 		t.Helper()
-		if !errors.Is(err, browser.ErrRateLimited) || errors.Is(err, auth.ErrAuthRequired) || strings.Contains(err.Error(), s.loginHint()) {
+		if !errors.Is(err, auth.ErrRateLimited) || errors.Is(err, auth.ErrAuthRequired) || strings.Contains(err.Error(), tool.LoginCommand(s.profile)) {
 			t.Errorf("%s: err = %v", what, err)
 		}
 	}
@@ -364,9 +380,10 @@ func TestRenewalRateLimited(t *testing.T) {
 	// Connect has its own stamp: the portal's 1015 does not hold it back.
 	_, err = s.ConnectToken(context.Background())
 	check("ConnectToken", err)
-	check("auth renew", s.cliRenew(context.Background(), io.Discard))
-	_, err = s.Login(context.Background(), auth.LoginOptions{})
-	check("Login", err)
+	_, err = s.Renew(context.Background())
+	check("auth renew", err)
+	_, err = s.SignIn(context.Background(), SignInRequest{Portal: true})
+	check("SignIn", err)
 	if logins != 4 {
 		t.Fatalf("logins = %d, want 4", logins)
 	}

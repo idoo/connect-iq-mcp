@@ -13,8 +13,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-
-	"github.com/idoo/garmin-mcp/internal/credstore"
 )
 
 const usage = `garmin-mcp: MCP server for Garmin Connect IQ developers
@@ -92,7 +90,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		return runServe(ctx, rest, stderr)
 	case "auth":
-		if code := credstore.CLI(rest, stdout, stderr); code != 0 {
+		if code := authCLI(rest, stdout, stderr); code != 0 {
 			return exitError(code)
 		}
 		return nil

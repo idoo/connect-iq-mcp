@@ -37,7 +37,7 @@ func macTeamID(bundleID string) string {
 	return ""
 }
 
-var detectDefault = func() defaultBrowser {
+func detectDefault() defaultBrowser {
 	home, _ := os.UserHomeDir()
 	out, err := runCmd("plutil", "-convert", "json", "-o", "-",
 		filepath.Join(home, "Library", "Preferences", "com.apple.LaunchServices", "com.apple.launchservices.secure.plist"))

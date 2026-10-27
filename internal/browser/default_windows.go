@@ -8,7 +8,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-var detectDefault = func() defaultBrowser {
+func detectDefault() defaultBrowser {
 	k, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice`, registry.QUERY_VALUE)
 	if err != nil {
 		return defaultBrowser{}

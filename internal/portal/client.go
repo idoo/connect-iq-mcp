@@ -20,6 +20,7 @@ import (
 
 	"github.com/idoo/garmin-mcp/internal/auth"
 	"github.com/idoo/garmin-mcp/internal/httpx"
+	"github.com/idoo/garmin-mcp/internal/upstream"
 )
 
 // maxBody caps how much of a portal response is read.
@@ -29,31 +30,9 @@ const maxBody = 32 << 20
 // PUT …/apps/{appId}.
 var ServerOnlyFields = []string{"appIqFileInfoResult", "appFileCoordinates", "appTypeName", "isFeatured", "permissionNotification", "typeId"}
 
-// APIError is a non-auth portal error decoded from {code,message} or
-// {validationResult:{…}}. HTML bodies are never kept (they may echo cookies).
-type APIError struct {
-	Status  int
-	Code    string
-	Message string
-	// Fields is validationResult (field or code → code).
-	Fields map[string]string
-}
-
-func (e *APIError) Error() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "portal HTTP %d", e.Status)
-	if e.Code != "" {
-		b.WriteString(" " + e.Code)
-	}
-	if e.Message != "" && e.Message != e.Code {
-		b.WriteString(": " + e.Message)
-	}
-	return b.String()
-}
-
-// HasCode reports whether err is an APIError carrying code (as Code or in Fields).
+// HasCode reports whether err is an upstream.HTTPError carrying code (as Code or in Fields).
 func HasCode(err error, code string) bool {
-	var ae *APIError
+	var ae *upstream.HTTPError
 	if !errors.As(err, &ae) {
 		return false
 	}
@@ -97,27 +76,6 @@ func checkPath(path string) error {
 	return nil
 }
 
-// RateLimitError is a portal 429, a 503 carrying Retry-After, or a
-// Cloudflare 1015 rate-limit page.
-type RateLimitError struct {
-	Status int
-	// RetryAfter is the server's Retry-After (0 when absent or unparsable).
-	RetryAfter time.Duration
-	// Cloudflare is set for a Cloudflare 1015 page.
-	Cloudflare bool
-}
-
-func (e *RateLimitError) Error() string {
-	s := fmt.Sprintf("portal HTTP %d: rate limited", e.Status)
-	if e.Cloudflare {
-		s = fmt.Sprintf("portal HTTP %d: Cloudflare rate limit (error 1015)", e.Status)
-	}
-	if e.RetryAfter > 0 {
-		s += fmt.Sprintf(" (Retry-After %ds)", int(e.RetryAfter/time.Second))
-	}
-	return s
-}
-
 // ErrBlocked is a Cloudflare block page (WAF rule, bot check, IP ban) in
 // front of the portal. The session is fine; signing in again does not help.
 var ErrBlocked = errors.New("blocked by Cloudflare in front of the developer portal (the session itself is fine; signing in again will not help); wait a few minutes and retry, or open apps.garmin.com in a browser to clear the check")
@@ -157,7 +115,7 @@ func statusError(res *http.Response, body []byte) error {
 		switch cloudflareCode(res, body) {
 		case "":
 		case "1015":
-			return &RateLimitError{Status: c, RetryAfter: httpx.RetryAfter(res.Header.Get("Retry-After"), time.Now()), Cloudflare: true}
+			return &upstream.HTTPError{Service: upstream.Portal, Status: c, RateLimited: true, RetryAfter: httpx.RetryAfter(res.Header.Get("Retry-After"), time.Now()), Cloudflare: true}
 		default:
 			return fmt.Errorf("%w (HTTP %d)", ErrBlocked, c)
 		}
@@ -166,15 +124,17 @@ func statusError(res *http.Response, body []byte) error {
 		return fmt.Errorf("%w: the developer portal answered HTTP %d (not signed in or session expired)", auth.ErrAuthRequired, c)
 	}
 	if c == http.StatusForbidden {
-		return &APIError{Status: c, Code: "forbidden", Message: "forbidden for this endpoint: the session is valid but the portal refused this action (no permission for this app or operation)"}
+		return &upstream.HTTPError{Service: upstream.Portal, Status: c, Code: "forbidden", Message: "forbidden for this endpoint: the session is valid but the portal refused this action (no permission for this app or operation)"}
 	}
 	if ra := res.Header.Get("Retry-After"); c == http.StatusTooManyRequests || (c == http.StatusServiceUnavailable && ra != "") {
-		return &RateLimitError{Status: c, RetryAfter: httpx.RetryAfter(ra, time.Now())}
+		return &upstream.HTTPError{Service: upstream.Portal, Status: c, RateLimited: true, RetryAfter: httpx.RetryAfter(ra, time.Now())}
 	}
 	if c < 400 {
 		return nil
 	}
-	ae := &APIError{Status: c}
+	// A non-auth error decoded from {code,message} or {validationResult:{…}}.
+	// HTML bodies are never kept (they may echo cookies).
+	ae := &upstream.HTTPError{Service: upstream.Portal, Status: c}
 	var raw struct {
 		Code             any               `json:"code"`
 		Message          string            `json:"message"`

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
+	"github.com/idoo/garmin-mcp/internal/auth/login"
 	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/ciqsdk"
 	"github.com/idoo/garmin-mcp/internal/config"
@@ -130,7 +131,7 @@ func doctor(ctx context.Context, rep *report, profile string, probe bool) {
 // credentialChecks reports each credential's state without secrets. It
 // returns the store when the portal session cookie is present, else nil.
 func credentialChecks(ctx context.Context, rep *report, profile string) auth.Store {
-	store, err := credstore.Open(ctx, profile)
+	store, err := login.Open(ctx, profile)
 	if err != nil {
 		rep.fail("credentials: %v", err)
 		return nil

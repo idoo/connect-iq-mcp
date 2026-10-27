@@ -139,16 +139,19 @@ func (s *Session) Kill(force bool) error {
 	return killGroup(s.cmd)
 }
 
-// Manager tracks sessions of this server process.
+// Manager is one server's simulator state: the monkeydo sessions it started
+// and the simulator it launched. The server keeps one (see [NewManager]).
 type Manager struct {
 	mu       sync.Mutex
 	seq      int
 	pending  int // slots reserved by Start calls still launching
 	sessions map[string]*Session
+	// owned is the simulator this server launched.
+	owned owner
 }
 
-// Sessions is the process-wide session manager.
-var Sessions = &Manager{sessions: map[string]*Session{}}
+// NewManager returns a Manager with no sessions and no simulator of its own.
+func NewManager() *Manager { return &Manager{sessions: map[string]*Session{}} }
 
 // Start launches argv (monkeydo) and captures its output. It refuses while
 // [MaxRunningSessions] clients run or are being started: the slot is

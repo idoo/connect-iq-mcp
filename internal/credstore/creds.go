@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/idoo/garmin-mcp/internal/auth"
-	"github.com/idoo/garmin-mcp/internal/browser"
 	"github.com/idoo/garmin-mcp/internal/flock"
 	"github.com/idoo/garmin-mcp/internal/portal"
 	"github.com/idoo/garmin-mcp/internal/tool"
@@ -96,7 +95,7 @@ func renewRateLimited(what string, err error) error {
 }
 
 // rateLimitedError is a renewal refused by (or held back because of) a
-// Cloudflare 1015. It wraps browser.ErrRateLimited and names when to retry.
+// Cloudflare 1015. It wraps auth.ErrRateLimited and names when to retry.
 type rateLimitedError struct{ until time.Time }
 
 func (e *rateLimitedError) Error() string {
@@ -104,7 +103,7 @@ func (e *rateLimitedError) Error() string {
 		", do not call auth_login (a new sign-in hits the same limit)"
 }
 
-func (e *rateLimitedError) Unwrap() error { return browser.ErrRateLimited }
+func (e *rateLimitedError) Unwrap() error { return auth.ErrRateLimited }
 
 // lockProfile takes the profile lock. When the caller still holds a usable
 // credential (live), it waits at most profileLockWait and reports busy
@@ -183,7 +182,7 @@ func (s *Store) PortalCookies(ctx context.Context) (string, error) {
 	if b.Portal != nil && !s.portalDead(b.Portal) {
 		return b.Portal.Cookies, nil // still valid, just close to expiry
 	}
-	if errors.Is(rerr, browser.ErrRateLimited) {
+	if errors.Is(rerr, auth.ErrRateLimited) {
 		return "", renewRateLimited("developer portal session expired", rerr)
 	}
 	if b.Portal == nil {
@@ -305,7 +304,7 @@ func (s *Store) ConnectToken(ctx context.Context) (string, error) {
 			return b.Connect.AccessToken, nil
 		}
 	}
-	if errors.Is(rerr, browser.ErrRateLimited) {
+	if errors.Is(rerr, auth.ErrRateLimited) {
 		return "", renewRateLimited("Garmin Connect sign-in expired", rerr)
 	}
 	return "", s.authRequired("Garmin Connect sign-in expired", cause)
@@ -566,13 +565,13 @@ func (s *Store) renewLocked(ctx context.Context, wantPortal, wantConnect, force 
 			return err
 		}
 	}
-	out, err := s.signIn(ctx, browser.Options{ProfileDir: s.browserDir(), Headless: true}, wantPortal, wantConnect, oldSeal)
+	out, err := s.signIn(ctx, SignInRequest{Headless: true, Portal: wantPortal, Connect: wantConnect}, oldSeal)
 	if err == nil {
 		err = s.commitSignIn(&out)
 	}
 	outcome, backoff := outcomeRenewed, renewInterval
 	switch {
-	case errors.Is(err, browser.ErrRateLimited):
+	case errors.Is(err, auth.ErrRateLimited):
 		outcome, backoff = outcomeRateLimited, rateLimitBackoff
 	case err != nil:
 		outcome = outcomeFailed
@@ -583,90 +582,57 @@ func (s *Store) renewLocked(ctx context.Context, wantPortal, wantConnect, force 
 	if outcome == outcomeRateLimited {
 		return &rateLimitedError{until: s.now().Add(backoff)}
 	}
-	if err == nil && out.PortalNotExtended {
+	if err == nil && out.portalNotExtended {
 		_ = s.writeStamp(stampPortal, outcomeNotExtended, notExtendedBackoff)
 		return errSealNotExtended
 	}
 	return err
 }
 
-// signInResult describes what a browser sign-in captured.
-type signInResult struct {
-	Portal  *portalCred
-	Connect *connectCred
-	Expires time.Time
-	// PortalNotExtended: the renewed seal expires no later than the stored
-	// one, so Portal is nil and the stored session is kept.
-	PortalNotExtended bool
-	// Warnings come from saves that replaced unreadable stored credentials.
-	Warnings []string
+// Renewal is the outcome of [Store.Renew].
+type Renewal struct {
+	// NotExtended: Garmin returned the same developer-portal session, so its
+	// expiry did not move and it was kept.
+	NotExtended bool
+	// Connect: Garmin Connect was renewed too.
+	Connect bool
 }
 
-// signIn runs the browser and verifies what it captured; commitSignIn stores
-// it. It saves nothing and needs no profile lock. With a non-zero oldSeal a
-// portal seal expiring no later than it is dropped (PortalNotExtended).
-func (s *Store) signIn(ctx context.Context, o browser.Options, wantPortal, wantConnect bool, oldSeal time.Time) (signInResult, error) {
-	var out signInResult
-	req := browser.Request{
-		Portal:  wantPortal,
-		Connect: wantConnect,
-		VerifyPortal: func(ctx context.Context, h string) error {
-			_, _, err := s.verifyPortal(ctx, h)
-			return err
-		},
-	}
-	res, err := s.login(ctx, o, req)
+// ErrRenewSignInOpen means `garmin-mcp auth renew` found an interactive
+// sign-in window holding the browser profile.
+var ErrRenewSignInOpen = errors.New("a sign-in window is open for this profile; finish or close it, then retry `garmin-mcp auth renew`")
+
+// Renew silently signs in again now (`garmin-mcp auth renew`), ignoring
+// auto_renew and the renewal stamps. Env-sourced credentials are skipped.
+func (s *Store) Renew(ctx context.Context) (Renewal, error) {
+	b, ps, cs, err := s.view()
 	if err != nil {
-		return out, err
+		return Renewal{}, err
 	}
-	if wantPortal {
-		header := cookieHeader(res.PortalCookies)
-		if header == "" {
-			return out, errors.New("browser returned no developer-portal cookies")
-		}
-		dev, session, err := s.verifyPortal(ctx, header)
-		if err != nil {
-			return out, err
-		}
-		exp, expErr := portal.SealExpiry(session)
-		if !oldSeal.IsZero() && expErr == nil && !exp.After(oldSeal) {
-			out.PortalNotExtended = true
-		} else {
-			out.Portal = &portalCred{Cookies: session, DeveloperID: dev.ID, DeveloperName: dev.Name, SavedAt: s.now().Unix()}
-			out.Expires = exp
-		}
+	wantPortal := ps != srcEnv
+	wantConnect := b.Connect != nil && cs != srcEnv
+	if !wantPortal && !wantConnect {
+		return Renewal{}, errors.New("credentials come from environment variables; nothing to renew")
 	}
-	if wantConnect {
-		if res.ConnectTicket == "" {
-			return out, errors.New("browser returned no Garmin Connect service ticket")
-		}
-		svc := res.ConnectServiceURL
-		if svc == "" {
-			svc = "https://mobile.integration.garmin.com/gcm/android"
-		}
-		c, err := s.exchangeTicket(ctx, res.ConnectTicket, svc)
-		if err != nil {
-			return out, err
-		}
-		out.Connect = c
+	unlock, err := s.Lock(ctx)
+	if err != nil {
+		return Renewal{}, fmt.Errorf("lock credentials: %w", err)
 	}
-	return out, nil
-}
-
-// commitSignIn stores what signIn captured. Callers hold the profile lock.
-func (s *Store) commitSignIn(out *signInResult) error {
-	if out.Portal != nil {
-		if err := s.savePortal(out.Portal); err != nil {
-			return err
-		}
+	defer unlock()
+	r := Renewal{Connect: wantConnect}
+	err = s.renewLocked(ctx, wantPortal, wantConnect, true)
+	switch {
+	case errors.Is(err, errSealNotExtended):
+		r.NotExtended = true
+		return r, nil
+	case errors.Is(err, auth.ErrRateLimited):
+		return r, fmt.Errorf("silent renewal failed: %w", err)
+	case errors.Is(err, errSignInOpen):
+		return r, ErrRenewSignInOpen
+	case errors.Is(err, errNoRenewal) || errors.Is(err, auth.ErrInteractionRequired):
+		return r, s.authRequired("silent renewal failed", err)
 	}
-	if out.Connect != nil {
-		if err := s.saveConnect(out.Connect); err != nil {
-			return err
-		}
-	}
-	out.Warnings = s.takeSaveWarnings()
-	return nil
+	return r, err
 }
 
 // verifyPortal checks header's `session` cookie with the portal and returns
@@ -685,16 +651,6 @@ func (s *Store) verifyPortal(ctx context.Context, header string) (portal.Develop
 		header = r
 	}
 	return dev, header, nil
-}
-
-func cookieHeader(cs []browser.Cookie) string {
-	parts := make([]string, 0, len(cs))
-	for _, c := range cs {
-		if c.Name != "" {
-			parts = append(parts, c.Name+"="+c.Value)
-		}
-	}
-	return strings.Join(parts, "; ")
 }
 
 // Status reports each credential without secrets or network calls.

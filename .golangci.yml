@@ -45,6 +45,16 @@ linters:
               desc: tool packages use tool.Env, never the app wiring
             - pkg: github.com/idoo/garmin-mcp/internal/mcpserver
               desc: tool packages use tool.Env, never the server
+        credstore-storage:
+          files:
+            - "**/internal/credstore/**"
+          deny:
+            - pkg: github.com/idoo/garmin-mcp/internal/browser
+              desc: credstore is storage plus renewal policy; it drives the browser only through credstore.Browser (internal/auth/login implements it)
+            - pkg: github.com/idoo/garmin-mcp/internal/auth/login
+              desc: internal/auth/login depends on credstore, never the reverse
+            - pkg: github.com/idoo/garmin-mcp/internal/app
+              desc: credstore is wired by app and cmd, never the reverse
     forbidigo:
       forbid:
         - pattern: ^fmt\.Print.*$

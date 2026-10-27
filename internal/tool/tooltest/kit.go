@@ -58,6 +58,7 @@ func New(t testing.TB) *Kit {
 		Toolsets:    k.Toolsets,
 		Root:        k.Files,
 		Clock:       k.Clock,
+		Shared:      tool.NewShared(),
 		Version:     "test",
 		Profile:     tool.ProfileInfo{Name: "test", AllowWrites: true},
 	}

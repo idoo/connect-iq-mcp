@@ -67,6 +67,8 @@ type BuildOpts struct {
 	// NoClobber installs Output with a hard link that fails if the file
 	// already exists, so a concurrent build never replaces it.
 	NoClobber bool
+	// findJava replaces [FindJava] when Java is empty; nil is FindJava (tests set it).
+	findJava func(context.Context, func(string) string) (Java, error)
 }
 
 // BuildResult is the outcome of a monkeyc run.
@@ -159,7 +161,7 @@ func run(ctx context.Context, o BuildOpts, export bool) (BuildResult, error) {
 	if err := CheckJungle(o.Root, o.ProjectDir, o.Jungle); err != nil {
 		return BuildResult{}, err
 	}
-	java, err := requireJava(ctx, o.Java)
+	java, err := requireJava(ctx, o.Java, o.findJava)
 	if err != nil {
 		return BuildResult{}, err
 	}
