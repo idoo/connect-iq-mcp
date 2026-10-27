@@ -1,0 +1,19 @@
+{
+  "name": "connect-iq-mcp",
+  "description": "Garmin Connect IQ for AI agents: the connect-iq-mcp MCP server for the store, SDK builds and the simulator. Read-only by default. Requires the connect-iq-mcp binary on PATH (brew install idoo/tap/connect-iq-mcp).",
+  "version": "0.1.0",
+  "author": {
+    "name": "Ivan Verevkin"
+  },
+  "homepage": "https://github.com/idoo/connect-iq-mcp",
+  "repository": "https://github.com/idoo/connect-iq-mcp",
+  "license": "MIT",
+  "keywords": [
+    "garmin",
+    "connect-iq",
+    "mcp",
+    "monkey-c",
+    "simulator",
+    "wearables"
+  ]
+}

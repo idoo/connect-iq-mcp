@@ -43,6 +43,6 @@ Tool names, arguments and output fields are a public API that agents depend on. 
 
 ## PRs
 
-[Conventional Commits](https://www.conventionalcommits.org/) (`feat(tools): ...`, `fix(store): ...`), since the changelog is built from them. Say what you tested.
+[Conventional Commits](https://www.conventionalcommits.org/) (`feat(tools): ...`, `fix(store): ...`), since the release notes are built from them. Add a line under `Unreleased` in [CHANGELOG.md](CHANGELOG.md) for anything a user would notice. Say what you tested. Security holes go through [SECURITY.md](SECURITY.md), not a PR.
 
 Contributions are MIT licensed and covered by the [Code of Conduct](CODE_OF_CONDUCT.md).

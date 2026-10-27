@@ -16,7 +16,7 @@ Use [private vulnerability reporting](https://github.com/idoo/connect-iq-mcp/sec
 
 ## Out of scope
 
-- A model fooled by injected text *and* a human clicking yes.
+- A model fooled by injected text *and* a human clicking yes. See [docs/SAFETY.md](docs/SAFETY.md).
 - Setups that switch safety off on purpose: auto-approve everything, `allow_no_elicit` (public actions then run on the agent's confirm, with no human yes), `--no-confirm` with `CIQ_MCP_CI=1`.
 - Processes running as you reading your keychain.
 - Garmin's own portal and API behaviour.
@@ -53,4 +53,6 @@ HTTP mode (`serve --http`) needs a bearer token of at least 32 characters (`CIQ_
   On all platforms any process running as you can drive or copy the profile. Password saving is off in it, and on macOS it is excluded from Time Machine.
 - During sign-in and renewal the browser's DevTools port is open on 127.0.0.1. On a shared multi-user machine another local user could reach it.
 
-No telemetry. Connect IQ MCP talks to apps.garmin.com, sso.garmin.com for sign-in and renewal, Garmin Connect (only with the opt-in connect toolset) and your local Connect IQ SDK. If no Chromium browser is installed, `auth login` downloads Chrome for Testing from storage.googleapis.com. `connect-iq-mcp config install claude-code` runs your local `claude`.
+## Network
+
+No telemetry. Connect IQ MCP talks to apps.garmin.com, to sso.garmin.com in the sign-in browser for sign-in and renewal, to Garmin Connect (`connectapi.garmin.com` and `diauth.garmin.com`, only once Connect is set up with `auth login --connect`) and to your local Connect IQ SDK. If no Chromium browser is installed, `auth login` downloads Chrome for Testing from storage.googleapis.com. `connect-iq-mcp config install claude-code` runs your local `claude`.

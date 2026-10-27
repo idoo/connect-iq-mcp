@@ -1,15 +1,17 @@
 #!/bin/sh
 # connect-iq-mcp installer: downloads a release binary from GitHub, verifies its
 # sha256 against checksums.txt, the cosign signature of checksums.txt (if
-# `cosign` is installed) and the build provenance (if `gh` is installed),
-# and installs it to ~/.local/bin.
+# `cosign` is installed) and the build provenance (if an authenticated `gh` is
+# installed), and installs it to ~/.local/bin. If neither cosign nor gh could
+# prove authenticity, the binary is installed but not run, and the exact
+# verify commands are printed; CIQ_MCP_REQUIRE_SIGNATURE=1 refuses instead.
 #
-#   curl -fsSL https://raw.githubusercontent.com/idoo/connect-iq-mcp/main/install.sh | sh
+#   curl -fsSL https://github.com/idoo/connect-iq-mcp/releases/latest/download/install.sh | sh
 #
 # Environment:
-#   CIQ_MCP_VERSION         release to install, e.g. 0.1.0 (default: latest)
-#   CIQ_MCP_INSTALL_DIR     target directory (default: ~/.local/bin)
-#   CIQ_MCP_REQUIRE_COSIGN  1 = refuse to install unless cosign verifies checksums.txt
+#   CIQ_MCP_VERSION            release to install, e.g. 0.1.0 (default: latest)
+#   CIQ_MCP_INSTALL_DIR        target directory (default: ~/.local/bin)
+#   CIQ_MCP_REQUIRE_SIGNATURE  1 = refuse to install unless cosign or gh verifies the release
 set -eu
 
 repo=idoo/connect-iq-mcp
@@ -70,6 +72,9 @@ if [ -z "$version" ]; then
 	esac
 fi
 version=${version#v}
+case $version in
+"" | *[!0-9A-Za-z.+-]*) die "invalid version '$version'" ;;
+esac
 
 archive="connect-iq-mcp_${version}_${os}_${arch}.${ext}"
 base="https://github.com/$repo/releases/download/v$version"
@@ -81,19 +86,21 @@ say "downloading connect-iq-mcp $version ($os/$arch)"
 fetch "$base/$archive" "$tmp/$archive"
 fetch "$base/checksums.txt" "$tmp/checksums.txt"
 
+# authentic=1 once cosign or gh ties the download to this repo's release workflow.
+authentic=0
 if command -v cosign >/dev/null 2>&1; then
 	fetch "$base/checksums.txt.sigstore.json" "$tmp/checksums.txt.sigstore.json" ||
 		die "checksums.txt.sigstore.json missing from release v$version"
+	# Exact identity: the release workflow at this very tag, not any tag.
 	cosign verify-blob --bundle "$tmp/checksums.txt.sigstore.json" \
-		--certificate-identity-regexp "^https://github.com/$repo/.github/workflows/release.yml@refs/tags/v" \
+		--certificate-identity "https://github.com/$repo/.github/workflows/release.yml@refs/tags/v$version" \
 		--certificate-oidc-issuer https://token.actions.githubusercontent.com \
 		"$tmp/checksums.txt" >/dev/null 2>&1 ||
 		die "cosign could not verify checksums.txt; refusing to install"
 	say "checksums.txt signature verified (cosign)"
-elif [ "${CIQ_MCP_REQUIRE_COSIGN:-0}" = 1 ]; then
-	die "CIQ_MCP_REQUIRE_COSIGN=1 but cosign is not installed"
+	authentic=1
 else
-	say "warning: cosign not installed; skipping the checksums.txt signature check"
+	say "cosign not installed; skipping the checksums.txt signature check"
 fi
 
 want=$(awk -v f="$archive" '$2 == f { print $1 }' "$tmp/checksums.txt")
@@ -108,14 +115,22 @@ fi
 [ "$want" = "$got" ] || die "checksum mismatch for $archive (want $want, got $got)"
 say "sha256 verified"
 
+# Provenance pinned to this repo's release workflow at this very tag, like the
+# cosign identity above; any other workflow's attestation is rejected.
 if ! command -v gh >/dev/null 2>&1; then
-	say "warning: gh not installed; skipping build provenance check, relying on the sha256 check"
+	say "gh not installed; skipping the build provenance check"
 elif ! gh auth status >/dev/null 2>&1; then
-	say "warning: gh not authenticated; skipping build provenance check, relying on the sha256 check"
-elif gh attestation verify "$tmp/$archive" --repo "$repo" >/dev/null; then
+	say "gh not authenticated; skipping the build provenance check"
+elif gh attestation verify "$tmp/$archive" --repo "$repo" \
+	--signer-workflow "$repo/.github/workflows/release.yml" \
+	--source-ref "refs/tags/v$version" >/dev/null; then
 	say "build provenance verified (gh attestation)"
+	authentic=1
 else
 	die "gh attestation verify failed for $archive; refusing to install"
+fi
+if [ "$authentic" = 0 ] && [ "${CIQ_MCP_REQUIRE_SIGNATURE:-0}" = 1 ]; then
+	die "CIQ_MCP_REQUIRE_SIGNATURE=1 but neither cosign nor an authenticated gh could verify release v$version; refusing to install"
 fi
 
 if [ "$os" = windows ]; then
@@ -132,7 +147,6 @@ if [ "$os" = darwin ]; then
 	xattr -d com.apple.quarantine "$dest.new" 2>/dev/null || true
 fi
 mv -f "$dest.new" "$dest"
-say "installed $dest ($("$dest" version 2>/dev/null || echo "$version"))"
 
 case ":$PATH:" in
 *":$install_dir:"*) ;;
@@ -142,6 +156,33 @@ case ":$PATH:" in
 	printf '\n  export PATH="%s:$PATH"\n\n' "$install_dir" >&2
 	;;
 esac
+
+if [ "$authentic" = 0 ]; then
+	# Not run: an unauthenticated binary must not execute before the user checks it.
+	cat >&2 <<EOF
+
+WARNING: installed $dest but did NOT run it. Its sha256 matches checksums.txt
+from the (immutable) release v$version, but neither cosign nor an authenticated
+gh was available to prove that release was built by $repo's release workflow.
+Verify it before first use with either of:
+
+  gh attestation verify $archive --repo $repo \\
+    --signer-workflow $repo/.github/workflows/release.yml --source-ref refs/tags/v$version
+
+  cosign verify-blob --bundle checksums.txt.sigstore.json \\
+    --certificate-identity https://github.com/$repo/.github/workflows/release.yml@refs/tags/v$version \\
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+
+(download $archive, checksums.txt and checksums.txt.sigstore.json from
+https://github.com/$repo/releases/tag/v$version), or re-run this installer with
+cosign or an authenticated gh installed. Set CIQ_MCP_REQUIRE_SIGNATURE=1 to
+refuse unverified installs. Then: $dest auth login, then $dest config install claude-code
+
+EOF
+	exit 0
+fi
+
+say "installed $dest ($("$dest" version 2>/dev/null || echo "$version"))"
 
 say "next: sign in once (opens a browser, tick Remember me), then add connect-iq-mcp to your client:"
 say "  $dest auth login"

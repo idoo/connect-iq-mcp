@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "connect-iq-mcp": {
+      "command": "connect-iq-mcp",
+      "args": []
+    }
+  }
+}

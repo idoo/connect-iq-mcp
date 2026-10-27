@@ -131,8 +131,8 @@ func TestCheckJungleRefusesEscapes(t *testing.T) {
 	mustRefuse(t, "nested jungle", CheckJungle(root, proj, ""), "extra.jungle")
 }
 
-// Quoted parent paths that stay inside the root pass (WatchFaceKit's
-// products/<name>/monkey.jungle shape); the same value fails when the root
+// Quoted parent paths that stay inside the root pass (a shared-sources
+// layout, products/<name>/monkey.jungle); the same value fails when the root
 // is the project itself.
 func TestCheckJungleAllowsParentsInsideRoot(t *testing.T) {
 	root, proj, _ := confineTree(t)

@@ -23,8 +23,6 @@ jq --arg v "$version" --arg sha "$sha" '
         .version = $v
         | .identifier = "https://github.com/idoo/connect-iq-mcp/releases/download/v\($v)/connect-iq-mcp-\($v).mcpb"
         | .fileSha256 = $sha
-      elif .registryType == "oci" then
-        .identifier = "ghcr.io/idoo/connect-iq-mcp:\($v)"
       else . end)' server.json >server.release.json
 mv server.release.json server.json
 

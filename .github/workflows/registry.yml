@@ -35,8 +35,9 @@ jobs:
         run: |
           version="${TAG#v}"
           dir="$RUNNER_TEMP/mcpb"
+          mcpb="connect-iq-mcp-${version}.mcpb"
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$dir" \
-            --pattern "connect-iq-mcp-${version}.mcpb" --pattern "connect-iq-mcp-${version}.mcpb.sha256"
-          (cd "$dir" && sha256sum -c "connect-iq-mcp-${version}.mcpb.sha256")
-          sha=$(awk '{print $1}' "$dir/connect-iq-mcp-${version}.mcpb.sha256")
+            --pattern "$mcpb" --pattern checksums-extra.txt
+          (cd "$dir" && grep -F "  $mcpb" checksums-extra.txt | sha256sum -c -)
+          sha=$(sha256sum "$dir/$mcpb" | awk '{print $1}')
           scripts/publish-registry.sh "$TAG" "$sha"

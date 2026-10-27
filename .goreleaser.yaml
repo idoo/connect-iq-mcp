@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
-# Local dry run:
-#   goreleaser release --snapshot --clean --skip=publish,sign
+# Local dry run (add the MACOS_* env from release.yml to sign and notarize):
+#   goreleaser release --snapshot --clean --skip=publish,sign,sbom
 version: 2
 
 project_name: connect-iq-mcp
@@ -20,7 +20,8 @@ builds:
     flags:
       - -trimpath
     # No build date: two builds of the same tag must be byte-identical so the
-    # provenance attestation can be reproduced.
+    # provenance attestation can be reproduced. darwin binaries are the
+    # exception: their Developer ID signature carries a timestamp.
     ldflags:
       - -s -w -X main.version={{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
@@ -33,6 +34,24 @@ universal_binaries:
     name_template: connect-iq-mcp
     replace: false
     mod_timestamp: "{{ .CommitTimestamp }}"
+
+# Developer ID signature + Apple notarization (quill, runs on Linux) for the
+# per-arch darwin binaries and the universal one in the .mcpb. Plain Mach-O
+# can't be stapled: Gatekeeper checks the ticket online on first run.
+# release.yml refuses to tag without these secrets; local snapshots stay unsigned.
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids: [connect-iq-mcp, connect-iq-mcp-universal]
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        wait: true
+        timeout: 20m
 
 archives:
   - id: connect-iq-mcp
@@ -49,6 +68,9 @@ archives:
 checksum:
   name_template: checksums.txt
   algorithm: sha256
+  # install.sh is listed (and so cosign-signed) with the archives.
+  extra_files:
+    - glob: ./install.sh
 
 sboms:
   - artifacts: archive
@@ -56,9 +78,9 @@ sboms:
       - "${artifact}.spdx.json"
 
 # Keyless cosign (GitHub OIDC) over checksums.txt; the bundle covers every
-# archive through its sha256. Verify:
+# archive through its sha256. Verify (exact identity: this tag's release run):
 #   cosign verify-blob --bundle checksums.txt.sigstore.json \
-#     --certificate-identity-regexp '^https://github.com/idoo/connect-iq-mcp/.github/workflows/release.yml@refs/tags/v' \
+#     --certificate-identity "https://github.com/idoo/connect-iq-mcp/.github/workflows/release.yml@refs/tags/v$version" \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
 signs:
   - id: checksums
@@ -103,11 +125,15 @@ release:
   draft: true
   replace_existing_draft: false
   mode: keep-existing
+  # The installer is served from the immutable release, not from main:
+  # https://github.com/idoo/connect-iq-mcp/releases/latest/download/install.sh
+  extra_files:
+    - glob: ./install.sh
   footer: |
-    **Install:** `brew install idoo/tap/connect-iq-mcp`, `curl -fsSL https://raw.githubusercontent.com/idoo/connect-iq-mcp/main/install.sh | sh`,
+    **Install:** `brew install idoo/tap/connect-iq-mcp`, `curl -fsSL https://github.com/idoo/connect-iq-mcp/releases/download/{{ .Tag }}/install.sh | sh`,
     `go install github.com/idoo/connect-iq-mcp/cmd/connect-iq-mcp@{{ .Tag }}`,
     or `connect-iq-mcp-{{ .Version }}.mcpb` for Claude Desktop.
 
-    **Verify:** `gh attestation verify connect-iq-mcp_{{ .Version }}_<os>_<arch>.tar.gz --repo idoo/connect-iq-mcp`, or
-    `cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '^https://github.com/idoo/connect-iq-mcp/.github/workflows/release.yml@refs/tags/v' --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt`.
-    The .mcpb is listed in `connect-iq-mcp-{{ .Version }}.mcpb.sha256`.
+    **Verify:** `gh attestation verify connect-iq-mcp_{{ .Version }}_<os>_<arch>.tar.gz --repo idoo/connect-iq-mcp --signer-workflow idoo/connect-iq-mcp/.github/workflows/release.yml --source-ref refs/tags/{{ .Tag }}`, or
+    `cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity 'https://github.com/idoo/connect-iq-mcp/.github/workflows/release.yml@refs/tags/{{ .Tag }}' --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt`.
+    The .mcpb and tools.json are listed in `checksums-extra.txt`; verify it the same way with `--bundle checksums-extra.txt.sigstore.json ... checksums-extra.txt`.

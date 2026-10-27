@@ -55,6 +55,8 @@ if [ "${1:-}" = "--validate-manifest" ]; then
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"' EXIT INT TERM
 	make_manifest "${2#v}" "$tmp/manifest.json"
+	# mcpb validate resolves the manifest's icon next to it.
+	cp "$root/packaging/mcpb/icon.png" "$tmp/"
 	validate_manifest "$tmp/manifest.json"
 	exit 0
 fi
