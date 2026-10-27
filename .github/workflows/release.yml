@@ -1,0 +1,213 @@
+name: Release
+
+# Tag v* → goreleaser builds a DRAFT release (archives, install.sh,
+# checksums.txt + cosign bundle, SBOMs, notarized darwin binaries) → the .mcpb
+# and tools.json are listed in checksums-extra.txt, cosign-signed and uploaded
+# to the draft → provenance attestations → the draft is published as the last
+# release step and must come out immutable → Homebrew tap and MCP Registry follow.
+# Tags are immutable (ruleset), so dry-run with `goreleaser release --snapshot`.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Exact toolchain so a tag rebuild is byte-identical. Keep in sync with
+  # go.mod's toolchain line and ci.yml.
+  GO_VERSION: "1.26.10"
+  GORELEASER_VERSION: "v2.19.0"
+  GOVULNCHECK_VERSION: "v1.9.0"
+  COSIGN_VERSION: "v3.1.4"
+
+jobs:
+  # The mcpb CLI comes from npm with a floating transitive tree and install
+  # scripts, so it runs here, with no write/OIDC permissions and no release
+  # environment, never in the job that signs and attests.
+  mcpb-validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate the .mcpb manifest
+        run: scripts/build-mcpb.sh --validate-manifest "${GITHUB_REF_NAME#v}"
+
+  release:
+    needs: mcpb-validate
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write # draft release + assets
+      id-token: write # cosign keyless, attestations
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: false
+
+      # Gate: no tag ships with a reachable known vulnerability (stdlib included).
+      - name: govulncheck
+        run: |
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          "$(go env GOPATH)/bin/govulncheck" ./...
+      - run: go test ./...
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+
+      # A release must not ship unsigned darwin binaries just because a secret
+      # went missing; goreleaser itself skips notarization when it is unset.
+      - name: Require macOS signing secrets
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        run: |
+          for v in MACOS_SIGN_P12 MACOS_SIGN_PASSWORD MACOS_NOTARY_KEY MACOS_NOTARY_KEY_ID MACOS_NOTARY_ISSUER_ID; do
+            [ -n "${!v}" ] || { echo "::error title=Missing secret::$v is not set in the release environment" >&2; exit 1; }
+          done
+
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: ${{ env.GORELEASER_VERSION }}
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # Developer ID Application .p12 and an App Store Connect API key,
+          # both base64; goreleaser signs and notarizes the darwin binaries.
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+
+      - name: Build .mcpb bundle and sign checksums-extra.txt
+        id: mcpb
+        env:
+          MCPB_SKIP_VALIDATE: "1" # validated in mcpb-validate (unprivileged)
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mcpb=$(scripts/build-mcpb.sh "$version")
+          # Assets built after goreleaser signed checksums.txt get their own
+          # signed list (same "<sha256>  <name>" format, `sha256sum -c` works).
+          {
+            (cd "$(dirname "$mcpb")" && sha256sum "$(basename "$mcpb")")
+            (cd docs && sha256sum tools.json)
+          } > dist/checksums-extra.txt
+          cosign sign-blob --yes --bundle dist/checksums-extra.txt.sigstore.json dist/checksums-extra.txt
+          echo "path=$mcpb" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        id: provenance
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.mcpb
+            dist/checksums.txt
+            dist/checksums-extra.txt
+            docs/tools.json
+
+      # The unsigned .mcpb.sha256 sidecar is not uploaded: checksums-extra.txt
+      # (cosign-signed) covers the .mcpb, and registry.yml hashes it itself.
+      # The provenance bundle is also attached as a release asset
+      # (`*.intoto.jsonl`) so offline verifiers and OpenSSF Scorecard find it.
+      - name: Upload .mcpb, tools.json, the signed checksums-extra.txt and provenance to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MCPB: ${{ steps.mcpb.outputs.path }}
+          BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          provenance="dist/connect-iq-mcp_${GITHUB_REF_NAME#v}.intoto.jsonl"
+          jq -c . "$BUNDLE" > "$provenance"
+          gh release upload "$GITHUB_REF_NAME" "$MCPB" docs/tools.json "$provenance" \
+            dist/checksums-extra.txt dist/checksums-extra.txt.sigstore.json --repo "$GITHUB_REPOSITORY"
+
+      # Last release step: after this the release is immutable.
+      - name: Publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --repo "$GITHUB_REPOSITORY"
+
+      # install.sh trusts checksums.txt because the published release cannot
+      # change; a mutable release (immutability paused, asset edited after
+      # publish) must fail the run loudly.
+      - name: Assert the published release is immutable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            immutable=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq .immutable)
+            [ "$immutable" = true ] && { echo "release $GITHUB_REF_NAME is immutable"; exit 0; }
+            echo "attempt $attempt: immutable=$immutable" >&2
+            sleep 5
+          done
+          echo "::error title=Release is not immutable::$GITHUB_REF_NAME was published with immutable=$immutable. Re-enable immutable releases (Settings > General > Releases) and do not edit assets after publishing; a mutable release lets checksums.txt be swapped." >&2
+          exit 1
+
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate the formula from the published checksums.txt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern checksums.txt --dir "$RUNNER_TEMP"
+          scripts/brew-formula.sh "${GITHUB_REF_NAME#v}" "$RUNNER_TEMP/checksums.txt" > "$RUNNER_TEMP/connect-iq-mcp.rb"
+      - name: Push Formula/connect-iq-mcp.rb to idoo/homebrew-tap
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          ssh_dir="$RUNNER_TEMP/ssh"
+          install -m 700 -d "$ssh_dir"
+          printf '%s\n' "$DEPLOY_KEY" > "$ssh_dir/key"
+          chmod 600 "$ssh_dir/key"
+          # github.com host key, from https://api.github.com/meta (ssh_keys).
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$ssh_dir/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $ssh_dir/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$ssh_dir/known_hosts"
+          git clone --depth 1 git@github.com:idoo/homebrew-tap.git "$RUNNER_TEMP/tap"
+          mkdir -p "$RUNNER_TEMP/tap/Formula"
+          cp "$RUNNER_TEMP/connect-iq-mcp.rb" "$RUNNER_TEMP/tap/Formula/connect-iq-mcp.rb"
+          cd "$RUNNER_TEMP/tap"
+          git add Formula/connect-iq-mcp.rb
+          if git diff --cached --quiet; then
+            echo "formula already up to date"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "connect-iq-mcp ${GITHUB_REF_NAME#v}"
+          git push origin HEAD
+
+  registry:
+    needs: release
+    permissions:
+      contents: read
+      id-token: write # MCP Registry OIDC login
+    uses: ./.github/workflows/registry.yml
+    with:
+      tag: ${{ github.ref_name }}
