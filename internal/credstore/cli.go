@@ -189,15 +189,12 @@ func (s *Store) pasteLogin(ctx context.Context) (auth.LoginResult, error) {
 		return auth.LoginResult{}, fmt.Errorf("lock credentials: %w", err)
 	}
 	defer unlock()
-	dev, rotated, err := s.verify(ctx, s.hc, header)
+	dev, session, err := s.verifyPortal(ctx, header)
 	if err != nil {
 		return auth.LoginResult{}, err
 	}
-	if rotated == "" {
-		rotated = header
-	}
-	r := signInResult{Portal: &portalCred{Cookies: rotated, DeveloperID: dev.ID, DeveloperName: dev.Name, SavedAt: s.now().Unix()}}
-	r.Expires, _ = portal.SealExpiry(rotated)
+	r := signInResult{Portal: &portalCred{Cookies: session, DeveloperID: dev.ID, DeveloperName: dev.Name, SavedAt: s.now().Unix()}}
+	r.Expires, _ = portal.SealExpiry(session)
 	if err := s.savePortal(r.Portal); err != nil {
 		return auth.LoginResult{}, err
 	}

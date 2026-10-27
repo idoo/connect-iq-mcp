@@ -61,7 +61,7 @@ func (f *fakePortal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if f.rotate {
-		w.Header().Add("Set-Cookie", "CIQ_DI_session=rotated; Path=/; HttpOnly")
+		w.Header().Add("Set-Cookie", "session=rotated; Path=/; HttpOnly")
 	}
 	js := func(v any) { _ = json.NewEncoder(w).Encode(v) }
 	switch {
@@ -155,7 +155,7 @@ func setup(t *testing.T) (*tooltest.Kit, *fakePortal) {
 	invalidateCache()
 	t.Cleanup(invalidateCache)
 	k := tooltest.New(t)
-	k.Creds.Cookie = "session=S; CIQ_DI_session=D1"
+	k.Creds.Cookie = "session=S"
 	f := &fakePortal{signature: true}
 	k.HTTP.Handler = f
 	k.Elicit(true)
@@ -188,7 +188,7 @@ func TestRotationPersisted(t *testing.T) {
 	k, f := setup(t)
 	f.rotate = true
 	tooltest.MustOK(t, tooltest.Call(t, lookup(t, "store_apps_list"), k.Env, `{}`))
-	if len(k.Creds.Saved) == 0 || k.Creds.Cookie != "session=S; CIQ_DI_session=rotated" {
+	if len(k.Creds.Saved) == 0 || k.Creds.Cookie != "session=rotated" {
 		t.Fatalf("rotation not saved: %q", k.Creds.Cookie)
 	}
 }

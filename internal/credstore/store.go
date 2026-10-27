@@ -1,4 +1,4 @@
-// Package credstore implements auth.Store: Connect IQ developer-portal cookies
+// Package credstore implements auth.Store: the Connect IQ developer-portal session cookie
 // and Garmin Connect DI OAuth2 tokens kept in the OS keychain (or a 0600 file),
 // cross-process locked refresh, silent renewal through a dedicated browser
 // profile, and the `garmin-mcp auth` CLI.
@@ -101,7 +101,7 @@ func newHTTPClient() *http.Client {
 // loadEnv reads the environment overrides into memory.
 func (s *Store) loadEnv() {
 	if v := s.getenv("GARMIN_MCP_PORTAL_COOKIES"); v != "" {
-		s.envPortal = &portalCred{Cookies: v}
+		s.envPortal = &portalCred{Cookies: portalSession(v)}
 	}
 	if v := s.getenv("GARMIN_MCP_CONNECT_REFRESH_TOKEN"); v != "" {
 		s.envConnect = &connectCred{RefreshToken: v, ClientID: s.getenv("GARMIN_MCP_CONNECT_CLIENT_ID")}
@@ -223,7 +223,7 @@ func (s *Store) view() (b blob, portalSrc, connectSrc string, err error) {
 	if err != nil {
 		return blob{}, "", "", err
 	}
-	b = stored
+	b = withSessionOnly(stored)
 	if b.Portal != nil {
 		portalSrc = src
 	}
@@ -262,6 +262,27 @@ func (s *Store) savePortal(p *portalCred) error {
 	return s.writeStored(stored)
 }
 
+// portalSession is header cut to its `session` cookie, or "" without one.
+func portalSession(header string) string {
+	h, err := portal.SessionOnly(header)
+	if err != nil {
+		return ""
+	}
+	return h
+}
+
+// withSessionOnly returns b with its portal header cut to the `session`
+// cookie. Older versions stored the whole apps.garmin.com cookie jar; it is
+// trimmed on read and persisted trimmed by the next save.
+func withSessionOnly(b blob) blob {
+	if b.Portal != nil {
+		p := *b.Portal
+		p.Cookies = portalSession(p.Cookies)
+		b.Portal = &p
+	}
+	return b
+}
+
 // saveConnect stores c; env-sourced tokens are updated in memory only.
 // Callers hold the profile lock.
 func (s *Store) saveConnect(c *connectCred) error {
@@ -277,6 +298,7 @@ func (s *Store) saveConnect(c *connectCred) error {
 	if err != nil {
 		return err
 	}
+	stored = withSessionOnly(stored)
 	stored.Connect = c
 	return s.writeStored(stored)
 }

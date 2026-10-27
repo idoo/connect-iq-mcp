@@ -250,19 +250,27 @@ func TestSavePortalCookiesKeepsConcurrentRenewal(t *testing.T) {
 	if err := b.savePortal(&portalCred{Cookies: fresh}); err != nil { // server B renews
 		t.Fatal(err)
 	}
-	if err := a.SavePortalCookies(ctx, sent, []string{"CIQ_DI_session=D2; Path=/"}); err != nil {
+	if err := a.SavePortalCookies(ctx, sent, []string{"session=" + seal(time.Now().Add(200*24*time.Hour)) + "; Path=/"}); err != nil {
 		t.Fatal(err)
 	}
 	got, _, _, _ := a.view()
 	if got.Portal.Cookies != fresh {
 		t.Fatalf("renewed session clobbered: %q", got.Portal.Cookies)
 	}
-	// Still derived from the request's cookie: the rotation is applied.
+	// A cookie other than `session` is not stored.
 	if err := a.SavePortalCookies(ctx, fresh, []string{"CIQ_DI_session=D2; Path=/"}); err != nil {
 		t.Fatal(err)
 	}
+	if got, _, _, _ = a.view(); got.Portal.Cookies != fresh {
+		t.Fatalf("non-session cookie stored: %q", got.Portal.Cookies)
+	}
+	// Still derived from the request's cookie: the rotation is applied.
+	rotated := cookies(time.Now().Add(200 * 24 * time.Hour))
+	if err := a.SavePortalCookies(ctx, fresh, []string{rotated + "; Path=/"}); err != nil {
+		t.Fatal(err)
+	}
 	got, _, _, _ = a.view()
-	if got.Portal.Cookies != fresh+"; CIQ_DI_session=D2" {
+	if got.Portal.Cookies != rotated {
 		t.Fatalf("rotation not applied: %q", got.Portal.Cookies)
 	}
 	// Signed out meanwhile: nothing is written back.

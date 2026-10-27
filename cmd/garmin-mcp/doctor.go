@@ -117,7 +117,7 @@ func doctor(ctx context.Context, rep *report, profile string, probe bool) {
 }
 
 // credentialChecks reports each credential's state without secrets. It
-// returns the store when portal cookies are present, else nil.
+// returns the store when the portal session cookie is present, else nil.
 func credentialChecks(ctx context.Context, rep *report, profile string) auth.Store {
 	store, err := credstore.Open(ctx, profile)
 	if err != nil {
@@ -125,7 +125,7 @@ func credentialChecks(ctx context.Context, rep *report, profile string) auth.Sto
 		return nil
 	}
 	st := store.Status(ctx)
-	credLine(rep, "portal cookies", st.Portal)
+	credLine(rep, "portal session", st.Portal)
 	credLine(rep, "Connect token", st.Connect)
 	if !st.Portal.Present {
 		return nil
@@ -136,7 +136,7 @@ func credentialChecks(ctx context.Context, rep *report, profile string) auth.Sto
 // portalProbe makes one portal call; any error is a warning, never a failure.
 func portalProbe(ctx context.Context, rep *report, store auth.Store) {
 	if store == nil {
-		rep.warn("portal: skipped, no portal cookies")
+		rep.warn("portal: skipped, no portal session")
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)

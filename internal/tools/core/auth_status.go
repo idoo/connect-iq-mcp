@@ -34,7 +34,7 @@ func init() {
 		Name:        "auth_status",
 		Toolset:     tool.Core,
 		Title:       "Auth status",
-		Description: "Report whether developer-portal cookies and the Garmin Connect token are present, their source and expiry. Never returns secrets.",
+		Description: "Report whether the developer-portal session cookie and the Garmin Connect token are present, their source and expiry. Never returns secrets.",
 		Class:       tool.Read,
 		Idempotent:  true,
 		Local:       true,

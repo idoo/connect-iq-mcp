@@ -9,7 +9,7 @@
 |Tool|Class|Confirm|Description|
 |---|---|---|---|
 |[`auth_login`](#auth_login)|W|none|Sign the user in to Garmin: opens a browser window, waits up to timeout_minutes (progress every 5 s). Returns auth_status at once if credentials still work. connect=true adds Garmin Connect. No secrets returned. One window at a time; 10 min cooldown after one closes unsigned.|
-|[`auth_status`](#auth_status)|R|none|Report whether developer-portal cookies and the Garmin Connect token are present, their source and expiry. Never returns secrets.|
+|[`auth_status`](#auth_status)|R|none|Report whether the developer-portal session cookie and the Garmin Connect token are present, their source and expiry. Never returns secrets.|
 |[`toolsets`](#toolsets)|W|none|List toolsets, enable or disable them for this session (tool list refreshes), or ask the user to allow Connect IQ writes for this session.|
 
 ## store ★

@@ -32,7 +32,7 @@ Agents can open the same window with the `auth_login` tool, one window at a time
 
 Garmin Connect health data is a separate opt-in: `garmin-mcp auth login --connect`.
 
-Cookies and tokens go to the OS keychain. Without one (headless Linux with no Secret Service, or `GARMIN_MCP_KEYRING=off`) they go to a 0600 file instead, DPAPI-encrypted on Windows. `garmin-mcp auth status` says which and why. The browser profile in `~/.local/state/garmin-mcp/browser/` holds the long-lived Garmin session, guarded only by file permissions; password saving is off there, and macOS keeps it out of Time Machine.
+The portal session cookie and Connect tokens go to the OS keychain. Without one (headless Linux with no Secret Service, or `GARMIN_MCP_KEYRING=off`) they go to a 0600 file instead, DPAPI-encrypted on Windows. `garmin-mcp auth status` says which and why. The browser profile in `~/.local/state/garmin-mcp/browser/` holds the long-lived Garmin session, guarded only by file permissions; password saving is off there, and macOS keeps it out of Time Machine.
 
 ## Signing key
 
@@ -68,7 +68,7 @@ Pick with `GARMIN_MCP_TOOLSETS` (`all`, `+connect`). Every tool: [docs/TOOLS.md]
 
 ## CI
 
-No unattended long-lived sign-in. `garmin-mcp auth export --portal | gh secret set GARMIN_MCP_PORTAL_COOKIES`, then set that env var in the job. The cookies last about 15 days and are never renewed.
+No unattended long-lived sign-in. `garmin-mcp auth export --portal | gh secret set GARMIN_MCP_PORTAL_COOKIES`, then set that env var in the job. It holds only the portal `session` cookie, which lasts about 15 days and is never renewed.
 
 ## Unofficial
 

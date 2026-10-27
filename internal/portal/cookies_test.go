@@ -31,7 +31,7 @@ func TestParseCookieInput(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if got != "session=S1; CIQ_DI_session=D1" {
+		if got != "session=S1" {
 			t.Fatalf("%s: got %q", name, got)
 		}
 	}
@@ -62,19 +62,31 @@ func TestMergeSetCookie(t *testing.T) {
 	}
 }
 
+func TestSessionOnly(t *testing.T) {
+	jar := "notice_behavior=implied; TAsessionID=t; session=S1; refresh_token=R1; CIQ_DI_session=D1; ADRUM_BT=x"
+	if got, err := SessionOnly(jar); err != nil || got != "session=S1" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	for _, bad := range []string{"", "session=", "refresh_token=SECRETVALUE; CIQ_DI_session=SECRETVALUE"} {
+		if _, err := SessionOnly(bad); err == nil || strings.Contains(err.Error(), "SECRETVALUE") {
+			t.Fatalf("%q: want value-free error, got %v", bad, err)
+		}
+	}
+}
+
 func TestSealExpiry(t *testing.T) {
-	a, b := int64(1_800_000_000_000), int64(1_790_000_000_000)
-	got, err := SealExpiry("session=" + seal(a) + "; refresh_token=" + strings.ReplaceAll(seal(b), "*", "%2A"))
+	a := int64(1_800_000_000_000)
+	got, err := SealExpiry("session=" + strings.ReplaceAll(seal(a), "*", "%2A"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Equal(time.UnixMilli(b)) {
+	if !got.Equal(time.UnixMilli(a)) {
 		t.Fatalf("got %v", got)
 	}
-	if _, err := SealExpiry("session=" + seal(a)); err == nil {
-		t.Fatal("missing refresh_token must fail")
+	if _, err := SealExpiry("refresh_token=" + seal(a)); err == nil {
+		t.Fatal("missing session must fail")
 	}
-	if _, err := SealExpiry("session=abc; refresh_token=" + seal(a)); err == nil {
+	if _, err := SealExpiry("session=abc"); err == nil {
 		t.Fatal("bad seal must fail")
 	}
 }

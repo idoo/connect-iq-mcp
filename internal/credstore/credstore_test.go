@@ -29,7 +29,45 @@ func seal(t time.Time) string {
 }
 
 func cookies(exp time.Time) string {
-	return "session=" + seal(exp) + "; refresh_token=" + seal(exp)
+	return "session=" + seal(exp)
+}
+
+// jar is a full apps.garmin.com cookie jar as older versions stored it.
+func jar(exp time.Time) string {
+	return "notice_behavior=implied,eu; TAsessionID=t; " + cookies(exp) + "; refresh_token=" + seal(exp) +
+		"; CIQ_DI_session=" + seal(exp) + "; ADRUM_BTa=R:0; ADRUM_BT1=R:0; SameSite=None; cmapi_cookie_privacy=permit; notice_preferences=2; notice_gdpr_prefs=0"
+}
+
+// Only the `session` cookie is sent and stored: an old stored jar or a jar in
+// GARMIN_MCP_PORTAL_COOKIES is trimmed on read, and the next save persists
+// the trimmed form.
+func TestPortalJarTrimmedToSession(t *testing.T) {
+	keyring.MockInit()
+	exp := time.Now().Add(30 * 24 * time.Hour)
+	s := testStore(t, nil)
+	if err := s.writeStored(blob{Portal: &portalCred{Cookies: jar(exp)}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.PortalCookies(context.Background()); err != nil || got != cookies(exp) {
+		t.Fatalf("PortalCookies = %q, %v", got, err)
+	}
+	if err := s.saveConnect(&connectCred{RefreshToken: "rt"}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _, err := s.readStored(); err != nil || b.Portal.Cookies != cookies(exp) {
+		t.Fatalf("stored = %+v, %v", b.Portal, err)
+	}
+	env := testStore(t, map[string]string{"GARMIN_MCP_PORTAL_COOKIES": jar(exp)})
+	if got, err := env.PortalCookies(context.Background()); err != nil || got != cookies(exp) {
+		t.Fatalf("env PortalCookies = %q, %v", got, err)
+	}
+	if st := env.Status(context.Background()).Portal; !st.ExpiresAt.Equal(time.UnixMilli(exp.UnixMilli())) {
+		t.Fatalf("status expiry = %v, want %v", st.ExpiresAt, exp)
+	}
+	env = testStore(t, map[string]string{"GARMIN_MCP_PORTAL_COOKIES": "refresh_token=" + seal(exp)})
+	if _, err := env.PortalCookies(context.Background()); !errors.Is(err, auth.ErrAuthRequired) {
+		t.Fatalf("env without session: %v", err)
+	}
 }
 
 // testStore returns a store in a temp state dir with no env, no browser

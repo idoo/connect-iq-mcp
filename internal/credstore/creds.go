@@ -79,7 +79,10 @@ func (s *Store) PortalCookies(ctx context.Context) (string, error) {
 		return h, nil
 	}
 	if src == srcEnv { // read-only: cannot renew
-		if b.Portal != nil && !s.portalDead(b.Portal) {
+		if b.Portal == nil || b.Portal.Cookies == "" {
+			return "", authRequired("GARMIN_MCP_PORTAL_COOKIES has no `session` cookie", nil)
+		}
+		if !s.portalDead(b.Portal) {
 			return b.Portal.Cookies, nil
 		}
 		return "", authRequired("GARMIN_MCP_PORTAL_COOKIES holds an expired session", nil)
@@ -126,7 +129,11 @@ func (s *Store) portalUsable(p *portalCred) (string, bool) {
 	return "", false
 }
 
+// portalDead reports a missing header or one whose seal has expired.
 func (s *Store) portalDead(p *portalCred) bool {
+	if p == nil || p.Cookies == "" {
+		return true
+	}
 	exp, err := portal.SealExpiry(p.Cookies)
 	return err == nil && !exp.After(s.now())
 }
@@ -134,6 +141,7 @@ func (s *Store) portalDead(p *portalCred) bool {
 // SavePortalCookies applies setCookie to the header stored now, under the
 // profile lock, only if that header is still sent (what the request carried).
 // A header renewed or removed by another process meanwhile is left alone.
+// Only the `session` cookie is kept.
 func (s *Store) SavePortalCookies(ctx context.Context, sent string, setCookie []string) error {
 	unlock, err := lockPath(ctx, s.lockFile())
 	if err != nil {
@@ -147,7 +155,7 @@ func (s *Store) SavePortalCookies(ctx context.Context, sent string, setCookie []
 	if b.Portal == nil || b.Portal.Cookies != sent {
 		return nil // no longer derives from the request's cookie
 	}
-	merged := portal.MergeSetCookie(sent, setCookie)
+	merged := portalSession(portal.MergeSetCookie(sent, setCookie))
 	if merged == sent {
 		return nil
 	}
@@ -398,7 +406,7 @@ func (s *Store) signIn(ctx context.Context, o browser.Options, wantPortal, wantC
 		Portal:  wantPortal,
 		Connect: wantConnect,
 		VerifyPortal: func(ctx context.Context, h string) error {
-			_, _, err := s.verify(ctx, s.hc, h)
+			_, _, err := s.verifyPortal(ctx, h)
 			return err
 		},
 	}
@@ -411,15 +419,12 @@ func (s *Store) signIn(ctx context.Context, o browser.Options, wantPortal, wantC
 		if header == "" {
 			return out, errors.New("browser returned no developer-portal cookies")
 		}
-		dev, rotated, err := s.verify(ctx, s.hc, header)
+		dev, session, err := s.verifyPortal(ctx, header)
 		if err != nil {
 			return out, err
 		}
-		if rotated == "" {
-			rotated = header
-		}
-		out.Portal = &portalCred{Cookies: rotated, DeveloperID: dev.ID, DeveloperName: dev.Name, SavedAt: s.now().Unix()}
-		out.Expires, _ = portal.SealExpiry(rotated)
+		out.Portal = &portalCred{Cookies: session, DeveloperID: dev.ID, DeveloperName: dev.Name, SavedAt: s.now().Unix()}
+		out.Expires, _ = portal.SealExpiry(session)
 	}
 	if wantConnect {
 		if res.ConnectTicket == "" {
@@ -446,6 +451,24 @@ func (s *Store) signIn(ctx context.Context, o browser.Options, wantPortal, wantC
 		}
 	}
 	return out, nil
+}
+
+// verifyPortal checks header's `session` cookie with the portal and returns
+// the developer and the header to store: "session=<seal>", rotated if the
+// portal set a new one.
+func (s *Store) verifyPortal(ctx context.Context, header string) (portal.Developer, string, error) {
+	header, err := portal.SessionOnly(header)
+	if err != nil {
+		return portal.Developer{}, "", err
+	}
+	dev, rotated, err := s.verify(ctx, s.hc, header)
+	if err != nil {
+		return portal.Developer{}, "", err
+	}
+	if r := portalSession(rotated); r != "" {
+		header = r
+	}
+	return dev, header, nil
 }
 
 func cookieHeader(cs []browser.Cookie) string {

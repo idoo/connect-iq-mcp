@@ -34,7 +34,7 @@
     "toolset": "core",
     "class": "R",
     "title": "Auth status",
-    "description": "Report whether developer-portal cookies and the Garmin Connect token are present, their source and expiry. Never returns secrets.",
+    "description": "Report whether the developer-portal session cookie and the Garmin Connect token are present, their source and expiry. Never returns secrets.",
     "annotations": {
       "idempotentHint": true,
       "openWorldHint": false,

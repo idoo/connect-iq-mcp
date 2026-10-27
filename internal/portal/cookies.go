@@ -22,11 +22,10 @@ var (
 	cookieNameRE = regexp.MustCompile(`^[!#$%&'*+\-.^_` + "`" + `|~0-9A-Za-z]+$`)
 )
 
-// ParseCookieInput normalizes pasted portal cookies to a Cookie header value.
-// It accepts "a=b; c=d", "Cookie: a=b; c=d", or a DevTools "Copy as cURL"
-// command (-H 'cookie: …' or -b '…'). Only name=value pairs are kept (later
-// duplicates win) and a `session` cookie is required. Errors never echo
-// cookie values.
+// ParseCookieInput reduces pasted portal cookies to the `session` cookie
+// header (see SessionOnly). It accepts "a=b; c=d", "Cookie: a=b; c=d", or a
+// DevTools "Copy as cURL" command (-H 'cookie: …' or -b '…'). Later
+// duplicates win. Errors never echo cookie values.
 func ParseCookieInput(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -51,10 +50,27 @@ func ParseCookieInput(s string) (string, error) {
 	if len(pairs) == 0 {
 		return "", errors.New("no name=value cookies found")
 	}
-	if _, ok := lookup(pairs, "session"); !ok {
-		return "", errors.New("the `session` cookie for apps.garmin.com is missing; copy the cookies from a request to apps.garmin.com while signed in")
+	h, err := sessionOnly(pairs)
+	if err != nil {
+		return "", errors.New(err.Error() + "; copy the cookies from a request to apps.garmin.com while signed in")
 	}
-	return join(pairs), nil
+	return h, nil
+}
+
+// SessionOnly reduces a Cookie header to "session=<seal>". The developer
+// portal authenticates every request by that cookie alone; the rest of the
+// apps.garmin.com jar (refresh_token, CIQ_DI_session, consent and analytics
+// cookies) is neither needed nor stored. Errors never echo cookie values.
+func SessionOnly(header string) (string, error) {
+	return sessionOnly(splitCookies(header))
+}
+
+func sessionOnly(ps []pair) (string, error) {
+	v, ok := lookup(ps, "session")
+	if !ok || v == "" {
+		return "", errors.New("the `session` cookie for apps.garmin.com is missing")
+	}
+	return join([]pair{{"session", v}}), nil
 }
 
 type pair struct{ name, value string }
@@ -134,26 +150,19 @@ func remove(ps []pair, name string) []pair {
 	return out
 }
 
-// SealExpiry returns the earlier expiry of the `session` and `refresh_token`
-// iron (Fe26.2) seals: field index 5 holds the expiry in Unix milliseconds.
-// Past that the portal needs a full Garmin SSO login.
+// SealExpiry returns the expiry of the `session` iron (Fe26.2) seal: field
+// index 5 holds it in Unix milliseconds. Past that the portal needs a full
+// Garmin SSO login.
 func SealExpiry(header string) (time.Time, error) {
-	ps := splitCookies(header)
-	var earliest time.Time
-	for _, name := range []string{"session", "refresh_token"} {
-		v, ok := lookup(ps, name)
-		if !ok {
-			return time.Time{}, errors.New("cookie `" + name + "` is missing")
-		}
-		t, err := sealExpiry(v)
-		if err != nil {
-			return time.Time{}, errors.New("cookie `" + name + "`: " + err.Error())
-		}
-		if earliest.IsZero() || t.Before(earliest) {
-			earliest = t
-		}
+	v, ok := lookup(splitCookies(header), "session")
+	if !ok {
+		return time.Time{}, errors.New("cookie `session` is missing")
 	}
-	return earliest, nil
+	t, err := sealExpiry(v)
+	if err != nil {
+		return time.Time{}, errors.New("cookie `session`: " + err.Error())
+	}
+	return t, nil
 }
 
 func sealExpiry(v string) (time.Time, error) {

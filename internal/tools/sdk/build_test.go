@@ -225,22 +225,37 @@ func TestBuildAllOutlivesWait(t *testing.T) {
 	tooltest.MustFail(t, callBuild(t, k, `{"build_id":"`+p.BuildID+`"}`), "invalid_arguments")
 }
 
-// Two concurrent exports of the same name: the second fails, the first file stays.
+// Two concurrent exports of the same name: exactly one succeeds, the other is
+// refused (up front if the winner already finished, else at install), and the
+// winner's file is never replaced. Which call wins is up to the scheduler.
 func TestBuildAllConcurrentNoClobber(t *testing.T) {
 	lock := filepath.Join(t.TempDir(), "lock")
 	pre := "if mkdir '" + lock + "' 2>/dev/null; then sleep 0.3; content=first; else sleep 1.5; content=second; fi"
 	k, _, iq := exportFixtureWith(t, pre, ` version="1.2.3"`)
 	setBuildWait(t, 50*time.Millisecond)
-	a := tooltest.Decode[pendingOut](t, tooltest.MustOK(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`)))
-	b := tooltest.Decode[pendingOut](t, tooltest.MustOK(t, callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`)))
-	if a.BuildID == "" || b.BuildID == "" {
-		t.Fatalf("expected two pending builds: %+v %+v", a, b)
+	start := func() *tool.Result {
+		return callBuild(t, k, `{"project":"app","device":"all","key":"dev.der"}`)
 	}
+	results := []*tool.Result{start(), start()}
 	setBuildWait(t, 10*time.Second)
-	tooltest.MustOK(t, callBuild(t, k, `{"build_id":"`+a.BuildID+`"}`))
-	mustErr(t, callBuild(t, k, `{"build_id":"`+b.BuildID+`"}`))
+	ok := 0
+	for i, r := range results {
+		if !r.IsError {
+			if p := tooltest.Decode[pendingOut](t, r); p.BuildID != "" {
+				r = callBuild(t, k, `{"build_id":"`+p.BuildID+`"}`)
+			}
+		}
+		if !r.IsError {
+			ok++
+		} else {
+			t.Logf("call %d refused: %s", i, tooltest.JSON(t, r.Data))
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("%d builds succeeded, want exactly 1", ok)
+	}
 	if got, _ := os.ReadFile(iq); strings.TrimSpace(string(got)) != "first" {
-		t.Fatalf("first package replaced: %q", got)
+		t.Fatalf("winning package replaced: %q", got)
 	}
 }
 

@@ -1,4 +1,4 @@
-// Package auth holds Connect IQ credentials: developer-portal cookies for
+// Package auth holds Connect IQ credentials: the developer-portal session cookie for
 // https://apps.garmin.com and the Garmin Connect DI OAuth2 token.
 package auth
 

@@ -42,7 +42,7 @@
         },
         {
           "name": "GARMIN_MCP_PORTAL_COOKIES",
-          "description": "Developer portal cookies for CI (no renewal; lasts about 15 days)",
+          "description": "Developer portal session cookie for CI (no renewal; lasts about 15 days)",
           "isSecret": true
         }
       ]

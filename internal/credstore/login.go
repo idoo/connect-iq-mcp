@@ -45,7 +45,7 @@ func (s *Store) refuseEnv(connect bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.envPortal != nil {
-		return errors.New("developer-portal cookies come from GARMIN_MCP_PORTAL_COOKIES; unset it to sign in with the browser")
+		return errors.New("the developer-portal session comes from GARMIN_MCP_PORTAL_COOKIES; unset it to sign in with the browser")
 	}
 	if connect && s.envConnect != nil {
 		return errors.New("the Garmin Connect token comes from GARMIN_MCP_CONNECT_REFRESH_TOKEN; unset it to sign in with the browser")
@@ -62,14 +62,14 @@ func (s *Store) validLocked(ctx context.Context, connect bool) (auth.LoginResult
 	if err != nil || b.Portal == nil || b.Portal.Cookies == "" || s.portalDead(b.Portal) {
 		return auth.LoginResult{}, false
 	}
-	dev, rotated, err := s.verify(ctx, s.hc, b.Portal.Cookies)
+	dev, session, err := s.verifyPortal(ctx, b.Portal.Cookies)
 	if err != nil {
 		return auth.LoginResult{}, false
 	}
 	p := *b.Portal
 	p.DeveloperID, p.DeveloperName = firstNonEmpty(dev.ID, p.DeveloperID), firstNonEmpty(dev.Name, p.DeveloperName)
-	if rotated != "" && rotated != p.Cookies {
-		p.Cookies, p.SavedAt = rotated, s.now().Unix()
+	if session != p.Cookies {
+		p.Cookies, p.SavedAt = session, s.now().Unix()
 	}
 	if p != *b.Portal {
 		if err := s.savePortal(&p); err != nil {
